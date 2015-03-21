@@ -44,6 +44,7 @@
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
 #include <trace/events/skb.h>
+#include <trace/events/sunrpc.h>
 
 #include <linux/sunrpc/types.h>
 #include <linux/sunrpc/clnt.h>
@@ -765,6 +766,7 @@ static void svc_tcp_listen_data_ready(struct sock *sk)
 	struct svc_sock	*svsk = (struct svc_sock *)sk->sk_user_data;
 	wait_queue_head_t *wq;
 
+	trace_svc_tcp_listen_data_ready(sk);
 	dprintk("svc: socket %p TCP (listen) state change %d\n",
 		sk, sk->sk_state);
 
@@ -799,6 +801,7 @@ static void svc_tcp_state_change(struct sock *sk)
 	struct svc_sock	*svsk = (struct svc_sock *)sk->sk_user_data;
 	wait_queue_head_t *wq = sk_sleep(sk);
 
+	trace_svc_tcp_state_change(sk);
 	dprintk("svc: socket %p TCP (connected) state change %d (svsk %p)\n",
 		sk, sk->sk_state, sk->sk_user_data);
 
@@ -817,6 +820,7 @@ static void svc_tcp_data_ready(struct sock *sk)
 	struct svc_sock *svsk = (struct svc_sock *)sk->sk_user_data;
 	wait_queue_head_t *wq = sk_sleep(sk);
 
+	trace_svc_tcp_data_ready(sk);
 	dprintk("svc: socket %p TCP data ready (svsk %p)\n",
 		sk, sk->sk_user_data);
 	if (svsk) {
@@ -841,6 +845,8 @@ static struct svc_xprt *svc_tcp_accept(struct svc_xprt *xprt)
 	struct svc_sock	*newsvsk;
 	int		err, slen;
 	RPC_IFDEBUG(char buf[RPC_MAX_ADDRBUFLEN]);
+
+	trace_svc_tcp_accept(svsk->sk_sk);
 
 	dprintk("svc: tcp_accept %p sock %p\n", svsk, sock);
 	if (!sock)

@@ -9,6 +9,8 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/xprtsock.h>
 #include <linux/sunrpc/svc_xprt.h>
+#include <linux/sunrpc/svcsock.h>
+#include <net/sock.h>
 #include <net/tcp_states.h>
 #include <linux/net.h>
 #include <linux/tracepoint.h>
@@ -594,6 +596,52 @@ TRACE_EVENT(svc_handle_xprt,
 		(struct sockaddr *)&__entry->xprt->xpt_remote, __entry->len,
 		show_svc_xprt_flags(__entry->xprt->xpt_flags))
 );
+
+DECLARE_EVENT_CLASS(svc_socket_event,
+	TP_PROTO(struct sock *sk),
+
+	TP_ARGS(sk),
+
+	TP_STRUCT__entry(
+		__field(struct sock *, sk)
+		__field(unsigned char, sock_state)
+		__field_struct(struct sockaddr_storage, ss)
+		__field(unsigned long, xpt_flags)
+	),
+
+	TP_fast_assign(
+		__entry->sk = sk;
+		__entry->sock_state = sk->sk_state;
+		if (sk->sk_user_data) {
+			struct svc_sock *svsk = sk->sk_user_data;
+			struct svc_xprt *xprt = &svsk->sk_xprt;
+
+			memcpy(&__entry->ss, &xprt->xpt_remote,
+						sizeof(__entry->ss));
+			__entry->xpt_flags = xprt->xpt_flags;
+		} else {
+			memset(&__entry->ss, 0, sizeof(__entry->ss));
+			__entry->xpt_flags = 0;
+		}
+	),
+
+	TP_printk("sk=0x%p peer=%pIScp sk_state=%s xpt_flags=%s", __entry->sk,
+		(struct sockaddr *)&__entry->ss,
+		rpc_show_sock_state(__entry->sock_state),
+		show_svc_xprt_flags(__entry->xpt_flags))
+);
+
+DEFINE_EVENT(svc_socket_event, svc_tcp_listen_data_ready,
+	TP_PROTO(struct sock *sk), TP_ARGS(sk));
+
+DEFINE_EVENT(svc_socket_event, svc_tcp_state_change,
+	TP_PROTO(struct sock *sk), TP_ARGS(sk));
+
+DEFINE_EVENT(svc_socket_event, svc_tcp_data_ready,
+	TP_PROTO(struct sock *sk), TP_ARGS(sk));
+
+DEFINE_EVENT(svc_socket_event, svc_tcp_accept,
+	TP_PROTO(struct sock *sk), TP_ARGS(sk));
 #endif /* _TRACE_SUNRPC_H */
 
 #include <trace/define_trace.h>
