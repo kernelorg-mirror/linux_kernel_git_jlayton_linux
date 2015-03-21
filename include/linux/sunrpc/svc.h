@@ -108,6 +108,7 @@ struct svc_serv {
 	struct svc_pool *	sv_pools;	/* array of thread pools */
 	struct svc_serv_ops *	sv_ops;		/* server operations */
 	struct workqueue_struct	*sv_wq;		/* workqueue for wq-based services */
+	struct shrinker		sv_shrinker;	/* for shrinking svc_rqst caches */
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)
 	struct list_head	sv_cb_list;	/* queue for callback requests
 						 * that arrive over the same
@@ -277,6 +278,7 @@ struct svc_rqst {
 #define	RQ_VICTIM	(5)			/* about to be shut down */
 #define	RQ_BUSY		(6)			/* request is busy */
 	unsigned long		rq_flags;	/* flags field */
+	unsigned long		rq_time;	/* when rqstp was last put */
 
 	void *			rq_argp;	/* decoded arguments */
 	void *			rq_resp;	/* xdr'd results */
@@ -495,6 +497,15 @@ char *		   svc_print_addr(struct svc_rqst *, char *, size_t);
 
 int		   svc_wq_setup(struct svc_serv *, struct svc_pool *, int);
 void		   svc_wq_enqueue_xprt(struct svc_xprt *);
+struct svc_rqst	*  find_or_alloc_svc_rqst(struct svc_serv *serv);
+void		   exit_svc_rqst_cache(struct svc_serv *serv);
+
+static inline void
+put_svc_rqst(struct svc_rqst *rqstp)
+{
+	rqstp->rq_time = jiffies;
+	clear_bit(RQ_BUSY, &rqstp->rq_flags);
+}
 
 #define	RPC_MAX_ADDRBUFLEN	(63U)
 

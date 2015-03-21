@@ -11,6 +11,143 @@
 #include <linux/workqueue.h>
 #include <trace/events/sunrpc.h>
 
+static struct svc_rqst *
+find_svc_rqst(struct svc_serv *serv)
+{
+	int node = numa_node_id();
+	struct svc_rqst *rqstp;
+	struct svc_pool *pool = &serv->sv_pools[node];
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(rqstp, &pool->sp_all_threads, rq_all) {
+		if (!test_and_set_bit(RQ_BUSY, &rqstp->rq_flags)) {
+			rcu_read_unlock();
+			return rqstp;
+		}
+	}
+	rcu_read_unlock();
+	return NULL;
+}
+
+/*
+ * Find a svc_rqst to use. Try to find an already allocated-one on the list
+ * first, and then allocate if there isn't one available.
+ */
+struct svc_rqst *
+find_or_alloc_svc_rqst(struct svc_serv *serv)
+{
+	int node = numa_node_id();
+	struct svc_rqst *rqstp;
+	struct svc_pool *pool = &serv->sv_pools[node];
+
+	rqstp = find_svc_rqst(serv);
+	if (likely(rqstp))
+		return rqstp;
+
+	rqstp = svc_rqst_alloc(serv, pool, node);
+	if (rqstp) {
+		spin_lock_bh(&pool->sp_lock);
+		list_add_tail_rcu(&rqstp->rq_all, &pool->sp_all_threads);
+		++pool->sp_nrthreads;
+		spin_unlock_bh(&pool->sp_lock);
+	}
+	return rqstp;
+}
+EXPORT_SYMBOL_GPL(find_or_alloc_svc_rqst);
+
+static unsigned long
+count_svc_rqst_objects(struct shrinker *shrinker, struct shrink_control *sc)
+{
+	struct svc_serv *serv = container_of(shrinker, struct svc_serv,
+						sv_shrinker);
+	struct svc_pool *pool = &serv->sv_pools[sc->nid];
+	struct svc_rqst *rqstp;
+	unsigned long count = 0;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(rqstp, &pool->sp_all_threads, rq_all) {
+		/* Don't count it if it's busy */
+		if (test_bit(RQ_BUSY, &rqstp->rq_flags))
+			continue;
+
+		/* Don't count it if it was used within the last second */
+		if (time_before(jiffies, rqstp->rq_time + HZ))
+			continue;
+
+		++count;
+	}
+	rcu_read_unlock();
+
+	return count;
+}
+
+static unsigned long
+scan_svc_rqst_objects(struct shrinker *shrinker, struct shrink_control *sc)
+{
+	struct svc_serv *serv = container_of(shrinker, struct svc_serv,
+						sv_shrinker);
+	struct svc_pool *pool = &serv->sv_pools[sc->nid];
+	struct svc_rqst *rqstp;
+	unsigned long count = 0;
+
+	spin_lock_bh(&pool->sp_lock);
+	list_for_each_entry_rcu(rqstp, &pool->sp_all_threads, rq_all) {
+		/* Don't free it if it's busy */
+		if (test_and_set_bit(RQ_BUSY, &rqstp->rq_flags))
+			continue;
+
+		list_del_rcu(&rqstp->rq_all);
+		svc_rqst_free(rqstp);
+		--pool->sp_nrthreads;
+		++count;
+		if (sc->nr_to_scan-- == 0)
+			break;
+	}
+	spin_unlock_bh(&pool->sp_lock);
+
+	return count;
+}
+
+static int
+init_svc_rqst_cache(struct svc_serv *serv)
+{
+	struct shrinker *shrinker = &serv->sv_shrinker;
+
+	memset(shrinker, 0, sizeof(*shrinker));
+
+	shrinker->count_objects = count_svc_rqst_objects;
+	shrinker->scan_objects = scan_svc_rqst_objects;
+	shrinker->seeks = DEFAULT_SEEKS;
+	shrinker->flags = SHRINKER_NUMA_AWARE;
+
+	return register_shrinker(shrinker);
+}
+
+void
+exit_svc_rqst_cache(struct svc_serv *serv)
+{
+	int node;
+
+	unregister_shrinker(&serv->sv_shrinker);
+
+	for (node = 0; node < serv->sv_nrpools; node++) {
+		struct svc_pool *pool = &serv->sv_pools[node];
+
+		spin_lock_bh(&pool->sp_lock);
+		while (!list_empty(&pool->sp_all_threads)) {
+			struct svc_rqst *rqstp = list_first_entry(
+					&pool->sp_all_threads, struct svc_rqst,
+					rq_all);
+
+			WARN_ON_ONCE(test_bit(RQ_BUSY, &rqstp->rq_flags));
+			list_del_rcu(&rqstp->rq_all);
+			svc_rqst_free(rqstp);
+		}
+		pool->sp_nrthreads = 0;
+		spin_unlock_bh(&pool->sp_lock);
+	}
+}
+
 /*
  * This workqueue job should run on each node when the workqueue is created. It
  * walks the list of xprts for its node, and queues the workqueue job for each.
@@ -58,8 +195,8 @@ process_queued_xprts(struct svc_serv *serv)
 
 /*
  * Start up or shut down a workqueue-based RPC service. Basically, we use this
- * to allocate the workqueue. The function assumes that the caller holds one
- * serv->sv_nrthreads reference.
+ * to allocate the workqueue and set up the shrinker for the svc_rqst cache.
+ * This function assumes that the caller holds one serv->sv_nrthreads reference.
  *
  * The "active" parm is treated as a boolean here. The only meaningful values
  * are non-zero which means that we're starting the service up, or zero which
@@ -68,6 +205,7 @@ process_queued_xprts(struct svc_serv *serv)
 int
 svc_wq_setup(struct svc_serv *serv, struct svc_pool *pool, int active)
 {
+	int err;
 	int nrthreads = serv->sv_nrthreads - 1; /* -1 for caller's reference */
 
 	WARN_ON_ONCE(nrthreads < 0);
@@ -85,14 +223,20 @@ svc_wq_setup(struct svc_serv *serv, struct svc_pool *pool, int active)
 	 * down the workqueue until the closing of the xprts is done.
 	 */
 	if (!nrthreads && active) {
+		err = init_svc_rqst_cache(serv);
+		if (err)
+			return err;
+
 		__module_get(serv->sv_ops->svo_module);
 		serv->sv_wq = alloc_workqueue("%s",
 					WQ_UNBOUND|WQ_FREEZABLE|WQ_SYSFS,
 					0, serv->sv_name);
 		if (!serv->sv_wq) {
+			exit_svc_rqst_cache(serv);
 			module_put(serv->sv_ops->svo_module);
 			return -ENOMEM;
 		}
+
 		process_queued_xprts(serv);
 	}
 
@@ -111,6 +255,7 @@ void
 svc_wq_enqueue_xprt(struct svc_xprt *xprt)
 {
 	struct svc_serv *serv = xprt->xpt_server;
+	struct svc_rqst *rqstp;
 
 	if (!svc_xprt_has_something_to_do(xprt))
 		return;
@@ -139,8 +284,15 @@ svc_wq_enqueue_xprt(struct svc_xprt *xprt)
 		spin_unlock_bh(&pool->sp_lock);
 		return;
 	}
+
 out:
 	svc_xprt_get(xprt);
-	queue_work(serv->sv_wq, &xprt->xpt_work);
+	rqstp = find_svc_rqst(serv);
+	if (!rqstp) {
+		queue_work(serv->sv_wq, &xprt->xpt_work);
+		return;
+	}
+	rqstp->rq_xprt = xprt;
+	queue_work(serv->sv_wq, &rqstp->rq_work);
 }
 EXPORT_SYMBOL_GPL(svc_wq_enqueue_xprt);

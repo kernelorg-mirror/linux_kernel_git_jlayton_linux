@@ -544,6 +544,7 @@ svc_destroy(struct svc_serv *serv)
 
 	if (serv->sv_wq) {
 		destroy_workqueue(serv->sv_wq);
+		exit_svc_rqst_cache(serv);
 		module_put(serv->sv_ops->svo_module);
 	}
 

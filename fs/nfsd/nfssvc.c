@@ -660,24 +660,23 @@ nfsd_rqst_work(struct work_struct *work)
 	rqstp->rq_server->sv_maxconn = nn->max_connections;
 
 	if (svc_wq_recv(rqstp) < 0) {
-		svc_rqst_free(rqstp);
+		put_svc_rqst(rqstp);
 		return;
 	}
 
 	svc_process(rqstp);
-	svc_rqst_free(rqstp);
+	put_svc_rqst(rqstp);
 }
 
 /* work function for workqueue-based nfsd */
 static void
 nfsd_xprt_work(struct work_struct *work)
 {
-	int node = numa_node_id();
 	struct svc_xprt *xprt = container_of(work, struct svc_xprt, xpt_work);
-	struct svc_rqst *rqstp;
 	struct svc_serv *serv = xprt->xpt_server;
+	struct svc_rqst *rqstp;
 
-	rqstp = svc_rqst_alloc(serv, &serv->sv_pools[node], node);
+	rqstp = find_or_alloc_svc_rqst(serv);
 	if (!rqstp) {
 		/* Alloc failure. Give up for now, and requeue the work */
 		queue_work(serv->sv_wq, &xprt->xpt_work);
