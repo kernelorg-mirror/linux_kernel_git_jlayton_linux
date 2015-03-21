@@ -47,6 +47,7 @@ struct svc_pool {
 #define	SP_TASK_PENDING		(0)		/* still work to do even if no
 						 * xprt is queued. */
 	unsigned long		sp_flags;
+	struct work_struct	sp_work;	/* per-pool work struct */
 } ____cacheline_aligned_in_smp;
 
 struct svc_serv;
@@ -106,6 +107,7 @@ struct svc_serv {
 	unsigned int		sv_nrpools;	/* number of thread pools */
 	struct svc_pool *	sv_pools;	/* array of thread pools */
 	struct svc_serv_ops *	sv_ops;		/* server operations */
+	struct workqueue_struct	*sv_wq;		/* workqueue for wq-based services */
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)
 	struct list_head	sv_cb_list;	/* queue for callback requests
 						 * that arrive over the same
@@ -442,7 +444,8 @@ enum {
 	SVC_POOL_GLOBAL,	/* no mapping, just a single global pool
 				 * (legacy & UP mode) */
 	SVC_POOL_PERCPU,	/* one pool per cpu */
-	SVC_POOL_PERNODE	/* one pool per numa node */
+	SVC_POOL_PERNODE,	/* one pool per numa node */
+	SVC_POOL_WORKQUEUE,	/* workqueue-based service */
 };
 
 struct svc_pool_map {
@@ -489,6 +492,9 @@ void		   svc_wake_up(struct svc_serv *);
 void		   svc_reserve(struct svc_rqst *rqstp, int space);
 struct svc_pool *  svc_pool_for_cpu(struct svc_serv *serv, int cpu);
 char *		   svc_print_addr(struct svc_rqst *, char *, size_t);
+
+int		   svc_wq_setup(struct svc_serv *, struct svc_pool *, int);
+void		   svc_wq_enqueue_xprt(struct svc_xprt *);
 
 #define	RPC_MAX_ADDRBUFLEN	(63U)
 

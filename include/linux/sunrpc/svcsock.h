@@ -53,6 +53,7 @@ static inline u32 svc_sock_final_rec(struct svc_sock *svsk)
  */
 void		svc_close_net(struct svc_serv *, struct net *);
 int		svc_recv(struct svc_rqst *, long);
+int		svc_wq_recv(struct svc_rqst *);
 int		svc_send(struct svc_rqst *);
 void		svc_drop(struct svc_rqst *);
 void		svc_sock_update_bufs(struct svc_serv *serv);

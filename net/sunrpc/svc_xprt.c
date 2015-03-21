@@ -312,7 +312,7 @@ char *svc_print_addr(struct svc_rqst *rqstp, char *buf, size_t len)
 }
 EXPORT_SYMBOL_GPL(svc_print_addr);
 
-static bool svc_xprt_has_something_to_do(struct svc_xprt *xprt)
+bool svc_xprt_has_something_to_do(struct svc_xprt *xprt)
 {
 	if (xprt->xpt_flags & ((1<<XPT_CONN)|(1<<XPT_CLOSE)))
 		return true;
@@ -848,6 +848,51 @@ out:
 	return err;
 }
 EXPORT_SYMBOL_GPL(svc_recv);
+
+/*
+ * Perform a receive off the rqstp->rq_xprt socket.
+ *
+ * This function is a bit different from the standard svc_recv function as it
+ * assumes that the xprt is already provided in rqstp->rq_xprt, and so it
+ * does not sleep when there is no more work to be done.
+ */
+int
+svc_wq_recv(struct svc_rqst *rqstp)
+{
+	int len, err;
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+	struct svc_serv *serv = xprt->xpt_server;
+
+	err = svc_alloc_arg(rqstp);
+	if (err)
+		goto out;
+
+	len = svc_handle_xprt(rqstp, xprt);
+	if (len <= 0) {
+		err = -EAGAIN;
+		goto out_release;
+	}
+
+	clear_bit(XPT_OLD, &xprt->xpt_flags);
+
+	if (xprt->xpt_ops->xpo_secure_port(rqstp))
+		set_bit(RQ_SECURE, &rqstp->rq_flags);
+	else
+		clear_bit(RQ_SECURE, &rqstp->rq_flags);
+	rqstp->rq_chandle.defer = svc_defer;
+	rqstp->rq_xid = svc_getu32(&rqstp->rq_arg.head[0]);
+
+	if (serv->sv_stats)
+		serv->sv_stats->netcnt++;
+	trace_svc_recv(rqstp, len);
+	return len;
+out_release:
+	rqstp->rq_res.len = 0;
+	svc_xprt_release(rqstp);
+out:
+	return err;
+}
+EXPORT_SYMBOL_GPL(svc_wq_recv);
 
 /*
  * Drop request

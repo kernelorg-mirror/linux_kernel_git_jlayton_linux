@@ -71,6 +71,8 @@ param_set_pool_mode(const char *val, struct kernel_param *kp)
 		*ip = SVC_POOL_PERCPU;
 	else if (!strncmp(val, "pernode", 7))
 		*ip = SVC_POOL_PERNODE;
+	else if (!strncmp(val, "workqueue", 9))
+		*ip = SVC_POOL_WORKQUEUE;
 	else
 		err = -EINVAL;
 
@@ -94,6 +96,8 @@ param_get_pool_mode(char *buf, struct kernel_param *kp)
 		return strlcpy(buf, "percpu", 20);
 	case SVC_POOL_PERNODE:
 		return strlcpy(buf, "pernode", 20);
+	case SVC_POOL_WORKQUEUE:
+		return strlcpy(buf, "workqueue", 20);
 	default:
 		return sprintf(buf, "%d", *ip);
 	}
@@ -241,6 +245,10 @@ svc_pool_map_get(void)
 		break;
 	case SVC_POOL_PERNODE:
 		npools = svc_pool_map_init_pernode(m);
+		break;
+	case SVC_POOL_WORKQUEUE:
+		/* workqueues get a pool per numa node, but don't need a map */
+		npools = nr_node_ids;
 		break;
 	}
 
@@ -533,6 +541,11 @@ svc_destroy(struct svc_serv *serv)
 
 	if (svc_serv_is_pooled(serv))
 		svc_pool_map_put();
+
+	if (serv->sv_wq) {
+		destroy_workqueue(serv->sv_wq);
+		module_put(serv->sv_ops->svo_module);
+	}
 
 	kfree(serv->sv_pools);
 	kfree(serv);
