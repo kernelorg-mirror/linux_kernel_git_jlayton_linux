@@ -454,6 +454,7 @@ DECLARE_EVENT_CLASS(svc_rqst_status,
 	TP_ARGS(rqst, status),
 
 	TP_STRUCT__entry(
+		__field(struct svc_rqst *, rqst)
 		__field(struct sockaddr *, addr)
 		__field(__be32, xid)
 		__field(int, dropme)
@@ -462,14 +463,15 @@ DECLARE_EVENT_CLASS(svc_rqst_status,
 	),
 
 	TP_fast_assign(
+		__entry->rqst = rqst;
 		__entry->addr = (struct sockaddr *)&rqst->rq_addr;
 		__entry->xid = rqst->rq_xid;
 		__entry->status = status;
 		__entry->flags = rqst->rq_flags;
 	),
 
-	TP_printk("addr=%pIScp rq_xid=0x%x status=%d flags=%s",
-		__entry->addr, be32_to_cpu(__entry->xid),
+	TP_printk("rqst=0x%p addr=%pIScp rq_xid=0x%x status=%d flags=%s",
+		__entry->rqst, __entry->addr, be32_to_cpu(__entry->xid),
 		__entry->status, show_rqstp_flags(__entry->flags))
 );
 
