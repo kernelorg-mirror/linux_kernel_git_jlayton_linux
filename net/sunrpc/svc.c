@@ -500,6 +500,14 @@ out_err:
 }
 EXPORT_SYMBOL_GPL(svc_create_pooled);
 
+struct svc_serv *
+svc_create_wq(struct svc_program *prog, unsigned int bufsize,
+		  struct svc_serv_ops *ops)
+{
+	return __svc_create(prog, bufsize, nr_node_ids, ops);
+}
+EXPORT_SYMBOL_GPL(svc_create_wq);
+
 void svc_shutdown_net(struct svc_serv *serv, struct net *net)
 {
 	svc_close_net(serv, net);
