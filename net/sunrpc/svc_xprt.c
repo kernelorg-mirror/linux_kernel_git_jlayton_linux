@@ -241,6 +241,7 @@ void svc_add_new_perm_xprt(struct svc_serv *serv, struct svc_xprt *new)
 	spin_lock_bh(&serv->sv_lock);
 	list_add(&new->xpt_list, &serv->sv_permsocks);
 	spin_unlock_bh(&serv->sv_lock);
+	trace_svc_xprt_received(NULL, new);
 	svc_xprt_received(new);
 }
 
@@ -328,6 +329,8 @@ void svc_xprt_do_enqueue(struct svc_xprt *xprt)
 	int cpu;
 	bool queued = false;
 
+	trace_svc_xprt_enqueue(xprt);
+
 	if (!svc_xprt_has_something_to_do(xprt))
 		goto out;
 
@@ -401,7 +404,7 @@ redo_search:
 	rqstp = NULL;
 	put_cpu();
 out:
-	trace_svc_xprt_do_enqueue(xprt, rqstp);
+	trace_svc_xprt_enqueued(rqstp, xprt);
 }
 EXPORT_SYMBOL_GPL(svc_xprt_do_enqueue);
 
@@ -737,6 +740,7 @@ static void svc_add_new_temp_xprt(struct svc_serv *serv, struct svc_xprt *newxpt
 			  jiffies + svc_conn_age_period * HZ);
 	}
 	spin_unlock_bh(&serv->sv_lock);
+	trace_svc_xprt_received(NULL, newxpt);
 	svc_xprt_received(newxpt);
 }
 
@@ -744,6 +748,8 @@ static int svc_handle_xprt(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 {
 	struct svc_serv *serv = rqstp->rq_server;
 	int len = 0;
+
+	trace_svc_xprt_active(rqstp, xprt);
 
 	if (test_bit(XPT_CLOSE, &xprt->xpt_flags)) {
 		dprintk("svc_recv: found XPT_CLOSE\n");
@@ -779,6 +785,7 @@ static int svc_handle_xprt(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 		atomic_add(rqstp->rq_reserved, &xprt->xpt_reserved);
 	}
 	/* clear XPT_BUSY: */
+	trace_svc_xprt_received(rqstp, xprt);
 	svc_xprt_received(xprt);
 out:
 	trace_svc_handle_xprt(xprt, len);

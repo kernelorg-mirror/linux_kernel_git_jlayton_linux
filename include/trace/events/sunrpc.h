@@ -496,28 +496,40 @@ DEFINE_EVENT(svc_rqst_status, svc_send,
 		{ (1UL << XPT_CACHE_AUTH),	"XPT_CACHE_AUTH"},	\
 		{ (1UL << XPT_LOCAL),		"XPT_LOCAL"})
 
-TRACE_EVENT(svc_xprt_do_enqueue,
-	TP_PROTO(struct svc_xprt *xprt, struct svc_rqst *rqst),
+/* events associated with both a rqst and a xprt */
+DECLARE_EVENT_CLASS(svc_xprt_rqst_event,
+	TP_PROTO(struct svc_rqst *rqst, struct svc_xprt *xprt),
 
-	TP_ARGS(xprt, rqst),
+	TP_ARGS(rqst, xprt),
 
 	TP_STRUCT__entry(
-		__field(struct svc_xprt *, xprt)
 		__field(struct svc_rqst *, rqst)
+		__field(struct svc_xprt *, xprt)
 	),
 
 	TP_fast_assign(
-		__entry->xprt = xprt;
 		__entry->rqst = rqst;
+		__entry->xprt = xprt;
 	),
 
-	TP_printk("xprt=0x%p addr=%pIScp pid=%d flags=%s", __entry->xprt,
-		(struct sockaddr *)&__entry->xprt->xpt_remote,
-		__entry->rqst ? __entry->rqst->rq_task->pid : 0,
+	TP_printk("rqst=0x%p xprt=0x%p addr=%pIScp flags=%s", __entry->rqst,
+		__entry->xprt, (struct sockaddr *)&__entry->xprt->xpt_remote,
 		show_svc_xprt_flags(__entry->xprt->xpt_flags))
 );
 
-TRACE_EVENT(svc_xprt_dequeue,
+DEFINE_EVENT(svc_xprt_rqst_event, svc_xprt_enqueued,
+	TP_PROTO(struct svc_rqst *rqst, struct svc_xprt *xprt),
+	TP_ARGS(rqst, xprt));
+
+DEFINE_EVENT(svc_xprt_rqst_event, svc_xprt_active,
+	TP_PROTO(struct svc_rqst *rqst, struct svc_xprt *xprt),
+	TP_ARGS(rqst, xprt));
+
+DEFINE_EVENT(svc_xprt_rqst_event, svc_xprt_received,
+	TP_PROTO(struct svc_rqst *rqst, struct svc_xprt *xprt),
+	TP_ARGS(rqst, xprt));
+
+DECLARE_EVENT_CLASS(svc_xprt_event,
 	TP_PROTO(struct svc_xprt *xprt),
 
 	TP_ARGS(xprt),
@@ -538,6 +550,12 @@ TRACE_EVENT(svc_xprt_dequeue,
 		(struct sockaddr *)&__entry->ss,
 		show_svc_xprt_flags(__entry->flags))
 );
+
+DEFINE_EVENT(svc_xprt_event, svc_xprt_enqueue,
+	TP_PROTO(struct svc_xprt *xprt), TP_ARGS(xprt));
+
+DEFINE_EVENT(svc_xprt_event, svc_xprt_dequeue,
+	TP_PROTO(struct svc_xprt *xprt), TP_ARGS(xprt));
 
 TRACE_EVENT(svc_wake_up,
 	TP_PROTO(int pid),

@@ -257,6 +257,8 @@ svc_wq_enqueue_xprt(struct svc_xprt *xprt)
 	struct svc_serv *serv = xprt->xpt_server;
 	struct svc_rqst *rqstp;
 
+	trace_svc_xprt_enqueue(xprt);
+
 	if (!svc_xprt_has_something_to_do(xprt))
 		return;
 
@@ -290,9 +292,11 @@ out:
 	rqstp = find_svc_rqst(serv);
 	if (!rqstp) {
 		queue_work(serv->sv_wq, &xprt->xpt_work);
+		trace_svc_xprt_enqueued(NULL, xprt);
 		return;
 	}
 	rqstp->rq_xprt = xprt;
 	queue_work(serv->sv_wq, &rqstp->rq_work);
+	trace_svc_xprt_enqueued(rqstp, xprt);
 }
 EXPORT_SYMBOL_GPL(svc_wq_enqueue_xprt);
