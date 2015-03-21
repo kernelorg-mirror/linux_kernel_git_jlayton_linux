@@ -894,6 +894,7 @@ svc_wq_recv(struct svc_rqst *rqstp)
 	trace_svc_recv(rqstp, len);
 	return len;
 out_release:
+	trace_svc_recv(rqstp, len);
 	rqstp->rq_res.len = 0;
 	svc_xprt_release(rqstp);
 out:
