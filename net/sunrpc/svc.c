@@ -34,7 +34,7 @@
 
 static void svc_unregister(const struct svc_serv *serv, struct net *net);
 
-#define svc_serv_is_pooled(serv)    ((serv)->sv_ops->svo_function)
+#define svc_serv_is_pooled(serv)    ((serv)->sv_ops->svo_function || (serv)->sv_ops->svo_xprt_work)
 
 #define SVC_POOL_DEFAULT	SVC_POOL_GLOBAL
 

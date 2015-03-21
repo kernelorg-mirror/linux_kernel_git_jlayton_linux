@@ -156,6 +156,8 @@ void svc_xprt_init(struct net *net, struct svc_xprt_class *xcl,
 	xprt->xpt_ops = xcl->xcl_ops;
 	kref_init(&xprt->xpt_ref);
 	xprt->xpt_server = serv;
+	if (serv->sv_ops->svo_xprt_work)
+		INIT_WORK(&xprt->xpt_work, serv->sv_ops->svo_xprt_work);
 	INIT_LIST_HEAD(&xprt->xpt_list);
 	INIT_LIST_HEAD(&xprt->xpt_ready);
 	INIT_LIST_HEAD(&xprt->xpt_deferred);

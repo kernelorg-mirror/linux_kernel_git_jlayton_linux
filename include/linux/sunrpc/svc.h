@@ -58,6 +58,9 @@ struct svc_serv_ops {
 	/* function for service threads to run */
 	int		(*svo_function)(void *);
 
+	/* xprt work function */
+	work_func_t	svo_xprt_work;
+
 	/* queue up a transport for servicing */
 	void		(*svo_enqueue_xprt)(struct svc_xprt *);
 

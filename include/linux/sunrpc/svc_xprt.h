@@ -53,6 +53,7 @@ struct svc_xprt {
 	struct kref		xpt_ref;
 	struct list_head	xpt_list;
 	struct list_head	xpt_ready;
+	struct work_struct	xpt_work;
 	unsigned long		xpt_flags;
 #define	XPT_BUSY	0		/* enqueued/receiving */
 #define	XPT_CONN	1		/* conn pending */
