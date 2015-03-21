@@ -28,6 +28,8 @@
 extern struct svc_program	nfsd_program;
 static int			nfsd(void *vrqstp);
 
+static struct svc_serv_ops	nfsd_wq_sv_ops;
+
 /*
  * nfsd_mutex protects nn->nfsd_serv -- both the pointer itself and the members
  * of the svc_serv struct. In particular, ->sv_nrthreads but also to some
@@ -399,10 +401,19 @@ static struct svc_serv_ops nfsd_thread_sv_ops = {
 	.svo_module		= THIS_MODULE,
 };
 
+static struct svc_serv_ops *
+select_svc_serv_ops(void)
+{
+	if (svc_pool_map.mode == SVC_POOL_WORKQUEUE)
+		return &nfsd_wq_sv_ops;
+	return &nfsd_thread_sv_ops;
+}
+
 int nfsd_create_serv(struct net *net)
 {
 	int error;
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	struct svc_serv_ops *ops;
 
 	WARN_ON(!mutex_is_locked(&nfsd_mutex));
 	if (nn->nfsd_serv) {
@@ -412,8 +423,11 @@ int nfsd_create_serv(struct net *net)
 	if (nfsd_max_blksize == 0)
 		nfsd_max_blksize = nfsd_get_default_max_blksize();
 	nfsd_reset_versions();
-	nn->nfsd_serv = svc_create_pooled(&nfsd_program, nfsd_max_blksize,
-						&nfsd_thread_sv_ops);
+
+	svc_pool_map_get();
+	ops = select_svc_serv_ops();
+	nn->nfsd_serv = svc_create_pooled(&nfsd_program, nfsd_max_blksize, ops);
+	svc_pool_map_put();
 	if (nn->nfsd_serv == NULL)
 		return -ENOMEM;
 
@@ -635,6 +649,53 @@ nfsd(void *vrqstp)
 	module_put_and_exit(0);
 	return 0;
 }
+
+static void
+nfsd_rqst_work(struct work_struct *work)
+{
+	struct svc_rqst *rqstp = container_of(work, struct svc_rqst, rq_work);
+	struct net *net = rqstp->rq_xprt->xpt_net;
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+
+	rqstp->rq_server->sv_maxconn = nn->max_connections;
+
+	if (svc_wq_recv(rqstp) < 0) {
+		svc_rqst_free(rqstp);
+		return;
+	}
+
+	svc_process(rqstp);
+	svc_rqst_free(rqstp);
+}
+
+/* work function for workqueue-based nfsd */
+static void
+nfsd_xprt_work(struct work_struct *work)
+{
+	int node = numa_node_id();
+	struct svc_xprt *xprt = container_of(work, struct svc_xprt, xpt_work);
+	struct svc_rqst *rqstp;
+	struct svc_serv *serv = xprt->xpt_server;
+
+	rqstp = svc_rqst_alloc(serv, &serv->sv_pools[node], node);
+	if (!rqstp) {
+		/* Alloc failure. Give up for now, and requeue the work */
+		queue_work(serv->sv_wq, &xprt->xpt_work);
+		return;
+	}
+
+	rqstp->rq_xprt = xprt;
+	queue_work(serv->sv_wq, &rqstp->rq_work);
+}
+
+static struct svc_serv_ops nfsd_wq_sv_ops = {
+	.svo_shutdown		= nfsd_last_thread,
+	.svo_enqueue_xprt	= svc_wq_enqueue_xprt,
+	.svo_xprt_work		= nfsd_xprt_work,
+	.svo_rqst_work		= nfsd_rqst_work,
+	.svo_setup		= svc_wq_setup,
+	.svo_module		= THIS_MODULE,
+};
 
 static __be32 map_new_errors(u32 vers, __be32 nfserr)
 {
