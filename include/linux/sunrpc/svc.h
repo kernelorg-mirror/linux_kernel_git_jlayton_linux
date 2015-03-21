@@ -61,6 +61,9 @@ struct svc_serv_ops {
 	/* xprt work function */
 	work_func_t	svo_xprt_work;
 
+	/* rqst work function */
+	work_func_t	svo_rqst_work;
+
 	/* queue up a transport for servicing */
 	void		(*svo_enqueue_xprt)(struct svc_xprt *);
 
@@ -293,6 +296,7 @@ struct svc_rqst {
 	struct svc_cacherep *	rq_cacherep;	/* cache info */
 	struct task_struct	*rq_task;	/* service thread */
 	spinlock_t		rq_lock;	/* per-request lock */
+	struct work_struct	rq_work;	/* per-request work */
 };
 
 #define SVC_NET(svc_rqst)	(svc_rqst->rq_xprt->xpt_net)
