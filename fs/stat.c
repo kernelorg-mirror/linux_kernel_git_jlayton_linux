@@ -593,11 +593,9 @@ cp_statx(const struct kstat *stat, struct statx __user *buffer)
 
 	memset(&tmp, 0, sizeof(tmp));
 
-	/* STATX_VERSION is kernel-only for now */
-	tmp.stx_mask = stat->result_mask & ~STATX_VERSION;
+	tmp.stx_mask = stat->result_mask;
 	tmp.stx_blksize = stat->blksize;
-	/* STATX_ATTR_VERSION_MONOTONIC is kernel-only for now */
-	tmp.stx_attributes = stat->attributes & ~STATX_ATTR_VERSION_MONOTONIC;
+	tmp.stx_attributes = stat->attributes;
 	tmp.stx_nlink = stat->nlink;
 	tmp.stx_uid = from_kuid_munged(current_user_ns(), stat->uid);
 	tmp.stx_gid = from_kgid_munged(current_user_ns(), stat->gid);
@@ -621,6 +619,7 @@ cp_statx(const struct kstat *stat, struct statx __user *buffer)
 	tmp.stx_mnt_id = stat->mnt_id;
 	tmp.stx_dio_mem_align = stat->dio_mem_align;
 	tmp.stx_dio_offset_align = stat->dio_offset_align;
+	tmp.stx_version = stat->version;
 
 	return copy_to_user(buffer, &tmp, sizeof(tmp)) ? -EFAULT : 0;
 }
@@ -635,11 +634,6 @@ int do_statx(int dfd, struct filename *filename, unsigned int flags,
 		return -EINVAL;
 	if ((flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE)
 		return -EINVAL;
-
-	/* STATX_VERSION is kernel-only for now. Ignore requests
-	 * from userland.
-	 */
-	mask &= ~STATX_VERSION;
 
 	error = vfs_statx(dfd, filename, flags, &stat, mask);
 	if (error)
