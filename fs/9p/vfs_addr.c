@@ -223,8 +223,11 @@ static int v9fs_launder_page(struct page *page)
 	v9fs_fscache_wait_on_page_write(inode, page);
 	if (clear_page_dirty_for_io(page)) {
 		retval = v9fs_vfs_writepage_locked(page);
-		if (retval)
+		if (retval) {
+			if (retval != -EAGAIN)
+				mapping_set_error(page->mapping, retval);
 			return retval;
+		}
 	}
 	return 0;
 }
