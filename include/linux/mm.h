@@ -23,6 +23,7 @@
 #include <linux/page_ext.h>
 #include <linux/err.h>
 #include <linux/page_ref.h>
+#include <linux/errseq.h>
 
 struct mempolicy;
 struct anon_vma;
@@ -2177,6 +2178,7 @@ extern int filemap_page_mkwrite(struct vm_fault *vmf);
 
 /* mm/page-writeback.c */
 int __must_check write_one_page(struct page *page);
+int __must_check write_one_page_since(struct page *page, errseq_t since);
 void task_dirty_inc(struct task_struct *tsk);
 
 /* readahead.c */

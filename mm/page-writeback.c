@@ -2365,19 +2365,10 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
 	return ret;
 }
 
-/**
- * write_one_page - write out a single page and wait on I/O
- * @page: the page to write
- *
- * The page must be locked by the caller and will be unlocked upon return.
- *
- * Note that the mapping's AS_EIO/AS_ENOSPC flags will be cleared when this
- * function returns.
- */
-int write_one_page(struct page *page)
+static int __write_one_page(struct page *page)
 {
 	struct address_space *mapping = page->mapping;
-	int ret = 0;
+	int ret;
 	struct writeback_control wbc = {
 		.sync_mode = WB_SYNC_ALL,
 		.nr_to_write = 1,
@@ -2394,14 +2385,52 @@ int write_one_page(struct page *page)
 			wait_on_page_writeback(page);
 		put_page(page);
 	} else {
+		ret = 0;
 		unlock_page(page);
 	}
+	return ret;
+}
 
+/**
+ * write_one_page - write out a single page and wait on I/O
+ * @page: the page to write
+ *
+ * The page must be locked by the caller and will be unlocked upon return.
+ *
+ * Note that the mapping's AS_EIO/AS_ENOSPC flags will be cleared when this
+ * function returns.
+ */
+int write_one_page(struct page *page)
+{
+	int ret;
+
+	ret = __write_one_page(page);
 	if (!ret)
-		ret = filemap_check_errors(mapping);
+		ret = filemap_check_errors(page->mapping);
 	return ret;
 }
 EXPORT_SYMBOL(write_one_page);
+
+/*
+ * write_one_page_since - write out a single page and wait on I/O
+ * @page: the page to write
+ * @since: previously sampled errseq_t
+ *
+ * The page must be locked by the caller and will be unlocked upon return.
+ *
+ * The caller should pass in a previously-sampled errseq_t. The mapping will
+ * be checked for errors since that point.
+ */
+int write_one_page_since(struct page *page, errseq_t since)
+{
+	int ret;
+
+	ret = __write_one_page(page);
+	if (!ret)
+		ret = filemap_check_wb_err(page->mapping, since);
+	return ret;
+}
+EXPORT_SYMBOL(write_one_page_since);
 
 /*
  * For address_spaces which do not use buffers nor write back.
