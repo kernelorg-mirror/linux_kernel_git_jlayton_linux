@@ -1662,7 +1662,7 @@ int wait_on_node_pages_writeback(struct f2fs_sb_info *sbi, nid_t ino)
 		cond_resched();
 	}
 
-	ret2 = filemap_check_errors(NODE_MAPPING(sbi));
+	ret2 = filemap_check_and_clear_errors(NODE_MAPPING(sbi));
 	if (!ret)
 		ret = ret2;
 	return ret;

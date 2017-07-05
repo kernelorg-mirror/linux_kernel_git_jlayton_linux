@@ -413,7 +413,7 @@ static int fuse_flush(struct file *file, fl_owner_t id)
 	fuse_sync_writes(inode);
 	inode_unlock(inode);
 
-	err = filemap_check_errors(file->f_mapping);
+	err = filemap_check_and_clear_errors(file->f_mapping);
 	if (err)
 		return err;
 
@@ -468,7 +468,7 @@ int fuse_fsync_common(struct file *file, loff_t start, loff_t end,
 	 * filemap_write_and_wait_range() does not catch errors.
 	 * We have to do this directly after fuse_sync_writes()
 	 */
-	err = filemap_check_errors(file->f_mapping);
+	err = filemap_check_and_clear_errors(file->f_mapping);
 	if (err)
 		goto out;
 

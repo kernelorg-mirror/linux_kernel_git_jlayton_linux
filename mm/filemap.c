@@ -295,7 +295,7 @@ void delete_from_page_cache(struct page *page)
 }
 EXPORT_SYMBOL(delete_from_page_cache);
 
-int filemap_check_errors(struct address_space *mapping)
+int filemap_check_and_clear_errors(struct address_space *mapping)
 {
 	int ret = 0;
 	/* Check for outstanding write errors */
@@ -307,7 +307,7 @@ int filemap_check_errors(struct address_space *mapping)
 		ret = -EIO;
 	return ret;
 }
-EXPORT_SYMBOL(filemap_check_errors);
+EXPORT_SYMBOL(filemap_check_and_clear_errors);
 
 /**
  * __filemap_fdatawrite_range - start writeback on mapping dirty pages in range
@@ -433,7 +433,7 @@ int filemap_fdatawait_range(struct address_space *mapping, loff_t start_byte,
 	int ret, ret2;
 
 	ret = __filemap_fdatawait_range(mapping, start_byte, end_byte);
-	ret2 = filemap_check_errors(mapping);
+	ret2 = filemap_check_and_clear_errors(mapping);
 	if (!ret)
 		ret = ret2;
 
@@ -505,7 +505,7 @@ int filemap_write_and_wait(struct address_space *mapping)
 				err = err2;
 		}
 	} else {
-		err = filemap_check_errors(mapping);
+		err = filemap_check_and_clear_errors(mapping);
 	}
 	return err;
 }
@@ -539,7 +539,7 @@ int filemap_write_and_wait_range(struct address_space *mapping,
 				err = err2;
 		}
 	} else {
-		err = filemap_check_errors(mapping);
+		err = filemap_check_and_clear_errors(mapping);
 	}
 	return err;
 }

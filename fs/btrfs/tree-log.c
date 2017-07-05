@@ -3977,7 +3977,7 @@ static int wait_ordered_extents(struct btrfs_trans_handle *trans,
 			 * i_mapping flags, so that the next fsync won't get
 			 * an outdated io error too.
 			 */
-			filemap_check_errors(inode->i_mapping);
+			filemap_check_and_clear_errors(inode->i_mapping);
 			*ordered_io_error = true;
 			break;
 		}
@@ -4214,7 +4214,7 @@ static int btrfs_log_changed_extents(struct btrfs_trans_handle *trans,
 	 * without writing to the log tree and the fsync must report the
 	 * file data write error and not commit the current transaction.
 	 */
-	ret = filemap_check_errors(inode->vfs_inode.i_mapping);
+	ret = filemap_check_and_clear_errors(inode->vfs_inode.i_mapping);
 	if (ret)
 		ctx->io_err = ret;
 process:
