@@ -866,6 +866,7 @@ const struct file_operations fat_dir_operations = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= fat_compat_dir_ioctl,
 #endif
+	.open		= fat_file_open,
 	.fsync		= fat_file_fsync,
 };
 

@@ -159,15 +159,37 @@ static int fat_file_release(struct inode *inode, struct file *filp)
 
 int fat_file_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 {
-	struct inode *inode = filp->f_mapping->host;
+	struct super_block *sb = file_inode(filp)->i_sb;
+	struct address_space *fat_mapping = MSDOS_SB(sb)->fat_inode->i_mapping;
 	int res, err;
 
-	res = generic_file_fsync(filp, start, end, datasync);
-	err = sync_mapping_buffers(MSDOS_SB(inode->i_sb)->fat_inode->i_mapping);
+	res = __generic_file_fsync(filp, start, end, datasync);
 
-	return res ? res : err;
+	/* Sync out the FAT buffers */
+	err = sync_mapping_buffers(fat_mapping);
+	if (res == 0)
+		res = err;
+
+	/* check and advance the FAT writeback error cursor */
+	err = file_check_and_advance_md_wb_err(filp, fat_mapping);
+	if (res == 0)
+		res = err;
+
+	/* Issue flush if everything was successful */
+	if (res == 0)
+		res = blkdev_issue_flush(sb->s_bdev, GFP_KERNEL, NULL);
+
+	return res;
 }
 
+int fat_file_open(struct inode *inode, struct file *file)
+{
+	struct super_block *sb = inode->i_sb;
+	struct address_space *fat_mapping = MSDOS_SB(sb)->fat_inode->i_mapping;
+
+	file->f_md_wb_err = filemap_sample_wb_err(fat_mapping);
+	return 0;
+}
 
 const struct file_operations fat_file_operations = {
 	.llseek		= generic_file_llseek,
@@ -179,6 +201,7 @@ const struct file_operations fat_file_operations = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= fat_generic_compat_ioctl,
 #endif
+	.open		= fat_file_open,
 	.fsync		= fat_file_fsync,
 	.splice_read	= generic_file_splice_read,
 	.fallocate	= fat_fallocate,
