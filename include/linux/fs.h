@@ -2544,6 +2544,8 @@ extern int write_inode_now(struct inode *, int);
 extern int filemap_fdatawrite(struct address_space *);
 extern int filemap_flush(struct address_space *);
 extern int filemap_fdatawait_keep_errors(struct address_space *mapping);
+extern int filemap_fdatawait_since(struct address_space *, errseq_t);
+extern int filemap_fdatawait_keep_errors(struct address_space *);
 extern int filemap_fdatawait_range(struct address_space *, loff_t lstart,
 				   loff_t lend);
 
@@ -2556,9 +2558,17 @@ extern bool filemap_range_has_page(struct address_space *, loff_t lstart,
 				  loff_t lend);
 extern int __must_check file_fdatawait_range(struct file *file, loff_t lstart,
 						loff_t lend);
+extern int __must_check filemap_fdatawait_range_since(
+			struct address_space *mapping, loff_t start_byte,
+			loff_t end_byte, errseq_t since);
 extern int filemap_write_and_wait(struct address_space *mapping);
+extern int filemap_write_and_wait_since(struct address_space *mapping,
+					errseq_t since);
 extern int filemap_write_and_wait_range(struct address_space *mapping,
 				        loff_t lstart, loff_t lend);
+extern int filemap_write_and_wait_range_since(struct address_space *mapping,
+				   loff_t start_byte, loff_t end_byte,
+				   errseq_t since);
 extern int __filemap_fdatawrite_range(struct address_space *mapping,
 				loff_t start, loff_t end, int sync_mode);
 extern int filemap_fdatawrite_range(struct address_space *mapping,

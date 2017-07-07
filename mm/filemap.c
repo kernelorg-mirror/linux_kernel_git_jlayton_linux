@@ -463,6 +463,14 @@ int filemap_fdatawait_range(struct address_space *mapping, loff_t start_byte,
 }
 EXPORT_SYMBOL(filemap_fdatawait_range);
 
+int filemap_fdatawait_range_since(struct address_space *mapping, loff_t start_byte,
+				  loff_t end_byte, errseq_t since)
+{
+	__filemap_fdatawait_range(mapping, start_byte, end_byte);
+	return filemap_check_wb_err(mapping, since);
+}
+EXPORT_SYMBOL(filemap_fdatawait_range_since);
+
 /**
  * file_fdatawait_range - wait for writeback to complete
  * @file:		file pointing to address space structure to wait for
@@ -511,6 +519,17 @@ static bool mapping_needs_writeback(struct address_space *mapping)
 	    (dax_mapping(mapping) && mapping->nrexceptional);
 }
 
+int filemap_fdatawait_since(struct address_space *mapping, errseq_t since)
+{
+	loff_t i_size = i_size_read(mapping->host);
+
+	if (i_size == 0)
+		return 0;
+
+	return filemap_fdatawait_range_since(mapping, 0, i_size - 1, since);
+}
+EXPORT_SYMBOL(filemap_fdatawait_since);
+
 int filemap_write_and_wait(struct address_space *mapping)
 {
 	int err = 0;
@@ -537,6 +556,31 @@ int filemap_write_and_wait(struct address_space *mapping)
 	return err;
 }
 EXPORT_SYMBOL(filemap_write_and_wait);
+
+int filemap_write_and_wait_since(struct address_space *mapping, errseq_t since)
+{
+	int err = 0;
+
+	if ((!dax_mapping(mapping) && mapping->nrpages) ||
+	    (dax_mapping(mapping) && mapping->nrexceptional)) {
+		err = filemap_fdatawrite(mapping);
+		/*
+		 * Even if the above returned error, the pages may be
+		 * written partially (e.g. -ENOSPC), so we wait for it.
+		 * But the -EIO is special case, it may indicate the worst
+		 * thing (e.g. bug) happened, so we avoid waiting for it.
+		 */
+		if (err != -EIO) {
+			int err2 = filemap_fdatawait_since(mapping, since);
+			if (!err)
+				err = err2;
+		}
+	} else {
+		err = filemap_check_wb_err(mapping, since);
+	}
+	return err;
+}
+EXPORT_SYMBOL(filemap_write_and_wait_since);
 
 /**
  * filemap_write_and_wait_range - write out & wait on a file range
@@ -573,6 +617,29 @@ int filemap_write_and_wait_range(struct address_space *mapping,
 	return err;
 }
 EXPORT_SYMBOL(filemap_write_and_wait_range);
+
+int filemap_write_and_wait_range_since(struct address_space *mapping,
+				 loff_t lstart, loff_t lend, errseq_t since)
+{
+	int err = 0;
+
+	if ((!dax_mapping(mapping) && mapping->nrpages) ||
+	    (dax_mapping(mapping) && mapping->nrexceptional)) {
+		err = __filemap_fdatawrite_range(mapping, lstart, lend,
+						 WB_SYNC_ALL);
+		/* See comment of filemap_write_and_wait() */
+		if (err != -EIO) {
+			int err2 = filemap_fdatawait_range_since(mapping,
+						lstart, lend, since);
+			if (!err)
+				err = err2;
+		}
+	} else {
+		err = filemap_check_wb_err(mapping, since);
+	}
+	return err;
+}
+EXPORT_SYMBOL(filemap_write_and_wait_range_since);
 
 void __filemap_set_wb_err(struct address_space *mapping, int err)
 {
