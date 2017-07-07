@@ -2541,6 +2541,7 @@ static int jbd2_journal_file_inode(handle_t *handle, struct jbd2_inode *jinode,
 	/* Not on any transaction list... */
 	J_ASSERT(!jinode->i_next_transaction);
 	jinode->i_transaction = transaction;
+	jinode->i_since = filemap_sample_wb_err(jinode->i_vfs_inode->i_mapping);
 	list_add(&jinode->i_list, &transaction->t_inode_list);
 done:
 	spin_unlock(&journal->j_list_lock);

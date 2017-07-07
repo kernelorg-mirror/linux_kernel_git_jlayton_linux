@@ -248,11 +248,12 @@ int jbd2_journal_recover(journal_t *journal)
 {
 	int			err, err2;
 	journal_superblock_t *	sb;
-
 	struct recovery_info	info;
+	errseq_t		since;
 
 	memset(&info, 0, sizeof(info));
 	sb = journal->j_superblock;
+	since = filemap_sample_wb_err(journal->j_fs_dev->bd_inode->i_mapping);
 
 	/*
 	 * The journal superblock's s_start field (the current log head)
@@ -284,7 +285,7 @@ int jbd2_journal_recover(journal_t *journal)
 	journal->j_transaction_sequence = ++info.end_transaction;
 
 	jbd2_journal_clear_revoke(journal);
-	err2 = sync_blockdev(journal->j_fs_dev);
+	err2 = sync_blockdev_since(journal->j_fs_dev, since);
 	if (!err)
 		err = err2;
 	/* Make sure all replayed data is on permanent storage */

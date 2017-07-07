@@ -439,6 +439,9 @@ struct jbd2_inode {
 
 	/* Flags of inode [j_list_lock] */
 	unsigned long i_flags;
+
+	/* Sampled writeback error at the time of transaction start */
+	errseq_t i_since;
 };
 
 struct jbd2_revoke_table_s;
