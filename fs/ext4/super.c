@@ -3436,6 +3436,10 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 		sbi->s_sectors_written_start =
 			part_stat_read(sb->s_bdev->bd_part, sectors[1]);
 
+	/* initialize sb-writeback error cursor */
+	sbi->s_sb_wb_err = filemap_sample_wb_err(sb->s_bdev->bd_inode->i_mapping);
+	spin_lock_init(&sbi->s_sb_wb_err_lock);
+
 	/* Cleanup superblock name */
 	strreplace(sb->s_id, '/', '!');
 
@@ -4830,6 +4834,7 @@ static int ext4_sync_fs(struct super_block *sb, int wait)
 	tid_t target;
 	bool needs_barrier = false;
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
+	struct address_space *mapping = sb->s_bdev->bd_inode->i_mapping;
 
 	if (unlikely(ext4_forced_shutdown(EXT4_SB(sb))))
 		return 0;
@@ -4859,6 +4864,7 @@ static int ext4_sync_fs(struct super_block *sb, int wait)
 		}
 	} else if (wait && test_opt(sb, BARRIER))
 		needs_barrier = true;
+
 	if (needs_barrier) {
 		int err;
 		err = blkdev_issue_flush(sb->s_bdev, GFP_KERNEL, NULL);
@@ -4866,6 +4872,16 @@ static int ext4_sync_fs(struct super_block *sb, int wait)
 			ret = err;
 	}
 
+	if (errseq_check(&mapping->wb_err, READ_ONCE(mapping->wb_err))) {
+		int err;
+
+		spin_lock(&sbi->s_sb_wb_err_lock);
+		err = errseq_check_and_advance(&mapping->wb_err,
+						&sbi->s_sb_wb_err);
+		spin_unlock(&sbi->s_sb_wb_err_lock);
+		if (!ret)
+			ret = err;
+	}
 	return ret;
 }
 

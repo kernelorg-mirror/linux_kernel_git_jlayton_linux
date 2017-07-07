@@ -1526,6 +1526,10 @@ struct ext4_sb_info {
 
 	/* Barrier between changing inodes' journal flags and writepages ops. */
 	struct percpu_rw_semaphore s_journal_flag_rwsem;
+
+	/* superblock writeback error tracking */
+	spinlock_t s_sb_wb_err_lock;
+	errseq_t s_sb_wb_err;
 };
 
 static inline struct ext4_sb_info *EXT4_SB(struct super_block *sb)
