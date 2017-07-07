@@ -582,6 +582,24 @@ void __filemap_set_wb_err(struct address_space *mapping, int err)
 }
 EXPORT_SYMBOL(__filemap_set_wb_err);
 
+static int __file_check_and_advance_wb_err(errseq_t *cursor,
+			spinlock_t *lock, struct address_space *mapping)
+{
+	int err = 0;
+	errseq_t old = READ_ONCE(*cursor);
+
+	/* Locklessly handle the common case where nothing has changed */
+	if (errseq_check(&mapping->wb_err, old)) {
+		/* Something changed, must use slow path */
+		spin_lock(lock);
+		old = *cursor;
+		err = errseq_check_and_advance(&mapping->wb_err, cursor);
+		trace_file_check_and_advance_wb_err(mapping, old, *cursor);
+		spin_unlock(lock);
+	}
+	return err;
+}
+
 /**
  * file_check_and_advance_wb_err - report wb error (if any) that was previously
  * 				   and advance wb_err to current one
@@ -606,23 +624,29 @@ EXPORT_SYMBOL(__filemap_set_wb_err);
  */
 int file_check_and_advance_wb_err(struct file *file)
 {
-	int err = 0;
-	errseq_t old = READ_ONCE(file->f_wb_err);
-	struct address_space *mapping = file->f_mapping;
-
-	/* Locklessly handle the common case where nothing has changed */
-	if (errseq_check(&mapping->wb_err, old)) {
-		/* Something changed, must use slow path */
-		spin_lock(&file->f_lock);
-		old = file->f_wb_err;
-		err = errseq_check_and_advance(&mapping->wb_err,
-						&file->f_wb_err);
-		trace_file_check_and_advance_wb_err(file, old);
-		spin_unlock(&file->f_lock);
-	}
-	return err;
+	return __file_check_and_advance_wb_err(&file->f_wb_err,
+					&file->f_lock, file->f_mapping);
 }
 EXPORT_SYMBOL(file_check_and_advance_wb_err);
+
+/**
+ * filemap_check_and_advance_md_wb_err - report wb error (if any) that was
+ * 					 previously set and advance to current
+ * 					 value.
+ * @file: struct file on which the metadata error is being reported
+ * @mapping: pointer to metadata mapping to check
+ *
+ * Many filesystems keep inode metadata in the pagecache, and will use the
+ * cache to write it back to the backing store. This function is for these
+ * callers to track metadata writeback.
+ */
+int file_check_and_advance_md_wb_err(struct file *file,
+					struct address_space *mapping)
+{
+	return __file_check_and_advance_wb_err(&file->f_md_wb_err,
+					&file->f_lock, mapping);
+}
+EXPORT_SYMBOL(file_check_and_advance_md_wb_err);
 
 /**
  * file_write_and_wait_range - write out & wait on a file range

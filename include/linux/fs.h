@@ -885,6 +885,7 @@ struct file {
 #endif /* #ifdef CONFIG_EPOLL */
 	struct address_space	*f_mapping;
 	errseq_t		f_wb_err;
+	errseq_t		f_md_wb_err; /* metadata wb error tracking */
 } __randomize_layout
   __attribute__((aligned(4)));	/* lest something weird decides that 2 is OK */
 
@@ -2568,6 +2569,8 @@ extern void __filemap_set_wb_err(struct address_space *mapping, int err);
 extern int __must_check file_fdatawait_range(struct file *file, loff_t lstart,
 						loff_t lend);
 extern int __must_check file_check_and_advance_wb_err(struct file *file);
+extern int __must_check file_check_and_advance_md_wb_err(struct file *file,
+					struct address_space *mapping);
 extern int __must_check file_write_and_wait_range(struct file *file,
 						loff_t start, loff_t end);
 

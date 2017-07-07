@@ -160,6 +160,7 @@ struct file *alloc_file(const struct path *path, fmode_t mode,
 		const struct file_operations *fop)
 {
 	struct file *file;
+	struct super_block *sb;
 
 	file = get_empty_filp();
 	if (IS_ERR(file))
@@ -169,6 +170,10 @@ struct file *alloc_file(const struct path *path, fmode_t mode,
 	file->f_inode = path->dentry->d_inode;
 	file->f_mapping = path->dentry->d_inode->i_mapping;
 	file->f_wb_err = filemap_sample_wb_err(file->f_mapping);
+	sb = path->dentry->d_sb;
+	if (sb->s_bdev)
+		file->f_md_wb_err =
+			filemap_sample_wb_err(sb->s_bdev->bd_inode->i_mapping);
 	if ((mode & FMODE_READ) &&
 	     likely(fop->read || fop->read_iter))
 		mode |= FMODE_CAN_READ;
