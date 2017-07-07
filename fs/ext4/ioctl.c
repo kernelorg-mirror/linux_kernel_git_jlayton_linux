@@ -205,9 +205,10 @@ static int uuid_is_zero(__u8 u[16])
 }
 #endif
 
-static int ext4_ioctl_setflags(struct inode *inode,
+static int ext4_ioctl_setflags(struct file *file,
 			       unsigned int flags)
 {
+	struct inode *inode = file_inode(file);
 	struct ext4_inode_info *ei = EXT4_I(inode);
 	handle_t *handle = NULL;
 	int err = -EPERM, migrate = 0;
@@ -291,7 +292,7 @@ flags_err:
 		goto flags_out;
 
 	if ((jflag ^ oldflags) & (EXT4_JOURNAL_DATA_FL))
-		err = ext4_change_inode_journal_flag(inode, jflag);
+		err = ext4_change_inode_journal_flag(file, jflag);
 	if (err)
 		goto flags_out;
 	if (migrate) {
@@ -624,7 +625,7 @@ long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			return err;
 
 		inode_lock(inode);
-		err = ext4_ioctl_setflags(inode, flags);
+		err = ext4_ioctl_setflags(filp, flags);
 		inode_unlock(inode);
 		mnt_drop_write_file(filp);
 		return err;
@@ -1022,7 +1023,7 @@ resizefs_out:
 		inode_lock(inode);
 		flags = (ei->i_flags & ~EXT4_FL_XFLAG_VISIBLE) |
 			 (flags & EXT4_FL_XFLAG_VISIBLE);
-		err = ext4_ioctl_setflags(inode, flags);
+		err = ext4_ioctl_setflags(filp, flags);
 		inode_unlock(inode);
 		mnt_drop_write_file(filp);
 		if (err)

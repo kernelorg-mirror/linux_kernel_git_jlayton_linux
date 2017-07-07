@@ -4931,17 +4931,17 @@ long ext4_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		return -EOPNOTSUPP;
 
 	if (mode & FALLOC_FL_PUNCH_HOLE)
-		return ext4_punch_hole(inode, offset, len);
+		return ext4_punch_hole(file, offset, len);
 
 	ret = ext4_convert_inline_data(inode);
 	if (ret)
 		return ret;
 
 	if (mode & FALLOC_FL_COLLAPSE_RANGE)
-		return ext4_collapse_range(inode, offset, len);
+		return ext4_collapse_range(file, offset, len);
 
 	if (mode & FALLOC_FL_INSERT_RANGE)
-		return ext4_insert_range(inode, offset, len);
+		return ext4_insert_range(file, offset, len);
 
 	if (mode & FALLOC_FL_ZERO_RANGE)
 		return ext4_zero_range(file, offset, len, mode);
@@ -5440,14 +5440,16 @@ out:
  * This implements the fallocate's collapse range functionality for ext4
  * Returns: 0 and non-zero on error.
  */
-int ext4_collapse_range(struct inode *inode, loff_t offset, loff_t len)
+int ext4_collapse_range(struct file *file, loff_t offset, loff_t len)
 {
+	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
 	ext4_lblk_t punch_start, punch_stop;
 	handle_t *handle;
 	unsigned int credits;
 	loff_t new_size, ioffset;
 	int ret;
+	errseq_t since = READ_ONCE(file->f_wb_err);
 
 	/*
 	 * We need to test this early because xfstests assumes that a
@@ -5511,7 +5513,7 @@ int ext4_collapse_range(struct inode *inode, loff_t offset, loff_t len)
 	 * Write tail of the last page before removed range since it will get
 	 * removed from the page cache below.
 	 */
-	ret = filemap_write_and_wait_range(inode->i_mapping, ioffset, offset);
+	ret = filemap_write_and_wait_range_since(inode->i_mapping, ioffset, offset, since);
 	if (ret)
 		goto out_mmap;
 	/*
@@ -5519,8 +5521,8 @@ int ext4_collapse_range(struct inode *inode, loff_t offset, loff_t len)
 	 * page cache below. We are also protected from pages becoming dirty
 	 * by i_mmap_sem.
 	 */
-	ret = filemap_write_and_wait_range(inode->i_mapping, offset + len,
-					   LLONG_MAX);
+	ret = filemap_write_and_wait_range_since(inode->i_mapping, offset + len,
+					   LLONG_MAX, since);
 	if (ret)
 		goto out_mmap;
 	truncate_pagecache(inode, ioffset);
@@ -5585,8 +5587,9 @@ out_mutex:
  * by len bytes.
  * Returns 0 on success, error otherwise.
  */
-int ext4_insert_range(struct inode *inode, loff_t offset, loff_t len)
+int ext4_insert_range(struct file *file, loff_t offset, loff_t len)
 {
+	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
 	handle_t *handle;
 	struct ext4_ext_path *path;
@@ -5595,6 +5598,7 @@ int ext4_insert_range(struct inode *inode, loff_t offset, loff_t len)
 	unsigned int credits, ee_len;
 	int ret = 0, depth, split_flag = 0;
 	loff_t ioffset;
+	errseq_t since = READ_ONCE(file->f_wb_err);
 
 	/*
 	 * We need to test this early because xfstests assumes that an
@@ -5658,8 +5662,8 @@ int ext4_insert_range(struct inode *inode, loff_t offset, loff_t len)
 	 */
 	ioffset = round_down(offset, PAGE_SIZE);
 	/* Write out all dirty pages */
-	ret = filemap_write_and_wait_range(inode->i_mapping, ioffset,
-			LLONG_MAX);
+	ret = filemap_write_and_wait_range_since(inode->i_mapping, ioffset,
+			LLONG_MAX, since);
 	if (ret)
 		goto out_mmap;
 	truncate_pagecache(inode, ioffset);

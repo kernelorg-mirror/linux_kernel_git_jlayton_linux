@@ -5062,6 +5062,10 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 		}
 
 		if (*flags & MS_RDONLY) {
+			/*
+			 * FIXME: what does an error from sync_filesystem
+			 * actually mean?
+			 */
 			err = sync_filesystem(sb);
 			if (err < 0)
 				goto restore_opts;

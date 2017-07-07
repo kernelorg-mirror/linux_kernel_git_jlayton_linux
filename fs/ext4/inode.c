@@ -3766,8 +3766,9 @@ static ssize_t ext4_direct_IO_read(struct kiocb *iocb, struct iov_iter *iter)
 	 * we are protected against page writeback as well.
 	 */
 	inode_lock_shared(inode);
-	ret = filemap_write_and_wait_range(mapping, iocb->ki_pos,
-					   iocb->ki_pos + count - 1);
+	ret = filemap_write_and_wait_range_since(mapping, iocb->ki_pos,
+					   iocb->ki_pos + count - 1,
+					   iocb->ki_filp->f_wb_err);
 	if (ret)
 		goto out_unlock;
 	ret = __blockdev_direct_IO(iocb, inode, inode->i_sb->s_bdev,
@@ -4139,8 +4140,9 @@ int ext4_update_disksize_before_punch(struct inode *inode, loff_t offset,
  * Returns: 0 on success or negative on failure
  */
 
-int ext4_punch_hole(struct inode *inode, loff_t offset, loff_t length)
+int ext4_punch_hole(struct file *file, loff_t offset, loff_t length)
 {
+	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
 	ext4_lblk_t first_block, stop_block;
 	struct address_space *mapping = inode->i_mapping;
@@ -4148,6 +4150,7 @@ int ext4_punch_hole(struct inode *inode, loff_t offset, loff_t length)
 	handle_t *handle;
 	unsigned int credits;
 	int ret = 0;
+	errseq_t since = READ_ONCE(file->f_wb_err);
 
 	if (!S_ISREG(inode->i_mode))
 		return -EOPNOTSUPP;
@@ -4159,8 +4162,8 @@ int ext4_punch_hole(struct inode *inode, loff_t offset, loff_t length)
 	 * Then release them.
 	 */
 	if (mapping_tagged(mapping, PAGECACHE_TAG_DIRTY)) {
-		ret = filemap_write_and_wait_range(mapping, offset,
-						   offset + length - 1);
+		ret = filemap_write_and_wait_range_since(mapping, offset,
+						   offset + length - 1, since);
 		if (ret)
 			return ret;
 	}
@@ -5902,12 +5905,14 @@ static int ext4_pin_inode(handle_t *handle, struct inode *inode)
 }
 #endif
 
-int ext4_change_inode_journal_flag(struct inode *inode, int val)
+int ext4_change_inode_journal_flag(struct file *file, int val)
 {
+	struct inode *inode = file_inode(file);
 	journal_t *journal;
 	handle_t *handle;
 	int err;
 	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
+	errseq_t since = READ_ONCE(file->f_wb_err);
 
 	/*
 	 * We have to be very careful here: changing a data block's
@@ -5939,7 +5944,7 @@ int ext4_change_inode_journal_flag(struct inode *inode, int val)
 	 */
 	if (val) {
 		down_write(&EXT4_I(inode)->i_mmap_sem);
-		err = filemap_write_and_wait(inode->i_mapping);
+		err = filemap_write_and_wait_since(inode->i_mapping, since);
 		if (err < 0) {
 			up_write(&EXT4_I(inode)->i_mmap_sem);
 			ext4_inode_resume_unlocked_dio(inode);
