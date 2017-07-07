@@ -460,6 +460,15 @@ int __sync_blockdev(struct block_device *bdev, int wait)
 	return filemap_write_and_wait(bdev->bd_inode->i_mapping);
 }
 
+int __sync_blockdev_since(struct block_device *bdev, int wait, errseq_t since)
+{
+	if (!bdev)
+		return 0;
+	if (!wait)
+		return filemap_flush(bdev->bd_inode->i_mapping);
+	return filemap_write_and_wait_since(bdev->bd_inode->i_mapping, since);
+}
+
 /*
  * Write out and wait upon all the dirty data associated with a block
  * device via its mapping.  Does not take the superblock lock.
@@ -469,6 +478,12 @@ int sync_blockdev(struct block_device *bdev)
 	return __sync_blockdev(bdev, 1);
 }
 EXPORT_SYMBOL(sync_blockdev);
+
+int sync_blockdev_since(struct block_device *bdev, errseq_t since)
+{
+	return __sync_blockdev_since(bdev, 1, since);
+}
+EXPORT_SYMBOL(sync_blockdev_since);
 
 /*
  * Write out and wait upon all dirty data associated with this

@@ -25,6 +25,8 @@ struct shrink_control;
 extern void __init bdev_cache_init(void);
 
 extern int __sync_blockdev(struct block_device *bdev, int wait);
+extern int __sync_blockdev_since(struct block_device *bdev, int wait,
+					errseq_t since);
 
 #else
 static inline void bdev_cache_init(void)
@@ -32,6 +34,12 @@ static inline void bdev_cache_init(void)
 }
 
 static inline int __sync_blockdev(struct block_device *bdev, int wait)
+{
+	return 0;
+}
+
+static inline int __sync_blockdev_since(struct block_device *bdev, int wait,
+					errseq_t since)
 {
 	return 0;
 }
