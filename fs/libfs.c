@@ -1013,12 +1013,19 @@ int generic_file_fsync(struct file *file, loff_t start, loff_t end,
 		       int datasync)
 {
 	struct inode *inode = file->f_mapping->host;
-	int err;
+	int err, ret;
 
-	err = __generic_file_fsync(file, start, end, datasync);
-	if (err)
-		return err;
-	return blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
+	ret = __generic_file_fsync(file, start, end, datasync);
+
+	/* check and advance the metadata writeback error cursor */
+	err = file_check_and_advance_md_wb_err(file,
+			inode->i_sb->s_bdev->bd_inode->i_mapping);
+	if (!ret)
+		ret = err;
+	if (!ret)
+		ret = blkdev_issue_flush(inode->i_sb->s_bdev,
+					 GFP_KERNEL, NULL);
+	return ret;
 }
 EXPORT_SYMBOL(generic_file_fsync);
 
