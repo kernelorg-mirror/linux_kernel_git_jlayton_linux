@@ -1012,12 +1012,17 @@ static void nfs_write_completion(struct nfs_pgio_header *hdr)
 
 		bytes += req->wb_bytes;
 		nfs_list_remove_request(req);
+
 		if (test_bit(NFS_IOHDR_ERROR, &hdr->flags) &&
 		    (hdr->good_bytes < bytes)) {
 			nfs_set_pageerror(req->wb_page);
 			nfs_context_set_write_error(req->wb_context, hdr->error);
 			goto remove_req;
+		} else {
+			/* Successful write! Allow async writes again. */
+			clear_bit(NFS_CONTEXT_ERROR_WRITE, &req->wb_context->flags);
 		}
+
 		if (nfs_write_need_commit(hdr)) {
 			memcpy(&req->wb_verf, &hdr->verf.verifier, sizeof(req->wb_verf));
 			nfs_mark_request_commit(req, hdr->lseg, &cinfo,

@@ -795,6 +795,14 @@ static void nfs_direct_write_completion(struct nfs_pgio_header *hdr)
 						NFS_ODIRECT_RESCHED_WRITES;
 			}
 		}
+		clear_bit(NFS_CONTEXT_ERROR_WRITE, &dreq->ctx->flags);
+	} else {
+		/*
+		 * On a direct I/O write error, we do still want to force
+		 * subsequent buffered I/O requests to be synchronous, until
+		 * the problem is cleared.
+		 */
+		set_bit(NFS_CONTEXT_ERROR_WRITE, &dreq->ctx->flags);
 	}
 	spin_unlock(&dreq->lock);
 

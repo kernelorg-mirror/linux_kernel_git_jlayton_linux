@@ -219,7 +219,6 @@ nfs_file_fsync_commit(struct file *file, loff_t start, loff_t end, int datasync)
 
 	nfs_inc_stats(inode, NFSIOS_VFSFSYNC);
 	do_resend = test_and_clear_bit(NFS_CONTEXT_RESEND_WRITES, &ctx->flags);
-	clear_bit(NFS_CONTEXT_ERROR_WRITE, &ctx->flags);
 	ret = nfs_commit_inode(inode, FLUSH_SYNC);
 
 	/* Recheck and advance after the commit */
