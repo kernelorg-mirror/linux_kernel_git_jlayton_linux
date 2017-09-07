@@ -147,7 +147,7 @@ static void nfs_io_completion_put(struct nfs_io_completion *ioc)
 		kref_put(&ioc->refcount, nfs_io_completion_release);
 }
 
-static void nfs_context_set_write_error(struct nfs_open_context *ctx, int error)
+void nfs_context_set_write_error(struct nfs_open_context *ctx, int error)
 {
 	struct inode *inode = d_inode(ctx->dentry);
 

@@ -469,6 +469,7 @@ int  nfs_show_stats(struct seq_file *, struct dentry *);
 int nfs_remount(struct super_block *sb, int *flags, char *raw_data);
 
 /* write.c */
+void nfs_context_set_write_error(struct nfs_open_context *ctx, int error);
 extern void nfs_pageio_init_write(struct nfs_pageio_descriptor *pgio,
 			struct inode *inode, int ioflags, bool force_mds,
 			const struct nfs_pgio_completion_ops *compl_ops);
