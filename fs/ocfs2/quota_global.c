@@ -289,7 +289,7 @@ out:
 		mlog_errno(err);
 		return err;
 	}
-	gqinode->i_version++;
+	inode_query_iversion(gqinode);
 	ocfs2_mark_inode_dirty(handle, gqinode, oinfo->dqi_gqi_bh);
 	return len;
 }

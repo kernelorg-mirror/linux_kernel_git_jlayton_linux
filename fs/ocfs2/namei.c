@@ -1520,7 +1520,7 @@ static int ocfs2_rename(struct inode *old_dir,
 			mlog_errno(status);
 			goto bail;
 		}
-		new_dir->i_version++;
+		inode_inc_iversion(new_dir);
 
 		if (S_ISDIR(new_inode->i_mode))
 			ocfs2_set_links_count(newfe, 0);
