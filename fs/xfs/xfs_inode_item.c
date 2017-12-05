@@ -354,7 +354,7 @@ xfs_inode_to_log_dinode(
 	to->di_next_unlinked = NULLAGINO;
 
 	if (from->di_version == 3) {
-		to->di_changecount = inode->i_version;
+		to->di_changecount = inode_peek_iversion_raw(inode);
 		to->di_crtime.t_sec = from->di_crtime.t_sec;
 		to->di_crtime.t_nsec = from->di_crtime.t_nsec;
 		to->di_flags2 = from->di_flags2;
