@@ -259,7 +259,7 @@ static inline u64 nfsd4_change_attribute(struct inode *inode)
 	chattr =  inode->i_ctime.tv_sec;
 	chattr <<= 30;
 	chattr += inode->i_ctime.tv_nsec;
-	chattr += inode->i_version;
+	chattr += inode_query_iversion(inode);
 	return chattr;
 }
 
