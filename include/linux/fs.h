@@ -639,7 +639,7 @@ struct inode {
 		struct hlist_head	i_dentry;
 		struct rcu_head		i_rcu;
 	};
-	u64			i_version;
+	atomic64_t		i_version;
 	atomic_t		i_count;
 	atomic_t		i_dio_count;
 	atomic_t		i_writecount;
@@ -2059,86 +2059,116 @@ static inline void inode_dec_link_count(struct inode *inode)
  * i_version on namespace changes in directories (mkdir, rmdir, unlink, etc.).
  * We consider these sorts of filesystems to have a kernel-managed i_version.
  *
- * Note that some filesystems (e.g. NFS and AFS) just use the field to store
- * a server-provided value (for the most part). For that reason, those
- * filesystems do not set SB_I_VERSION. These filesystems are considered to
- * have a self-managed i_version.
+ * This implementation uses the low bit in the i_version field as a flag to
+ * track when the value has been queried. If it has not been queried since it
+ * was last incremented, we can skip the increment in most cases.
+ *
+ * In the event that we're updating the ctime, we will usually go ahead and
+ * bump the i_version anyway. Since that has to go to stable storage in some
+ * fashion, we might as well increment it as well.
  */
+
+/*
+ * We borrow the lowest bit in the i_version to use as a flag to tell whether
+ * it has been queried since we last incremented it. If it has, then we must
+ * increment it on the next change. After that, we can clear the flag and
+ * avoid incrementing it again until it has again been queried.
+ */
+#define I_VERSION_QUERIED_SHIFT	(1)
+#define I_VERSION_QUERIED	(1ULL << (I_VERSION_QUERIED_SHIFT - 1))
+#define I_VERSION_INCREMENT	(1ULL << I_VERSION_QUERIED_SHIFT)
 
 /**
  * inode_set_iversion_raw - set i_version to the specified raw value
  * @inode: inode to set
- * @new: new i_version value to set
+ * @val: new i_version value to set
  *
- * Set @inode's i_version field to @new. This function is for use by
+ * Set @inode's i_version field to @val. This function is for use by
  * filesystems that self-manage the i_version.
  *
  * For example, the NFS client stores its NFSv4 change attribute in this way,
  * and the AFS client stores the data_version from the server here.
  */
 static inline void
-inode_set_iversion_raw(struct inode *inode, const u64 new)
+inode_set_iversion_raw(struct inode *inode, const u64 val)
 {
-	inode->i_version = new;
+	atomic64_set(&inode->i_version, val);
 }
 
 /**
  * inode_set_iversion - set i_version to a particular value
  * @inode: inode to set
- * @new: new i_version value to set
+ * @val: new i_version value to set
  *
- * Set @inode's i_version field to @new. This function is for filesystems with
- * a kernel-managed i_version.
+ * Set @inode's i_version field to @val. This function is for filesystems with
+ * a kernel-managed i_version, for initializing a newly-created inode from
+ * scratch.
  *
- * For now, this just does the same thing as the _raw variant.
+ * In this case, we do not set the QUERIED flag since we know that this value
+ * has never been queried.
  */
 static inline void
-inode_set_iversion(struct inode *inode, const u64 new)
+inode_set_iversion(struct inode *inode, const u64 val)
 {
-	inode_set_iversion_raw(inode, new);
+	inode_set_iversion_raw(inode, val << I_VERSION_QUERIED_SHIFT);
 }
 
 /**
- * inode_set_iversion_queried - set i_version to a particular value and set
- *                              flag to indicate that it has been viewed
+ * inode_set_iversion_queried - set i_version to a particular value as quereied
  * @inode: inode to set
- * @new: new i_version value to set
+ * @val: new i_version value to set
+ *
+ * Set @inode's i_version field to @val, and flag it for increment on the next
+ * change.
  *
  * When loading in an i_version value from a backing store, we typically don't
- * know whether it was previously viewed before being stored or not. Thus, we
+ * know whether it was previously viewed before being stored. Thus, we
  * must assume that it was, to ensure that any changes will result in the
  * value changing.
- *
- * This function will set the inode's i_version, and possibly flag the value
- * as if it has already been viewed at least once.
- *
- * For now, this just does what inode_set_iversion does.
  */
 static inline void
-inode_set_iversion_queried(struct inode *inode, const u64 new)
+inode_set_iversion_queried(struct inode *inode, const u64 val)
 {
-	inode_set_iversion(inode, new);
+	inode_set_iversion_raw(inode, (val << I_VERSION_QUERIED_SHIFT) |
+				I_VERSION_QUERIED);
 }
 
 /**
  * inode_maybe_inc_iversion - increments i_version
  * @inode: inode with the i_version that should be updated
- * @force: increment the counter even if it's not necessary
+ * @force: increment the counter even if it's not necessary?
  *
  * Every time the inode is modified, the i_version field must be seen to have
  * changed by any observer.
  *
- * In this implementation, we always increment it after taking the i_lock to
- * ensure that we don't race with other incrementors.
+ * If "force" is set or the QUERIED flag is set, then ensure that we increment
+ * the value, and clear the queried flag.
  *
- * Returns true if counter was bumped, and false if it wasn't.
+ * In the common case where neither is set, then we can return "false" without
+ * updating i_version.
+ *
+ * If this function returns false, and no other metadata has changed, then we
+ * can avoid logging the metadata.
  */
 static inline bool
 inode_maybe_inc_iversion(struct inode *inode, bool force)
 {
-	atomic64_t *ivp = (atomic64_t *)&inode->i_version;
+	u64 cur, old, new;
 
-	atomic64_inc(ivp);
+	cur = (u64)atomic64_read(&inode->i_version);
+	for (;;) {
+		/* If flag is clear then we needn't do anything */
+		if (!force && !(cur & I_VERSION_QUERIED))
+			return false;
+
+		/* Since lowest bit is flag, add 2 to avoid it */
+		new = (cur & ~I_VERSION_QUERIED) + I_VERSION_INCREMENT;
+
+		old = atomic64_cmpxchg(&inode->i_version, cur, new);
+		if (likely(old == cur))
+			break;
+		cur = old;
+	}
 	return true;
 }
 
@@ -2156,21 +2186,6 @@ inode_inc_iversion(struct inode *inode)
 }
 
 /**
- * inode_iversion_need_inc - is the i_version in need of being incremented?
- * @inode: inode to check
- *
- * Returns whether the inode->i_version counter needs incrementing on the next
- * change.
- *
- * For now, we assume that it always does.
- */
-static inline bool
-inode_iversion_need_inc(struct inode *inode)
-{
-	return true;
-}
-
-/**
  * inode_peek_iversion_raw - grab a "raw" iversion value
  * @inode: inode from which i_version should be read
  *
@@ -2184,7 +2199,20 @@ inode_iversion_need_inc(struct inode *inode)
 static inline u64
 inode_peek_iversion_raw(const struct inode *inode)
 {
-	return inode->i_version;
+	return atomic64_read(&inode->i_version);
+}
+
+/**
+ * inode_iversion_need_inc - is the i_version in need of being incremented?
+ * @inode: inode to check
+ *
+ * Returns whether the inode->i_version counter needs incrementing on the next
+ * change. Just fetch the value and check the QUERIED flag.
+ */
+static inline bool
+inode_iversion_need_inc(struct inode *inode)
+{
+	return inode_peek_iversion_raw(inode) & I_VERSION_QUERIED;
 }
 
 /**
@@ -2201,7 +2229,7 @@ inode_peek_iversion_raw(const struct inode *inode)
 static inline u64
 inode_peek_iversion(const struct inode *inode)
 {
-	return inode_peek_iversion_raw(inode);
+	return inode_peek_iversion_raw(inode) >> I_VERSION_QUERIED_SHIFT;
 }
 
 /**
@@ -2213,12 +2241,28 @@ inode_peek_iversion(const struct inode *inode)
  * that a later query of the i_version will result in a different value if
  * anything has changed.
  *
- * This implementation just does a peek.
+ * In this implementation, we fetch the current value, set the QUERIED flag and
+ * then try to swap it into place with a cmpxchg, if it wasn't already set. If
+ * that fails, we try again with the newly fetched value from the cmpxchg.
  */
 static inline u64
 inode_query_iversion(struct inode *inode)
 {
-	return inode_peek_iversion(inode);
+	u64 cur, old, new;
+
+	cur = atomic64_read(&inode->i_version);
+	for (;;) {
+		/* If flag is already set, then no need to swap */
+		if (cur & I_VERSION_QUERIED)
+			break;
+
+		new = cur | I_VERSION_QUERIED;
+		old = atomic64_cmpxchg(&inode->i_version, cur, new);
+		if (old == cur)
+			break;
+		cur = old;
+	}
+	return cur >> I_VERSION_QUERIED_SHIFT;
 }
 
 /**
@@ -2227,12 +2271,15 @@ inode_query_iversion(struct inode *inode)
  * @old: old value to check against its i_version
  *
  * Compare an i_version counter with a previous one. Returns 0 if they are
- * the same or non-zero if they are different.
+ * the same or non-zero if they are different. Note that we don't need to set
+ * the QUERIED flag in this case, as the value in the inode is not actually
+ * queried. All we're doing here is checking whether it has changed since it
+ * was previously sampled.
  */
 static inline s64
 inode_cmp_iversion(const struct inode *inode, const u64 old)
 {
-	return (s64)inode->i_version - (s64)old;
+	return (s64)inode_peek_iversion(inode) - (s64)old;
 }
 
 enum file_time_flags {
