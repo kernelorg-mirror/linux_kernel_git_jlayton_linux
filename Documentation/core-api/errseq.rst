@@ -25,11 +25,11 @@ sampled it since the last time an error was recorded.
 
 Thus we end up with a value that looks something like this:
 
-+--------------------------------------+----+------------------------+
-| 31..13                               | 12 | 11..0                  |
-+--------------------------------------+----+------------------------+
-| counter                              | SF | errno                  |
-+--------------------------------------+----+------------------------+
++--------------------------------------+------------+------------------------+
+|               31..13                 |     12     |         11..0          |
++--------------------------------------+------------+------------------------+
+|               counter                | seen flag  |         errno          |
++--------------------------------------+------------+------------------------+
 
 The general idea is for "watchers" to sample an errseq_t value and keep
 it as a running cursor.  That value can later be used to tell whether
