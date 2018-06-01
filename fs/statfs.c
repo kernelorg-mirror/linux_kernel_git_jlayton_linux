@@ -576,6 +576,14 @@ static int fsinfo_generic_io_size(struct dentry *dentry,
 	return sizeof(*c);
 }
 
+static int fsinfo_generic_error_state(struct dentry *dentry,
+				  struct fsinfo_error_state *c)
+{
+	c->wb_error_cookie = errseq_scrape(&dentry->d_sb->s_wb_err);
+	c->wb_error_last = c->wb_error_cookie & MAX_ERRNO;
+	return sizeof(*c);
+}
+
 /*
  * Implement some queries generically from stuff in the superblock.
  */
@@ -594,6 +602,7 @@ int generic_fsinfo(struct dentry *dentry, struct fsinfo_kparams *params)
 	case _gen(volume_id);
 	case _gen(name_encoding);
 	case _gen(io_size);
+	case _gen(error_state);
 	default:
 		return -EOPNOTSUPP;
 	}

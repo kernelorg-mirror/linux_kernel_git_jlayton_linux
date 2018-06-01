@@ -35,6 +35,7 @@ enum fsinfo_attribute {
 	fsinfo_attr_name_encoding	= 17,	/* Filename encoding (string) */
 	fsinfo_attr_name_codepage	= 18,	/* Filename codepage (string) */
 	fsinfo_attr_io_size		= 19,	/* Optimal I/O sizes */
+	fsinfo_attr_error_state		= 20,	/* Error state */
 	fsinfo_attr__nr
 };
 
@@ -209,6 +210,16 @@ struct fsinfo_volume_uuid {
  */
 struct fsinfo_server_address {
 	struct __kernel_sockaddr_storage address;
+};
+
+/*
+ * Information struct for fsinfo(fsinfo_attr_error_state).
+ *
+ * Retrieve the error state for a filesystem.
+ */
+struct fsinfo_error_state {
+	__u32		wb_error_cookie;	/* writeback error cookie */
+	__u32		wb_error_last;		/* latest writeback error */
 };
 
 /*
