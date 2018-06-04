@@ -60,6 +60,7 @@ static const __u8 fsinfo_buffer_sizes[fsinfo_attr__nr] = {
 	FSINFO_STRING		(name_encoding),
 	FSINFO_STRING		(name_codepage),
 	FSINFO_STRUCT		(io_size),
+	FSINFO_STRUCT		(error_state),
 };
 
 #define FSINFO_NAME(N) [fsinfo_attr_##N] = #N
@@ -84,6 +85,7 @@ static const char *fsinfo_attr_names[fsinfo_attr__nr] = {
 	FSINFO_NAME(name_encoding),
 	FSINFO_NAME(name_codepage),
 	FSINFO_NAME(io_size),
+	FSINFO_NAME(error_state),
 };
 
 union reply {
@@ -98,6 +100,7 @@ union reply {
 	struct fsinfo_volume_uuid uuid;
 	struct fsinfo_server_address srv_addr;
 	struct fsinfo_io_size io_size;
+	struct fsinfo_error_state error_state;
 };
 
 static void dump_hex(unsigned int *data, int from, int to)
@@ -304,6 +307,15 @@ static void dump_attr_io_size(union reply *r, int size)
 	printf("bs=%u\n", f->block_size);
 }
 
+static void dump_attr_error_state(union reply *r, int size)
+{
+	struct fsinfo_error_state *f = &r->error_state;
+
+	printf("err_cookie=0x%x err_last=%u\n",
+			f->wb_error_cookie,
+			f->wb_error_last);
+}
+
 /*
  *
  */
@@ -321,6 +333,7 @@ static const dumper_t fsinfo_attr_dumper[fsinfo_attr__nr] = {
 	FSINFO_DUMPER(volume_uuid),
 	FSINFO_DUMPER(server_address),
 	FSINFO_DUMPER(io_size),
+	FSINFO_DUMPER(error_state),
 };
 
 static void dump_fsinfo(enum fsinfo_attribute attr, __u8 about,
