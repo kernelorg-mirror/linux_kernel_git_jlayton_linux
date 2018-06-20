@@ -54,6 +54,12 @@ struct block_device *I_BDEV(struct inode *inode)
 }
 EXPORT_SYMBOL(I_BDEV);
 
+struct super_block *bdev_bd_super(struct inode *inode)
+{
+	return rcu_access_pointer(BDEV_I(inode)->bdev.bd_super);
+}
+EXPORT_SYMBOL(bdev_bd_super);
+
 static void bdev_write_inode(struct block_device *bdev)
 {
 	struct inode *inode = bdev->bd_inode;
@@ -875,7 +881,7 @@ struct block_device *bdget(dev_t dev)
 
 	if (inode->i_state & I_NEW) {
 		bdev->bd_contains = NULL;
-		bdev->bd_super = NULL;
+		rcu_assign_pointer(bdev->bd_super, NULL);
 		bdev->bd_inode = inode;
 		bdev->bd_block_size = i_blocksize(inode);
 		bdev->bd_part_count = 0;
@@ -1940,10 +1946,16 @@ EXPORT_SYMBOL_GPL(blkdev_read_iter);
  */
 static int blkdev_releasepage(struct page *page, gfp_t wait)
 {
-	struct super_block *super = BDEV_I(page->mapping->host)->bdev.bd_super;
+	struct super_block *super;
+	int (*func)(struct page *, gfp_t) = NULL;
 
-	if (super && super->s_op->bdev_try_to_free_page)
-		return super->s_op->bdev_try_to_free_page(super, page, wait);
+	rcu_read_lock();
+	super = rcu_dereference(BDEV_I(page->mapping->host)->bdev.bd_super);
+	if (super)
+		func = super->s_op->bdev_try_to_free_page;
+	rcu_read_unlock();
+	if (func)
+		return func(page, wait);
 
 	return try_to_free_buffers(page);
 }

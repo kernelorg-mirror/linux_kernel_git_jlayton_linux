@@ -1164,14 +1164,25 @@ static struct dentry *ext4_fh_to_parent(struct super_block *sb, struct fid *fid,
  * which would prevent try_to_free_buffers() from freeing them, we must use
  * jbd2 layer's try_to_free_buffers() function to release them.
  */
-static int bdev_try_to_free_page(struct super_block *sb, struct page *page,
-				 gfp_t wait)
+static int bdev_try_to_free_page(struct page *page, gfp_t wait)
 {
-	journal_t *journal = EXT4_SB(sb)->s_journal;
+	journal_t *journal;
+	struct inode *bd_inode;
+	struct super_block *sb;
 
 	WARN_ON(PageChecked(page));
 	if (!page_has_buffers(page))
 		return 0;
+
+	/*
+	 * Page is locked and we know that it has buffers. Now check to see
+	 * if it's still associated with a super_block.
+	 */
+	sb = bdev_bd_super(page->mapping->host);
+	if (!sb)
+		return try_to_free_buffers(page);
+
+	journal = EXT4_SB(sb)->s_journal;
 	if (journal)
 		return jbd2_journal_try_to_free_buffers(journal, page,
 						wait & ~__GFP_DIRECT_RECLAIM);

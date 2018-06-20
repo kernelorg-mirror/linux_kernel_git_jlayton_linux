@@ -1304,7 +1304,7 @@ static struct dentry *gfs2_mount(struct file_system_type *fs_type, int flags,
 		if (error)
 			goto error_super;
 		s->s_flags |= SB_ACTIVE;
-		bdev->bd_super = s;
+		rcu_assign_pointer(bdev->bd_super, s);
 	}
 
 	sdp = s->s_fs_info;
