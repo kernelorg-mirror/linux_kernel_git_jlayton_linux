@@ -1832,7 +1832,7 @@ static int __do_execve_file(int fd, struct filename *filename,
 	if (filename)
 		putname(filename);
 	if (displaced)
-		put_files_struct(displaced);
+		release_files_struct(displaced);
 	return retval;
 
 out:

@@ -1373,6 +1373,9 @@ static int copy_files(unsigned long clone_flags, struct task_struct *tsk)
 
 	if (clone_flags & CLONE_FILES) {
 		atomic_inc(&oldf->count);
+		spin_lock(&oldf->file_lock);
+		oldf->thread_count++;
+		spin_unlock(&oldf->file_lock);
 		goto out;
 	}
 
@@ -2416,10 +2419,15 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
 static int unshare_fd(unsigned long unshare_flags, struct files_struct **new_fdp)
 {
 	struct files_struct *fd = current->files;
-	int error = 0;
+	int error, count;
 
-	if ((unshare_flags & CLONE_FILES) &&
-	    (fd && atomic_read(&fd->count) > 1)) {
+	if (!(unshare_flags & CLONE_FILES) || !fd)
+		return 0;
+
+	spin_lock(&fd->file_lock);
+	count = fd->thread_count;
+	spin_unlock(&fd->file_lock);
+	if (count > 1) {
 		*new_fdp = dup_fd(fd, &error);
 		if (!*new_fdp)
 			return error;
@@ -2542,7 +2550,7 @@ bad_unshare_cleanup_cred:
 		put_cred(new_cred);
 bad_unshare_cleanup_fd:
 	if (new_fd)
-		put_files_struct(new_fd);
+		release_files_struct(new_fd);
 
 bad_unshare_cleanup_fs:
 	if (new_fs)

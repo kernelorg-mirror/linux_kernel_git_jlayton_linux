@@ -751,7 +751,7 @@ void do_coredump(const siginfo_t *siginfo)
 	if (retval)
 		goto close_fail;
 	if (displaced)
-		put_files_struct(displaced);
+		release_files_struct(displaced);
 	if (!dump_interrupted()) {
 		file_start_write(cprm.file);
 		core_dumped = binfmt->core_dump(&cprm);
