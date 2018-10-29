@@ -1906,6 +1906,8 @@ static ssize_t ceph_copy_file_range(struct file *src_file, loff_t src_off,
 	int src_got = 0, dst_got = 0, err, dirty;
 	bool do_final_copy = false;
 
+	if (src_inode->i_sb != dst_inode->i_sb)
+		return -EXDEV;
 	if (src_inode == dst_inode)
 		return -EINVAL;
 	if (ceph_snap(dst_inode) != CEPH_NOSNAP)
