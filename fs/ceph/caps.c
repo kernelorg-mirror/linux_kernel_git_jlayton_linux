@@ -2682,6 +2682,28 @@ out_unlock:
 	return ret;
 }
 
+bool ceph_get_caps_for_dirop(struct inode *dir, struct dentry *dentry)
+{
+	int err, got;
+	struct ceph_inode_info *ci = ceph_inode(d_inode(dentry));
+
+	/* Ensure we have Lx on the inode being unlinked */
+	err = try_get_cap_refs(ci, 0, CEPH_CAP_LINK_EXCL, 0, true, &got);
+	dout("Lx on %p err=%d got=%d\n", dentry, err, got);
+	if (err != 1 || !(got & CEPH_CAP_LINK_EXCL))
+		return false;
+
+	/* Do we have Fx on the dir ? */
+	err = try_get_cap_refs(ceph_inode(dir), 0, CEPH_CAP_FILE_EXCL, 0,
+				true, &got);
+	dout("Fx on %p err=%d got=%d\n", dir, err, got);
+	if (err != 1 || !(got & CEPH_CAP_FILE_EXCL)) {
+		ceph_put_cap_refs(ci, CEPH_CAP_LINK_EXCL);
+		return false;
+	}
+	return true;
+}
+
 /*
  * Check the offset we are writing up to against our current
  * max_size.  If necessary, tell the MDS we want to write to

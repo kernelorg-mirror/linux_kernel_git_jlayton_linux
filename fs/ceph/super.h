@@ -1033,6 +1033,7 @@ extern int ceph_get_caps(struct ceph_inode_info *ci, int need, int want,
 			 loff_t endoff, int *got, struct page **pinned_page);
 extern int ceph_try_get_caps(struct ceph_inode_info *ci,
 			     int need, int want, bool nonblock, int *got);
+extern bool ceph_get_caps_for_dirop(struct inode *dir, struct dentry *dentry);
 
 /* for counting open files by mode */
 extern void __ceph_get_fmode(struct ceph_inode_info *ci, int mode);
