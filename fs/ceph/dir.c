@@ -1024,6 +1024,18 @@ static int ceph_link(struct dentry *old_dentry, struct inode *dir,
 	return err;
 }
 
+static void ceph_async_unlink_cb(struct ceph_mds_client *mdsc,
+				 struct ceph_mds_request *req)
+{
+	struct ceph_inode_info *ci = ceph_inode(req->r_old_inode);
+
+	/* If op failed, set error on parent directory */
+	mapping_set_error(req->r_parent->i_mapping, req->r_err);
+	ceph_put_cap_refs(ci, CEPH_CAP_LINK_EXCL);
+	ceph_put_cap_refs(ceph_inode(req->r_parent), CEPH_CAP_FILE_EXCL);
+	iput(req->r_old_inode);
+}
+
 /*
  * rmdir and unlink are differ only by the metadata op code
  */
@@ -1059,9 +1071,29 @@ static int ceph_unlink(struct inode *dir, struct dentry *dentry)
 	req->r_dentry_drop = CEPH_CAP_FILE_SHARED;
 	req->r_dentry_unless = CEPH_CAP_FILE_EXCL;
 	req->r_inode_drop = ceph_drop_caps_for_unlink(inode);
-	err = ceph_mdsc_do_request(mdsc, dir, req);
-	if (!err && !req->r_reply_info.head->is_dentry)
-		d_delete(dentry);
+
+	if (op == CEPH_MDS_OP_UNLINK &&
+	    ceph_get_caps_for_unlink(dir, dentry)) {
+		/* Keep LINK caps to ensure continuity over async call */
+		req->r_inode_drop &= ~(CEPH_CAP_LINK_SHARED|CEPH_CAP_LINK_EXCL);
+		req->r_callback = ceph_async_unlink_cb;
+		req->r_old_inode = d_inode(dentry);
+		ihold(req->r_old_inode);
+		err = ceph_mdsc_submit_request(mdsc, dir, req);
+		if (!err) {
+			/*
+			 * We have enough caps, so we assume that the unlink
+			 * will succeed. Fix up the target inode and dcache.
+			 */
+			drop_nlink(inode);
+			d_delete(dentry);
+		}
+	} else {
+		err = ceph_mdsc_do_request(mdsc, dir, req);
+		if (!err && !req->r_reply_info.head->is_dentry)
+			d_delete(dentry);
+	}
+
 	ceph_mdsc_put_request(req);
 out:
 	return err;
