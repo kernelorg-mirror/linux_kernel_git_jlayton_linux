@@ -2642,22 +2642,10 @@ int ceph_mdsc_submit_request(struct ceph_mds_client *mdsc, struct inode *dir,
 	return err;
 }
 
-/*
- * Synchrously perform an mds request.  Take care of all of the
- * session setup, forwarding, retry details.
- */
-int ceph_mdsc_do_request(struct ceph_mds_client *mdsc,
-			 struct inode *dir,
-			 struct ceph_mds_request *req)
+static int ceph_mdsc_wait_request(struct ceph_mds_client *mdsc,
+				  struct ceph_mds_request *req)
 {
 	int err;
-
-	dout("do_request on %p\n", req);
-
-	/* issue */
-	err = ceph_mdsc_submit_request(mdsc, dir, req);
-	if (err)
-		goto out;
 
 	/* wait */
 	dout("do_request waiting\n");
@@ -2701,7 +2689,25 @@ int ceph_mdsc_do_request(struct ceph_mds_client *mdsc,
 	}
 
 	mutex_unlock(&mdsc->mutex);
-out:
+	return err;
+}
+
+/*
+ * Synchrously perform an mds request.  Take care of all of the
+ * session setup, forwarding, retry details.
+ */
+int ceph_mdsc_do_request(struct ceph_mds_client *mdsc,
+			 struct inode *dir,
+			 struct ceph_mds_request *req)
+{
+	int err;
+
+	dout("do_request on %p\n", req);
+
+	/* issue */
+	err = ceph_mdsc_submit_request(mdsc, dir, req);
+	if (!err)
+		err = ceph_mdsc_wait_request(mdsc, req);
 	dout("do_request %p done, result %d\n", req, err);
 	return err;
 }
