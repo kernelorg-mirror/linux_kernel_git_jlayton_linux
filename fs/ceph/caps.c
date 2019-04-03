@@ -989,6 +989,8 @@ int __ceph_caps_used(struct ceph_inode_info *ci)
 		used |= CEPH_CAP_FILE_BUFFER;
 	if (ci->i_fx_ref)
 		used |= CEPH_CAP_FILE_EXCL;
+	if (ci->i_lx_ref)
+		used |= CEPH_CAP_LINK_EXCL;
 	return used;
 }
 
@@ -2506,6 +2508,8 @@ static void __take_cap_refs(struct ceph_inode_info *ci, int got,
 		ci->i_rdcache_ref++;
 	if (got & CEPH_CAP_FILE_EXCL)
 		ci->i_fx_ref++;
+	if (got & CEPH_CAP_LINK_EXCL)
+		ci->i_lx_ref++;
 	if (got & CEPH_CAP_FILE_WR) {
 		if (ci->i_wr_ref == 0 && !ci->i_head_snapc) {
 			BUG_ON(!snap_rwsem_locked);
@@ -2871,6 +2875,9 @@ void ceph_put_cap_refs(struct ceph_inode_info *ci, int had)
 			last++;
 	if (had & CEPH_CAP_FILE_EXCL)
 		if (--ci->i_fx_ref == 0)
+			last++;
+	if (had & CEPH_CAP_LINK_EXCL)
+		if (--ci->i_lx_ref == 0)
 			last++;
 	if (had & CEPH_CAP_FILE_BUFFER) {
 		if (--ci->i_wb_ref == 0) {
