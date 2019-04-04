@@ -444,6 +444,10 @@ int ceph_atomic_open(struct inode *dir, struct dentry *dentry,
 	     dir, dentry, dentry,
 	     d_unhashed(dentry) ? "unhashed" : "hashed", flags, mode);
 
+	err = ceph_async_dirop_request_wait(dir);
+	if (err)
+		return err;
+
 	if (dentry->d_name.len > NAME_MAX)
 		return -ENAMETOOLONG;
 

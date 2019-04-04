@@ -1024,6 +1024,38 @@ static int ceph_link(struct dentry *old_dentry, struct inode *dir,
 	return err;
 }
 
+int ceph_async_dirop_request_wait(struct inode *inode)
+{
+	struct ceph_inode_info *ci = ceph_inode(inode);
+	struct ceph_mds_request *cur, *req;
+	int ret = 0;
+
+	/* Only applicable for directories */
+	if (!inode || !S_ISDIR(inode->i_mode))
+		return 0;
+retry:
+	spin_lock(&ci->i_unsafe_lock);
+	req = NULL;
+	list_for_each_entry(cur, &ci->i_unsafe_dirops, r_unsafe_dir_item) {
+		if (!test_bit(CEPH_MDS_R_GOT_UNSAFE, &cur->r_req_flags) &&
+		    !test_bit(CEPH_MDS_R_GOT_SAFE, &cur->r_req_flags)) {
+			req = cur;
+			ceph_mdsc_get_request(req);
+			break;
+		}
+	}
+	spin_unlock(&ci->i_unsafe_lock);
+	if (req) {
+		dout("%s %lx wait on tid %llu\n", __func__, inode->i_ino,
+		     req->r_tid);
+		ret = wait_for_completion_killable(&req->r_completion);
+		ceph_mdsc_put_request(req);
+		if (!ret)
+			goto retry;
+	}
+	return ret;
+}
+
 /*
  * rmdir and unlink are differ only by the metadata op code
  */
@@ -1047,6 +1079,12 @@ static int ceph_unlink(struct inode *dir, struct dentry *dentry)
 			CEPH_MDS_OP_RMDIR : CEPH_MDS_OP_UNLINK;
 	} else
 		goto out;
+
+	/* Wait for any requests involving children to get a reply */
+	err = ceph_async_dirop_request_wait(inode);
+	if (err)
+		goto out;
+
 	req = ceph_mdsc_create_request(mdsc, op, USE_AUTH_MDS);
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
@@ -1093,8 +1131,14 @@ static int ceph_rename(struct inode *old_dir, struct dentry *old_dentry,
 	    (!ceph_quota_is_same_realm(old_dir, new_dir)))
 		return -EXDEV;
 
-	dout("rename dir %p dentry %p to dir %p dentry %p\n",
-	     old_dir, old_dentry, new_dir, new_dentry);
+	err = ceph_async_dirop_request_wait(d_inode(old_dentry));
+	if (err)
+		return err;
+
+	err = ceph_async_dirop_request_wait(d_inode(new_dentry));
+	if (err)
+		return err;
+
 	req = ceph_mdsc_create_request(mdsc, op, USE_AUTH_MDS);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
