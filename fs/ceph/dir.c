@@ -994,11 +994,12 @@ static int ceph_link(struct dentry *old_dentry, struct inode *dir,
 	struct ceph_mds_request *req;
 	int err;
 
+	dout("link in dir %p old_dentry %p dentry %p\n", dir,
+	     old_dentry, dentry);
+
 	if (ceph_snap(dir) != CEPH_NOSNAP)
 		return -EROFS;
 
-	dout("link in dir %p old_dentry %p dentry %p\n", dir,
-	     old_dentry, dentry);
 	req = ceph_mdsc_create_request(mdsc, CEPH_MDS_OP_LINK, USE_AUTH_MDS);
 	if (IS_ERR(req)) {
 		d_drop(dentry);
@@ -1036,6 +1037,43 @@ static void ceph_async_unlink_cb(struct ceph_mds_client *mdsc,
 	iput(req->r_old_inode);
 }
 
+int ceph_async_dirop_request_wait(struct inode *inode)
+{
+	struct ceph_inode_info *ci = ceph_inode(inode);
+	struct ceph_mds_request *req = NULL;
+	int ret = 0;
+
+	/* Only applicable for directories */
+	if (!inode || !S_ISDIR(inode->i_mode))
+		return 0;
+
+	spin_lock(&ci->i_unsafe_lock);
+	if (!list_empty(&ci->i_unsafe_dirops)) {
+		struct ceph_mds_request *last;
+		last = list_last_entry(&ci->i_unsafe_dirops,
+				       struct ceph_mds_request,
+				       r_unsafe_dir_item);
+		/*
+		 * If last request hasn't gotten a reply, then wait
+		 * for it.
+		 */
+		if (!test_bit(CEPH_MDS_R_GOT_UNSAFE, &last->r_req_flags) &&
+		    !test_bit(CEPH_MDS_R_GOT_SAFE, &last->r_req_flags)) {
+			req = last;
+			ceph_mdsc_get_request(req);
+		}
+	}
+	spin_unlock(&ci->i_unsafe_lock);
+
+	if (req) {
+		dout("%s %p wait on tid %llu\n", __func__, inode,
+		     req ? req->r_tid : 0ULL);
+		ret = wait_for_completion_killable(&req->r_completion);
+		ceph_mdsc_put_request(req);
+	}
+	return ret;
+}
+
 /*
  * rmdir and unlink are differ only by the metadata op code
  */
@@ -1059,6 +1097,12 @@ static int ceph_unlink(struct inode *dir, struct dentry *dentry)
 			CEPH_MDS_OP_RMDIR : CEPH_MDS_OP_UNLINK;
 	} else
 		goto out;
+
+	/* Wait for any requests involving children to get a reply */
+	err = ceph_async_dirop_request_wait(inode);
+	if (err)
+		goto out;
+
 	req = ceph_mdsc_create_request(mdsc, op, USE_AUTH_MDS);
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
@@ -1109,6 +1153,9 @@ static int ceph_rename(struct inode *old_dir, struct dentry *old_dentry,
 	int op = CEPH_MDS_OP_RENAME;
 	int err;
 
+	dout("rename dir %p dentry %p to dir %p dentry %p\n",
+	     old_dir, old_dentry, new_dir, new_dentry);
+
 	if (flags)
 		return -EINVAL;
 
@@ -1125,8 +1172,14 @@ static int ceph_rename(struct inode *old_dir, struct dentry *old_dentry,
 	    (!ceph_quota_is_same_realm(old_dir, new_dir)))
 		return -EXDEV;
 
-	dout("rename dir %p dentry %p to dir %p dentry %p\n",
-	     old_dir, old_dentry, new_dir, new_dentry);
+	err = ceph_async_dirop_request_wait(d_inode(old_dentry));
+	if (err)
+		return err;
+
+	err = ceph_async_dirop_request_wait(d_inode(new_dentry));
+	if (err)
+		return err;
+
 	req = ceph_mdsc_create_request(mdsc, op, USE_AUTH_MDS);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
