@@ -102,7 +102,7 @@ static inline void fsnotify_link_count(struct inode *inode)
  * fsnotify_move - file old_name at old_dir was moved to new_name at new_dir
  */
 static inline void fsnotify_move(struct inode *old_dir, struct inode *new_dir,
-				 const unsigned char *old_name,
+				 const struct qstr *old_name,
 				 int isdir, struct inode *target,
 				 struct dentry *moved)
 {
@@ -111,7 +111,6 @@ static inline void fsnotify_move(struct inode *old_dir, struct inode *new_dir,
 	__u32 old_dir_mask = FS_MOVED_FROM;
 	__u32 new_dir_mask = FS_MOVED_TO;
 	__u32 mask = FS_MOVE_SELF;
-	const unsigned char *new_name = moved->d_name.name;
 
 	if (old_dir == new_dir)
 		old_dir_mask |= FS_DN_RENAME;
@@ -122,10 +121,10 @@ static inline void fsnotify_move(struct inode *old_dir, struct inode *new_dir,
 		mask |= FS_ISDIR;
 	}
 
-	fsnotify(old_dir, old_dir_mask, source, FSNOTIFY_EVENT_INODE, old_name,
-		 fs_cookie);
-	fsnotify(new_dir, new_dir_mask, source, FSNOTIFY_EVENT_INODE, new_name,
-		 fs_cookie);
+	fsnotify(old_dir, old_dir_mask, source, FSNOTIFY_EVENT_INODE,
+		 old_name->name, fs_cookie);
+	fsnotify(new_dir, new_dir_mask, source, FSNOTIFY_EVENT_INODE,
+		 moved->d_name.name, fs_cookie);
 
 	if (target)
 		fsnotify_link_count(target);
