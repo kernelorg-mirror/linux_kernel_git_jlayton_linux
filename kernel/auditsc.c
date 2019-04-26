@@ -2045,7 +2045,6 @@ void __audit_inode_child(struct inode *parent,
 {
 	struct audit_context *context = audit_context();
 	struct inode *inode = d_backing_inode(dentry);
-	const char *dname = dentry->d_name.name;
 	struct audit_names *n, *found_parent = NULL, *found_child = NULL;
 	struct audit_entry *e;
 	struct list_head *list = &audit_filter_list[AUDIT_FILTER_FS];
@@ -2083,7 +2082,7 @@ void __audit_inode_child(struct inode *parent,
 			continue;
 
 		if (n->ino == parent->i_ino && n->dev == parent->i_sb->s_dev &&
-		    !audit_compare_dname_path(dname,
+		    !audit_compare_dname_path(&dentry->d_name,
 					      n->name->name, n->name_len)) {
 			if (n->type == AUDIT_TYPE_UNKNOWN)
 				n->type = AUDIT_TYPE_PARENT;
@@ -2099,8 +2098,8 @@ void __audit_inode_child(struct inode *parent,
 		    (n->type != type && n->type != AUDIT_TYPE_UNKNOWN))
 			continue;
 
-		if (!strcmp(dname, n->name->name) ||
-		    !audit_compare_dname_path(dname, n->name->name,
+		if (!strcmp(dentry->d_name.name, n->name->name) ||
+		    !audit_compare_dname_path(&dentry->d_name, n->name->name,
 						found_parent ?
 						found_parent->name_len :
 						AUDIT_NAME_FULL)) {
