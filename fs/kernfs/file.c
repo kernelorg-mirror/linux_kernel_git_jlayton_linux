@@ -885,6 +885,8 @@ repeat:
 	list_for_each_entry(info, &kernfs_root(kn)->supers, node) {
 		struct kernfs_node *parent;
 		struct inode *inode;
+		const struct qstr name = { .name = kn->name,
+					   .len  = strlen(kn->name) };
 
 		/*
 		 * We want fsnotify_modify() on @kn but as the
@@ -903,7 +905,7 @@ repeat:
 			p_inode = ilookup(info->sb, parent->id.ino);
 			if (p_inode) {
 				fsnotify(p_inode, FS_MODIFY | FS_EVENT_ON_CHILD,
-					 inode, FSNOTIFY_EVENT_INODE, kn->name, 0);
+					 inode, FSNOTIFY_EVENT_INODE, &name, 0);
 				iput(p_inode);
 			}
 
@@ -911,7 +913,7 @@ repeat:
 		}
 
 		fsnotify(inode, FS_MODIFY, inode, FSNOTIFY_EVENT_INODE,
-			 kn->name, 0);
+			 &name, 0);
 		iput(inode);
 	}
 
