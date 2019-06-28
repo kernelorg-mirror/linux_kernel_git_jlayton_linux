@@ -1136,7 +1136,8 @@ void __ceph_remove_cap(struct ceph_cap *cap, bool queue_release)
 
 struct cap_msg_args {
 	struct ceph_mds_session	*session;
-	u64			ino, cid, follows;
+	struct ceph_inode_info	*ci;
+	u64			cid, follows;
 	u64			flush_tid, oldest_flush_tid, size, max_size;
 	u64			xattr_version;
 	u64			change_attr;
@@ -1163,19 +1164,19 @@ static int send_cap_msg(struct cap_msg_args *arg)
 	void *p;
 	size_t extra_len;
 	struct ceph_osd_client *osdc = &arg->session->s_mdsc->fsc->client->osdc;
+	struct inode *inode = &arg->ci->vfs_inode;
+	u64 ino = ceph_vino(inode).ino;
 
 	dout("send_cap_msg %s %llx %llx caps %s wanted %s dirty %s"
 	     " seq %u/%u tid %llu/%llu mseq %u follows %lld size %llu/%llu"
 	     " xattr_ver %llu xattr_len %d\n", ceph_cap_op_name(arg->op),
-	     arg->cid, arg->ino, ceph_cap_string(arg->caps),
+	     arg->cid, ino, ceph_cap_string(arg->caps),
 	     ceph_cap_string(arg->wanted), ceph_cap_string(arg->dirty),
 	     arg->seq, arg->issue_seq, arg->flush_tid, arg->oldest_flush_tid,
 	     arg->mseq, arg->follows, arg->size, arg->max_size,
 	     arg->xattr_version,
 	     arg->xattr_buf ? (int)arg->xattr_buf->vec.iov_len : 0);
 
-	/* flock buffer size + inline version + inline data size +
-	 * osd_epoch_barrier + oldest_flush_tid */
 	extra_len = 4 + 8 + 4 + 4 + 8 + 4 + 4 + 4 + 8 + 8 + 4;
 	msg = ceph_msg_new(CEPH_MSG_CLIENT_CAPS, sizeof(*fc) + extra_len,
 			   GFP_NOFS, false);
@@ -1196,7 +1197,7 @@ static int send_cap_msg(struct cap_msg_args *arg)
 	fc->caps = cpu_to_le32(arg->caps);
 	fc->wanted = cpu_to_le32(arg->wanted);
 	fc->dirty = cpu_to_le32(arg->dirty);
-	fc->ino = cpu_to_le64(arg->ino);
+	fc->ino = cpu_to_le64(ino);
 	fc->snap_follows = cpu_to_le64(arg->follows);
 
 	fc->size = cpu_to_le64(arg->size);
@@ -1349,7 +1350,7 @@ static int __send_cap(struct ceph_mds_client *mdsc, struct ceph_cap *cap,
 	cap->implemented &= cap->issued | used;
 	cap->mds_wanted = want;
 
-	arg.ino = ceph_vino(inode).ino;
+	arg.ci = ci;
 	arg.cid = cap->cap_id;
 	arg.follows = flushing ? ci->i_head_snapc->seq : 0;
 	arg.flush_tid = flush_tid;
@@ -1425,7 +1426,7 @@ static inline int __send_flush_snap(struct inode *inode,
 	struct cap_msg_args	arg;
 
 	arg.session = session;
-	arg.ino = ceph_vino(inode).ino;
+	arg.ci = ceph_inode(inode);
 	arg.cid = 0;
 	arg.follows = capsnap->follows;
 	arg.flush_tid = capsnap->cap_flush.tid;
