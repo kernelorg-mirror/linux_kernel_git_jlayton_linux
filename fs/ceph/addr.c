@@ -1546,7 +1546,7 @@ static vm_fault_t ceph_page_mkwrite(struct vm_fault *vmf)
 			lock_page(page);
 			locked_page = page;
 		}
-		err = ceph_uninline_data(vma->vm_file, locked_page);
+		err = ceph_uninline_data(inode, locked_page);
 		if (locked_page)
 			unlock_page(locked_page);
 		if (err < 0)
@@ -1662,9 +1662,8 @@ void ceph_fill_inline_data(struct inode *inode, struct page *locked_page,
 	}
 }
 
-int ceph_uninline_data(struct file *filp, struct page *locked_page)
+int ceph_uninline_data(struct inode *inode, struct page *locked_page)
 {
-	struct inode *inode = file_inode(filp);
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
 	struct ceph_osd_request *req;
