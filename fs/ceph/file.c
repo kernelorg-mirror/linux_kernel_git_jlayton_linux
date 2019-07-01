@@ -1439,7 +1439,7 @@ retry_snap:
 	inode_inc_iversion_raw(inode);
 
 	if (ci->i_inline_version != CEPH_INLINE_NONE) {
-		err = ceph_uninline_data(file, NULL);
+		err = ceph_uninline_data(inode, NULL);
 		if (err < 0)
 			goto out;
 	}
@@ -1763,7 +1763,7 @@ static long ceph_fallocate(struct file *file, int mode,
 	}
 
 	if (ci->i_inline_version != CEPH_INLINE_NONE) {
-		ret = ceph_uninline_data(file, NULL);
+		ret = ceph_uninline_data(inode, NULL);
 		if (ret < 0)
 			goto unlock;
 	}
