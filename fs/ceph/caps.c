@@ -2220,6 +2220,104 @@ out:
 	return flushing;
 }
 
+#if 0
+/*
+ * Try to flush dirty caps back to the auth mds.
+ */
+static int ceph_inline_page_write(struct inode *inode, struct page *inline_page,
+				  u64 *ptid)
+{
+	struct ceph_mds_client *mdsc = ceph_sb_to_client(inode->i_sb)->mdsc;
+	struct ceph_inode_info *ci = ceph_inode(inode);
+	struct ceph_mds_session *session = NULL;
+	struct ceph_cap *cap;
+	int delayed;
+	int flushing = 0;
+	u64 flush_tid = 0, oldest_flush_tid = 0;
+
+	/* Do lockless check first */
+	if (READ_ONCE(ci->i_inline_version) == CEPH_INLINE_NONE)
+		return -EMEDIUMTYPE;
+retry:
+	spin_lock(&ci->i_ceph_lock);
+	/* Make sure we're not racing with an uninlining */
+	if (ci->i_inline_version == CEPH_INLINE_NONE) {
+		spin_unlock(&ci->i_ceph_lock);
+		return -EMEDIUMTYPE;
+	}
+
+	/*
+	 * We're here because we're flushing data back to the MDS. We had
+	 * _better_ have some dirty caps in that case.
+	 */
+	if (!ci->i_dirty_caps || !ci->i_auth_cap) {
+		WARN_ON_ONCE(1);
+		spin_unlock(&ci->i_ceph_lock);
+		return -EIO;
+	}
+retry_locked:
+	cap = ci->i_auth_cap;
+
+	/* Lock the session */
+	if (session != cap->session) {
+		spin_unlock(&ci->i_ceph_lock);
+		if (session)
+			mutex_unlock(&session->s_mutex);
+		session = cap->session;
+		mutex_lock(&session->s_mutex);
+		goto retry;
+	}
+
+	/*
+	 * FIXME: can we end up with the session going back to a lower
+	 * 	  state than OPEN while dirty caps are still
+	 * 	  outstanding?
+	 */
+	if (cap->session->s_state < CEPH_MDS_SESSION_OPEN) {
+		spin_unlock(&ci->i_ceph_lock);
+		goto out;
+	}
+
+	/* Kick flushing caps and snaps if there are any */
+	if (ci->i_ceph_flags &
+	    (CEPH_I_KICK_FLUSH | CEPH_I_FLUSH_SNAPS)) {
+		if (ci->i_ceph_flags & CEPH_I_KICK_FLUSH)
+			__kick_flushing_caps(mdsc, session, ci, 0);
+		if (ci->i_ceph_flags & CEPH_I_FLUSH_SNAPS)
+			__ceph_flush_snaps(ci, session);
+		goto retry_locked;
+	}
+
+	/*
+	 * Mark the caps as appropriate and determine the set of caps being
+	 * flushed with the given tid.
+	 */
+	flushing = ci->i_dirty_caps;
+	flush_tid = __mark_caps_flushing(inode, session, true,
+					 &oldest_flush_tid);
+
+	/* Send the cap flush. __send_cap drops i_ceph_lock. */
+	delayed = __send_cap(mdsc, cap, CEPH_CAP_OP_FLUSH,
+			     CEPH_CLIENT_CAPS_SYNC,
+			     __ceph_caps_used(ci),
+			     __ceph_caps_wanted(ci),
+			     (cap->issued | cap->implemented),
+			     flushing, flush_tid, oldest_flush_tid,
+			     inline_page);
+	if (delayed) {
+		spin_lock(&ci->i_ceph_lock);
+		__cap_delay_requeue(mdsc, ci, true);
+		spin_unlock(&ci->i_ceph_lock);
+	}
+out:
+	if (session)
+		mutex_unlock(&session->s_mutex);
+
+	*ptid = flush_tid;
+	return 0;
+}
+#endif
+
 /*
  * Return true if we've flushed caps through the given flush_tid.
  */
