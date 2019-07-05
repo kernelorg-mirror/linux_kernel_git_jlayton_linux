@@ -550,7 +550,7 @@ void ceph_queue_cap_snap(struct ceph_inode_info *ci)
 		capsnap->xattr_version = 0;
 	}
 
-	capsnap->inline_data = ci->i_inline_version != CEPH_INLINE_NONE;
+	capsnap->inline_version = ci->i_inline_version;
 
 	/* dirty page count moved from _head to this cap_snap;
 	   all subsequent writes page dirties occur _after_ this

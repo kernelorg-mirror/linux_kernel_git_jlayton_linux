@@ -203,10 +203,10 @@ struct ceph_cap_snap {
 	struct timespec64 mtime, atime, ctime, btime;
 	u64 time_warp_seq;
 	u64 truncate_size;
+	u64 inline_version;
 	u32 truncate_seq;
 	int writing;   /* a sync write is still in progress */
 	int dirty_pages;     /* dirty pages awaiting writeback */
-	bool inline_data;
 	bool need_flush;
 };
 

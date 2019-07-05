@@ -1141,6 +1141,8 @@ struct cap_msg_args {
 	u64			flush_tid, oldest_flush_tid, size, max_size;
 	u64			xattr_version;
 	u64			change_attr;
+	u64			inline_version;
+	struct page		*inline_page;
 	struct ceph_buffer	*xattr_buf;
 	struct timespec64	atime, mtime, ctime, btime;
 	int			op, caps, wanted, dirty;
@@ -1149,7 +1151,6 @@ struct cap_msg_args {
 	kuid_t			uid;
 	kgid_t			gid;
 	umode_t			mode;
-	bool			inline_data;
 };
 
 /*
@@ -1166,6 +1167,8 @@ static int send_cap_msg(struct cap_msg_args *arg)
 	struct ceph_osd_client *osdc = &arg->session->s_mdsc->fsc->client->osdc;
 	struct inode *inode = &arg->ci->vfs_inode;
 	u64 ino = ceph_vino(inode).ino;
+	u64 inline_vers = arg->inline_version;
+	u32 inline_size = 0;
 
 	dout("send_cap_msg %s %llx %llx caps %s wanted %s dirty %s"
 	     " seq %u/%u tid %llu/%llu mseq %u follows %lld size %llu/%llu"
@@ -1178,6 +1181,17 @@ static int send_cap_msg(struct cap_msg_args *arg)
 	     arg->xattr_buf ? (int)arg->xattr_buf->vec.iov_len : 0);
 
 	extra_len = 4 + 8 + 4 + 4 + 8 + 4 + 4 + 4 + 8 + 8 + 4;
+	if (arg->inline_page) {
+		inline_size = arg->size;
+		if (inline_size > PAGE_SIZE) {
+			WARN_ON_ONCE(1);
+			return -EINVAL;
+		}
+		extra_len += inline_size;
+	} else if (inline_vers != CEPH_INLINE_NONE) {
+		inline_vers = 0;
+	}
+
 	msg = ceph_msg_new(CEPH_MSG_CLIENT_CAPS, sizeof(*fc) + extra_len,
 			   GFP_NOFS, false);
 	if (!msg)
@@ -1222,9 +1236,15 @@ static int send_cap_msg(struct cap_msg_args *arg)
 	/* flock buffer size (version 2) */
 	ceph_encode_32(&p, 0);
 	/* inline version (version 4) */
-	ceph_encode_64(&p, arg->inline_data ? 0 : CEPH_INLINE_NONE);
-	/* inline data size */
-	ceph_encode_32(&p, 0);
+	ceph_encode_64(&p, inline_vers);
+	/* inline data */
+	ceph_encode_32(&p, inline_size);
+	if (arg->inline_page) {
+		void *kaddr = kmap_atomic(arg->inline_page);
+		ceph_encode_copy(&p, kaddr, inline_size);
+		kunmap_atomic(kaddr);
+	}
+
 	/*
 	 * osd_epoch_barrier (version 5)
 	 * The epoch_barrier is protected osdc->lock, so READ_ONCE here in
@@ -1389,7 +1409,9 @@ static int __send_cap(struct ceph_mds_client *mdsc, struct ceph_cap *cap,
 	arg.gid = inode->i_gid;
 	arg.mode = inode->i_mode;
 
-	arg.inline_data = ci->i_inline_version != CEPH_INLINE_NONE;
+	arg.inline_version = ci->i_inline_version;
+	arg.inline_page = NULL;
+
 	if (!(flags & CEPH_CLIENT_CAPS_PENDING_CAPSNAP) &&
 	    !list_empty(&ci->i_cap_snaps)) {
 		struct ceph_cap_snap *capsnap;
@@ -1457,7 +1479,8 @@ static inline int __send_flush_snap(struct inode *inode,
 	arg.gid = capsnap->gid;
 	arg.mode = capsnap->mode;
 
-	arg.inline_data = capsnap->inline_data;
+	arg.inline_version = capsnap->inline_version;
+	arg.inline_page = NULL;
 	arg.flags = 0;
 
 	return send_cap_msg(&arg);
