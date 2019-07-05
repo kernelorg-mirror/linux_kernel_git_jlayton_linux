@@ -1313,7 +1313,8 @@ void __ceph_remove_caps(struct ceph_inode_info *ci)
  */
 static int __send_cap(struct ceph_mds_client *mdsc, struct ceph_cap *cap,
 		      int op, int flags, int used, int want, int retain,
-		      int flushing, u64 flush_tid, u64 oldest_flush_tid)
+		      int flushing, u64 flush_tid, u64 oldest_flush_tid,
+		      struct page *inline_page)
 	__releases(cap->ci->i_ceph_lock)
 {
 	struct ceph_inode_info *ci = cap->ci;
@@ -1410,7 +1411,7 @@ static int __send_cap(struct ceph_mds_client *mdsc, struct ceph_cap *cap,
 	arg.mode = inode->i_mode;
 
 	arg.inline_version = ci->i_inline_version;
-	arg.inline_page = NULL;
+	arg.inline_page = inline_page;
 
 	if (!(flags & CEPH_CLIENT_CAPS_PENDING_CAPSNAP) &&
 	    !list_empty(&ci->i_cap_snaps)) {
@@ -2122,7 +2123,7 @@ ack:
 		/* __send_cap drops i_ceph_lock */
 		delayed += __send_cap(mdsc, cap, CEPH_CAP_OP_UPDATE, 0,
 				cap_used, want, retain, flushing,
-				flush_tid, oldest_flush_tid);
+				flush_tid, oldest_flush_tid, NULL);
 		goto retry; /* retake i_ceph_lock and restart our cap scan. */
 	}
 
@@ -2144,7 +2145,8 @@ ack:
 /*
  * Try to flush dirty caps back to the auth mds.
  */
-static int try_flush_caps(struct inode *inode, u64 *ptid)
+static int try_flush_caps(struct inode *inode, struct page *inline_page,
+			  u64 *ptid)
 {
 	struct ceph_mds_client *mdsc = ceph_sb_to_client(inode->i_sb)->mdsc;
 	struct ceph_inode_info *ci = ceph_inode(inode);
@@ -2191,7 +2193,8 @@ retry_locked:
 				     __ceph_caps_used(ci),
 				     __ceph_caps_wanted(ci),
 				     (cap->issued | cap->implemented),
-				     flushing, flush_tid, oldest_flush_tid);
+				     flushing, flush_tid, oldest_flush_tid,
+				     inline_page);
 
 		if (delayed) {
 			spin_lock(&ci->i_ceph_lock);
@@ -2297,7 +2300,7 @@ int ceph_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	if (datasync)
 		goto out;
 
-	dirty = try_flush_caps(inode, &flush_tid);
+	dirty = try_flush_caps(inode, NULL, &flush_tid);
 	dout("fsync dirty caps are %s\n", ceph_cap_string(dirty));
 
 	ret = unsafe_request_wait(inode);
@@ -2332,7 +2335,7 @@ int ceph_write_inode(struct inode *inode, struct writeback_control *wbc)
 
 	dout("write_inode %p wait=%d\n", inode, wait);
 	if (wait) {
-		dirty = try_flush_caps(inode, &flush_tid);
+		dirty = try_flush_caps(inode, NULL, &flush_tid);
 		if (dirty)
 			err = wait_event_interruptible(ci->i_cap_wq,
 				       caps_are_flushed(inode, flush_tid));
@@ -2395,7 +2398,8 @@ static void __kick_flushing_caps(struct ceph_mds_client *mdsc,
 					  __ceph_caps_used(ci),
 					  __ceph_caps_wanted(ci),
 					  (cap->issued | cap->implemented),
-					  cf->caps, cf->tid, oldest_flush_tid);
+					  cf->caps, cf->tid, oldest_flush_tid,
+					  NULL);
 			if (ret) {
 				pr_err("kick_flushing_caps: error sending "
 					"cap flush, ino (%llx.%llx) "
