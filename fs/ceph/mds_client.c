@@ -1446,6 +1446,15 @@ static int remove_session_caps_cb(struct inode *inode, struct ceph_cap *cap,
 		cf = list_first_entry(&to_remove,
 				      struct ceph_cap_flush, i_list);
 		list_del(&cf->i_list);
+		if (cf->inlined_page) {
+			if (cf->writeback) {
+				mapping_set_error(cf->inlined_page->mapping,
+						  -EIO);
+				end_page_writeback(cf->inlined_page);
+			}
+			put_page(cf->inlined_page);
+			cf->inlined_page = NULL;
+		}
 		ceph_free_cap_flush(cf);
 	}
 

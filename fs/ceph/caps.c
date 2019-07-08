@@ -1685,13 +1685,20 @@ int __ceph_mark_dirty_caps(struct ceph_inode_info *ci, int mask,
 
 struct ceph_cap_flush *ceph_alloc_cap_flush(void)
 {
-	return kmem_cache_alloc(ceph_cap_flush_cachep, GFP_KERNEL);
+	struct ceph_cap_flush *cf;
+
+	cf = kmem_cache_alloc(ceph_cap_flush_cachep, GFP_KERNEL);
+	if (cf)
+		cf->inlined_page = NULL;
+	return cf;
 }
 
 void ceph_free_cap_flush(struct ceph_cap_flush *cf)
 {
-	if (cf)
+	if (cf) {
+		BUG_ON(cf->inlined_page);
 		kmem_cache_free(ceph_cap_flush_cachep, cf);
+	}
 }
 
 static u64 __get_oldest_flush_tid(struct ceph_mds_client *mdsc)
@@ -1743,7 +1750,8 @@ static bool __finish_cap_flush(struct ceph_mds_client *mdsc,
  * Called under i_ceph_lock. Returns the flush tid.
  */
 static u64 __mark_caps_flushing(struct inode *inode,
-				struct ceph_mds_session *session, bool wake,
+				struct ceph_mds_session *session,
+				struct page *page, bool writeback, bool wake,
 				u64 *oldest_flush_tid)
 {
 	struct ceph_mds_client *mdsc = ceph_sb_to_client(inode->i_sb)->mdsc;
@@ -1767,6 +1775,11 @@ static u64 __mark_caps_flushing(struct inode *inode,
 	swap(cf, ci->i_prealloc_cap_flush);
 	cf->caps = flushing;
 	cf->wake = wake;
+	cf->writeback = writeback;
+	if (page) {
+		get_page(page);
+		cf->inlined_page = page;
+	}
 
 	spin_lock(&mdsc->cap_dirty_lock);
 	list_del_init(&ci->i_dirty_item);
@@ -2069,7 +2082,8 @@ ack:
 
 		if (cap == ci->i_auth_cap && ci->i_dirty_caps) {
 			flushing = ci->i_dirty_caps;
-			flush_tid = __mark_caps_flushing(inode, session, false,
+			flush_tid = __mark_caps_flushing(inode, session, NULL,
+							 false, false,
 							 &oldest_flush_tid);
 		} else {
 			flushing = 0;
@@ -2145,8 +2159,8 @@ retry_locked:
 		}
 
 		flushing = ci->i_dirty_caps;
-		flush_tid = __mark_caps_flushing(inode, session, true,
-						 &oldest_flush_tid);
+		flush_tid = __mark_caps_flushing(inode, session, NULL, false,
+						 true, &oldest_flush_tid);
 
 		/* __send_cap drops i_ceph_lock */
 		delayed = __send_cap(mdsc, cap, CEPH_CAP_OP_FLUSH,
@@ -3434,6 +3448,12 @@ out:
 		cf = list_first_entry(&to_remove,
 				      struct ceph_cap_flush, i_list);
 		list_del(&cf->i_list);
+		if (cf->inlined_page) {
+			if (cf->writeback)
+				end_page_writeback(cf->inlined_page);
+			put_page(cf->inlined_page);
+			cf->inlined_page = NULL;
+		}
 		ceph_free_cap_flush(cf);
 	}
 
