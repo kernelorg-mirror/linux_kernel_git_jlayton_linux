@@ -1716,12 +1716,12 @@ int ceph_uninline_data(struct inode *inode, struct page *provided_page)
 		WARN_ON(!PageUptodate(page));
 	} else if (ceph_caps_issued(ci) &
 		   (CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO)) {
-		page = find_get_page(inode->i_mapping, 0);
+		page = find_lock_page(inode->i_mapping, 0);
 		if (page) {
 			if (PageUptodate(page)) {
 				from_pagecache = true;
-				lock_page(page);
 			} else {
+				unlock_page(page);
 				put_page(page);
 				page = NULL;
 			}
