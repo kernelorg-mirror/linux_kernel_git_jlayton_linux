@@ -1933,6 +1933,10 @@ static ssize_t ceph_copy_file_range(struct file *src_file, loff_t src_off,
 	if (len < src_ci->i_layout.object_size)
 		return -EOPNOTSUPP; /* no remote copy will be done */
 
+	/* Fall back if src file is inlined */
+	if (READ_ONCE(src_ci->i_inline_version) != CEPH_INLINE_NONE)
+		return -EOPNOTSUPP;
+
 	prealloc_cf = ceph_alloc_cap_flush();
 	if (!prealloc_cf)
 		return -ENOMEM;
@@ -1965,6 +1969,13 @@ static ssize_t ceph_copy_file_range(struct file *src_file, loff_t src_off,
 	ret = is_file_size_ok(src_inode, dst_inode, src_off, dst_off, len);
 	if (ret < 0)
 		goto out_caps;
+
+	/* uninline the dst inode */
+	dirty = ceph_uninline_data(dst_inode, NULL);
+	if (dirty < 0) {
+		ret = dirty;
+		goto out_caps;
+	}
 
 	size = i_size_read(dst_inode);
 	endoff = dst_off + len;
@@ -2078,7 +2089,7 @@ static ssize_t ceph_copy_file_range(struct file *src_file, loff_t src_off,
 	}
 	/* Mark Fw dirty */
 	spin_lock(&dst_ci->i_ceph_lock);
-	dirty = __ceph_mark_dirty_caps(dst_ci, CEPH_CAP_FILE_WR, &prealloc_cf);
+	dirty |= __ceph_mark_dirty_caps(dst_ci, CEPH_CAP_FILE_WR, &prealloc_cf);
 	spin_unlock(&dst_ci->i_ceph_lock);
 	if (dirty)
 		__mark_inode_dirty(dst_inode, dirty);
