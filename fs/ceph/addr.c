@@ -1531,7 +1531,7 @@ static vm_fault_t ceph_page_mkwrite(struct vm_fault *vmf)
 	loff_t off = page_offset(page);
 	loff_t size = i_size_read(inode);
 	size_t len;
-	int want, got, err;
+	int want, got, err, dirty;
 	sigset_t oldset;
 	vm_fault_t ret = VM_FAULT_SIGBUS;
 
@@ -1540,12 +1540,6 @@ static vm_fault_t ceph_page_mkwrite(struct vm_fault *vmf)
 		return VM_FAULT_OOM;
 
 	ceph_block_sigs(&oldset);
-
-	if (ci->i_inline_version != CEPH_INLINE_NONE) {
-		err = ceph_uninline_data(inode, off == 0 ? page : NULL);
-		if (err < 0)
-			goto out_free;
-	}
 
 	if (off + PAGE_SIZE <= size)
 		len = PAGE_SIZE;
@@ -1564,6 +1558,11 @@ static vm_fault_t ceph_page_mkwrite(struct vm_fault *vmf)
 			    &got, NULL);
 	if (err < 0)
 		goto out_free;
+
+	err = ceph_uninline_data(inode, off == 0 ? page : NULL);
+	if (err < 0)
+		goto out_put_caps;
+	dirty = err;
 
 	dout("page_mkwrite %p %llu~%zd got cap refs on %s\n",
 	     inode, off, len, ceph_cap_string(got));
@@ -1591,11 +1590,9 @@ static vm_fault_t ceph_page_mkwrite(struct vm_fault *vmf)
 
 	if (ret == VM_FAULT_LOCKED ||
 	    ci->i_inline_version != CEPH_INLINE_NONE) {
-		int dirty;
 		spin_lock(&ci->i_ceph_lock);
-		ci->i_inline_version = CEPH_INLINE_NONE;
-		dirty = __ceph_mark_dirty_caps(ci, CEPH_CAP_FILE_WR,
-					       &prealloc_cf);
+		dirty |= __ceph_mark_dirty_caps(ci, CEPH_CAP_FILE_WR,
+					        &prealloc_cf);
 		spin_unlock(&ci->i_ceph_lock);
 		if (dirty)
 			__mark_inode_dirty(inode, dirty);
@@ -1603,6 +1600,7 @@ static vm_fault_t ceph_page_mkwrite(struct vm_fault *vmf)
 
 	dout("page_mkwrite %p %llu~%zd dropping cap refs on %s ret %x\n",
 	     inode, off, len, ceph_cap_string(got), ret);
+out_put_caps:
 	ceph_put_cap_refs(ci, got);
 out_free:
 	ceph_restore_sigs(&oldset);
@@ -1656,27 +1654,61 @@ void ceph_fill_inline_data(struct inode *inode, struct page *locked_page,
 	}
 }
 
+/**
+ * ceph_uninline_data - convert an inlined file to uninlined
+ * @inode: inode to be uninlined
+ * @page: optional pointer to first page in file
+ *
+ * Convert a file from inlined to non-inlined. We borrow the i_truncate_mutex
+ * to serialize callers and prevent races. Returns either a negative error code
+ * or a positive set of I_DIRTY_* flags that the caller should apply when
+ * dirtying the inode.
+ */
 int ceph_uninline_data(struct inode *inode, struct page *provided_page)
 {
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
 	struct ceph_osd_request *req;
+	struct ceph_cap_flush *prealloc_cf = NULL;
 	struct page *page = NULL;
 	u64 len, inline_version;
-	int err = 0;
+	int ret = 0;
 	bool from_pagecache = false;
 	bool allocated_page = false;
 
-	spin_lock(&ci->i_ceph_lock);
-	inline_version = ci->i_inline_version;
-	spin_unlock(&ci->i_ceph_lock);
+	/* Do a lockless check first -- paired with i_ceph_lock for changes */
+	inline_version = READ_ONCE(ci->i_inline_version);
+	if (likely(inline_version == CEPH_INLINE_NONE))
+		return 0;
 
 	dout("uninline_data %p %llx.%llx inline_version %llu\n",
 	     inode, ceph_vinop(inode), inline_version);
 
-	if (inline_version == 1 || /* initial version, no data */
-	    inline_version == CEPH_INLINE_NONE)
+	mutex_lock(&ci->i_truncate_mutex);
+
+	/* Double check the version after taking mutex */
+	spin_lock(&ci->i_ceph_lock);
+	inline_version = ci->i_inline_version;
+	spin_unlock(&ci->i_ceph_lock);
+
+	/* If someone beat us to the uninlining then just return. */
+	if (inline_version == CEPH_INLINE_NONE)
 		goto out;
+
+	prealloc_cf = ceph_alloc_cap_flush();
+	if (!prealloc_cf) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	/*
+	 * Handle zero-length files as a a special case: switch the version to
+	 * CEPH_INLINE_NONE, but we don't need to do any uninlining in that
+	 * case since there is no data.
+	 */
+	len = i_size_read(inode);
+	if (len == 0)
+		goto out_set_vers;
 
 	if (provided_page) {
 		page = provided_page;
@@ -1697,26 +1729,25 @@ int ceph_uninline_data(struct inode *inode, struct page *provided_page)
 	}
 
 	if (page) {
-		len = i_size_read(inode);
 		if (len > PAGE_SIZE)
 			len = PAGE_SIZE;
 	} else {
 		page = __page_cache_alloc(GFP_NOFS);
 		if (!page) {
-			err = -ENOMEM;
+			ret = -ENOMEM;
 			goto out;
 		}
 		allocated_page = true;
 		lock_page(page);
-		err = __ceph_do_getattr(inode, page,
+		ret = __ceph_do_getattr(inode, page,
 					CEPH_STAT_CAP_INLINE_DATA, true);
-		if (err < 0) {
+		if (ret < 0) {
 			/* no inline data */
-			if (err == -ENODATA)
-				err = 0;
+			if (ret == -ENODATA)
+				ret = 0;
 			goto out;
 		}
-		len = err;
+		len = ret;
 	}
 
 	req = ceph_osdc_new_request(&fsc->client->osdc, &ci->i_layout,
@@ -1724,16 +1755,16 @@ int ceph_uninline_data(struct inode *inode, struct page *provided_page)
 				    CEPH_OSD_OP_CREATE, CEPH_OSD_FLAG_WRITE,
 				    NULL, 0, 0, false);
 	if (IS_ERR(req)) {
-		err = PTR_ERR(req);
+		ret = PTR_ERR(req);
 		goto out;
 	}
 
 	req->r_mtime = inode->i_mtime;
-	err = ceph_osdc_start_request(&fsc->client->osdc, req, false);
-	if (!err)
-		err = ceph_osdc_wait_request(&fsc->client->osdc, req);
+	ret = ceph_osdc_start_request(&fsc->client->osdc, req, false);
+	if (!ret)
+		ret = ceph_osdc_wait_request(&fsc->client->osdc, req);
 	ceph_osdc_put_request(req);
-	if (err < 0)
+	if (ret < 0)
 		goto out;
 
 	req = ceph_osdc_new_request(&fsc->client->osdc, &ci->i_layout,
@@ -1742,7 +1773,7 @@ int ceph_uninline_data(struct inode *inode, struct page *provided_page)
 				    NULL, ci->i_truncate_seq,
 				    ci->i_truncate_size, false);
 	if (IS_ERR(req)) {
-		err = PTR_ERR(req);
+		ret = PTR_ERR(req);
 		goto out;
 	}
 
@@ -1750,12 +1781,12 @@ int ceph_uninline_data(struct inode *inode, struct page *provided_page)
 
 	{
 		__le64 xattr_buf = cpu_to_le64(inline_version);
-		err = osd_req_op_xattr_init(req, 0, CEPH_OSD_OP_CMPXATTR,
+		ret = osd_req_op_xattr_init(req, 0, CEPH_OSD_OP_CMPXATTR,
 					    "inline_version", &xattr_buf,
 					    sizeof(xattr_buf),
 					    CEPH_OSD_CMPXATTR_OP_GT,
 					    CEPH_OSD_CMPXATTR_MODE_U64);
-		if (err)
+		if (ret)
 			goto out_put;
 	}
 
@@ -1763,22 +1794,31 @@ int ceph_uninline_data(struct inode *inode, struct page *provided_page)
 		char xattr_buf[32];
 		int xattr_len = snprintf(xattr_buf, sizeof(xattr_buf),
 					 "%llu", inline_version);
-		err = osd_req_op_xattr_init(req, 2, CEPH_OSD_OP_SETXATTR,
+		ret = osd_req_op_xattr_init(req, 2, CEPH_OSD_OP_SETXATTR,
 					    "inline_version",
 					    xattr_buf, xattr_len, 0, 0);
-		if (err)
+		if (ret)
 			goto out_put;
 	}
 
 	req->r_mtime = inode->i_mtime;
-	err = ceph_osdc_start_request(&fsc->client->osdc, req, false);
-	if (!err)
-		err = ceph_osdc_wait_request(&fsc->client->osdc, req);
+	ret = ceph_osdc_start_request(&fsc->client->osdc, req, false);
+	if (!ret)
+		ret = ceph_osdc_wait_request(&fsc->client->osdc, req);
 out_put:
 	ceph_osdc_put_request(req);
-	if (err == -ECANCELED)
-		err = 0;
+	if (ret == -ECANCELED)
+		ret = 0;
+out_set_vers:
+	if (!ret) {
+		spin_lock(&ci->i_ceph_lock);
+		ci->i_inline_version = CEPH_INLINE_NONE;
+		ret = __ceph_mark_dirty_caps(ci, CEPH_CAP_FILE_WR,
+					     &prealloc_cf);
+		spin_unlock(&ci->i_ceph_lock);
+	}
 out:
+	mutex_unlock(&ci->i_truncate_mutex);
 	if (page) {
 		unlock_page(page);
 		if (from_pagecache)
@@ -1786,10 +1826,11 @@ out:
 		else if (allocated_page)
 			__free_pages(page, 0);
 	}
+	ceph_free_cap_flush(prealloc_cf);
 
 	dout("uninline_data %p %llx.%llx inline_version %llu = %d\n",
-	     inode, ceph_vinop(inode), inline_version, err);
-	return err;
+	     inode, ceph_vinop(inode), inline_version, ret);
+	return ret;
 }
 
 static const struct vm_operations_struct ceph_vmops = {
