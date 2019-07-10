@@ -1542,14 +1542,7 @@ static vm_fault_t ceph_page_mkwrite(struct vm_fault *vmf)
 	ceph_block_sigs(&oldset);
 
 	if (ci->i_inline_version != CEPH_INLINE_NONE) {
-		struct page *locked_page = NULL;
-		if (off == 0) {
-			lock_page(page);
-			locked_page = page;
-		}
-		err = ceph_uninline_data(inode, locked_page);
-		if (locked_page)
-			unlock_page(locked_page);
+		err = ceph_uninline_data(inode, off == 0 ? page : NULL);
 		if (err < 0)
 			goto out_free;
 	}
@@ -1663,7 +1656,7 @@ void ceph_fill_inline_data(struct inode *inode, struct page *locked_page,
 	}
 }
 
-int ceph_uninline_data(struct inode *inode, struct page *locked_page)
+int ceph_uninline_data(struct inode *inode, struct page *provided_page)
 {
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
@@ -1672,6 +1665,7 @@ int ceph_uninline_data(struct inode *inode, struct page *locked_page)
 	u64 len, inline_version;
 	int err = 0;
 	bool from_pagecache = false;
+	bool allocated_page = false;
 
 	spin_lock(&ci->i_ceph_lock);
 	inline_version = ci->i_inline_version;
@@ -1684,8 +1678,9 @@ int ceph_uninline_data(struct inode *inode, struct page *locked_page)
 	    inline_version == CEPH_INLINE_NONE)
 		goto out;
 
-	if (locked_page) {
-		page = locked_page;
+	if (provided_page) {
+		page = provided_page;
+		lock_page(page);
 		WARN_ON(!PageUptodate(page));
 	} else if (ceph_caps_issued(ci) &
 		   (CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO)) {
@@ -1711,6 +1706,8 @@ int ceph_uninline_data(struct inode *inode, struct page *locked_page)
 			err = -ENOMEM;
 			goto out;
 		}
+		allocated_page = true;
+		lock_page(page);
 		err = __ceph_do_getattr(inode, page,
 					CEPH_STAT_CAP_INLINE_DATA, true);
 		if (err < 0) {
@@ -1782,11 +1779,11 @@ out_put:
 	if (err == -ECANCELED)
 		err = 0;
 out:
-	if (page && page != locked_page) {
-		if (from_pagecache) {
-			unlock_page(page);
+	if (page) {
+		unlock_page(page);
+		if (from_pagecache)
 			put_page(page);
-		} else
+		else if (allocated_page)
 			__free_pages(page, 0);
 	}
 
