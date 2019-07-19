@@ -239,15 +239,11 @@ int ceph_reserve_caps(struct ceph_mds_client *mdsc,
 				s = __ceph_lookup_mds_session(mdsc, j);
 				if (!s)
 					continue;
-				mutex_unlock(&mdsc->mutex);
 
-				mutex_lock(&s->s_mutex);
 				max_caps = s->s_nr_caps - (need - i);
 				ceph_trim_caps(mdsc, s, max_caps);
-				mutex_unlock(&s->s_mutex);
 
 				ceph_put_mds_session(s);
-				mutex_lock(&mdsc->mutex);
 			}
 			trimmed = true;
 
