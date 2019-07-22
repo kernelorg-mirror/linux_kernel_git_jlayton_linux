@@ -2760,7 +2760,8 @@ void ceph_invalidate_dir_request(struct ceph_mds_request *req)
 /*
  * Handle mds reply.
  *
- * We take the session mutex and parse and process the reply immediately.
+ * We parse and process the reply immediately. This runs from the dispatcher
+ * workqueue job, so it's serialized vs. other replies over the same session.
  * This preserves the logical ordering of replies, capabilities, etc., sent
  * by the MDS as they are applied to our local cache.
  */
@@ -2888,7 +2889,6 @@ static void handle_reply(struct ceph_mds_session *session, struct ceph_msg *msg)
 		err = parse_reply_info(msg, rinfo, session->s_con.peer_features);
 	mutex_unlock(&mdsc->mutex);
 
-	mutex_lock(&session->s_mutex);
 	if (err < 0) {
 		pr_err("mdsc_handle_reply got corrupt reply mds%d(tid:%lld)\n", mds, tid);
 		ceph_msg_dump(msg);
@@ -2950,8 +2950,6 @@ out_err:
 		dout("reply arrived after request %lld was aborted\n", tid);
 	}
 	mutex_unlock(&mdsc->mutex);
-
-	mutex_unlock(&session->s_mutex);
 
 	/* kick calling process */
 	complete_request(mdsc, req);
