@@ -9,6 +9,7 @@
 
 #include "super.h"
 #include "mds_client.h"
+#include "trace.h"
 
 /*
  * Directory operations: readdir, lookup, create, link, unlink,
@@ -1147,6 +1148,7 @@ retry:
 
 	if (try_async && op == CEPH_MDS_OP_UNLINK &&
 	    (req->r_dir_caps = get_caps_for_async_unlink(dir, dentry))) {
+		trace_ceph_async_unlink(dir, dentry);
 		dout("async unlink on %lu/%.*s caps=%s", dir->i_ino,
 		     dentry->d_name.len, dentry->d_name.name,
 		     ceph_cap_string(req->r_dir_caps));
@@ -1168,6 +1170,9 @@ retry:
 			goto retry;
 		}
 	} else {
+		trace_ceph_sync_unlink(dir, dentry);
+		dout("sync unlink on %lu/%.*s", dir->i_ino,
+		     dentry->d_name.len, dentry->d_name.name);
 		set_bit(CEPH_MDS_R_PARENT_LOCKED, &req->r_req_flags);
 		err = ceph_mdsc_do_request(mdsc, dir, req);
 		if (!err && !req->r_reply_info.head->is_dentry)
