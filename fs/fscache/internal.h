@@ -123,6 +123,8 @@ extern void fscache_objlist_remove(struct fscache_object *);
 /*
  * operation.c
  */
+extern const struct seq_operations fscache_oplist_ops;
+
 extern int fscache_submit_exclusive_op(struct fscache_object *,
 				       struct fscache_operation *);
 extern int fscache_submit_op(struct fscache_object *,

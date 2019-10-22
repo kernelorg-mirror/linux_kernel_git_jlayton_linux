@@ -1027,7 +1027,7 @@ submit_op_failed:
 	fscache_mark_object_dead(object);
 	spin_unlock(&cookie->lock);
 	fscache_unuse_cookie(object);
-	kfree(op);
+	fscache_put_operation(op);
 	_leave(" [EIO]");
 	return transit_to(KILL_OBJECT);
 }

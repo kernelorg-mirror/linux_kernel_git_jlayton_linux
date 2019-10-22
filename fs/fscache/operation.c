@@ -16,6 +16,9 @@
 atomic_t fscache_op_debug_id;
 EXPORT_SYMBOL(fscache_op_debug_id);
 
+static DEFINE_SPINLOCK(fscache_op_proc_lock);
+static HLIST_HEAD(fscache_op_proc_list);
+
 static void fscache_operation_dummy_cancel(struct fscache_operation *op)
 {
 }
@@ -35,6 +38,8 @@ void fscache_operation_init(struct fscache_cookie *cookie,
 			    fscache_operation_cancel_t cancel,
 			    fscache_operation_release_t release)
 {
+	unsigned long flags;
+
 	trace_fscache_op_alloc(op, op->debug_id, true);
 
 	INIT_WORK(&op->work, fscache_op_work_func);
@@ -46,8 +51,13 @@ void fscache_operation_init(struct fscache_cookie *cookie,
 	op->release = release;
 	op->name = name;
 	INIT_LIST_HEAD(&op->pend_link);
+	INIT_HLIST_NODE(&op->proc_link);
 	fscache_stat(&fscache_n_op_initialised);
 	trace_fscache_op(cookie->debug_id, op->debug_id, 1, fscache_op_init);
+
+	spin_lock_irqsave(&fscache_op_proc_lock, flags);
+	hlist_add_head_rcu(&op->proc_link, &fscache_op_proc_list);
+	spin_unlock_irqrestore(&fscache_op_proc_lock, flags);
 }
 EXPORT_SYMBOL(fscache_operation_init);
 
@@ -528,6 +538,22 @@ void fscache_get_operation(struct fscache_operation *op)
 EXPORT_SYMBOL(fscache_get_operation);
 
 /*
+ * Dispose of an operation.
+ */
+static void fscache_free_operation(struct fscache_operation *op)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&fscache_op_proc_lock, flags);
+	if (!hlist_unhashed(&op->proc_link))
+		hlist_del_rcu(&op->proc_link);
+	spin_unlock_irqrestore(&fscache_op_proc_lock, flags);
+
+	trace_fscache_op_alloc(op, op->debug_id, false);
+	kfree_rcu(op, rcu);
+}
+
+/*
  * release an operation
  * - queues pending ops if this is the last in-progress op
  */
@@ -547,8 +573,6 @@ void fscache_put_operation(struct fscache_operation *op)
 	trace_fscache_op(cookie_id, op_id, u, fscache_op_put);
 	if (u != 0)
 		return;
-
-	trace_fscache_op_alloc(op, op_id, false);
 
 	_debug("PUT OP");
 	ASSERTIFCMP(op->state != FSCACHE_OP_ST_INITIALISED &&
@@ -594,7 +618,7 @@ void fscache_put_operation(struct fscache_operation *op)
 		spin_unlock(&object->lock);
 	}
 
-	kfree(op);
+	fscache_free_operation(op);
 	_leave(" [done]");
 }
 EXPORT_SYMBOL(fscache_put_operation);
@@ -643,7 +667,8 @@ void fscache_operation_gc(struct work_struct *work)
 			fscache_raise_event(object, FSCACHE_OBJECT_EV_CLEARED);
 
 		spin_unlock(&object->lock);
-		kfree(op);
+
+		fscache_free_operation(op);
 
 	} while (count++ < 20);
 
@@ -677,3 +702,67 @@ void fscache_op_work_func(struct work_struct *work)
 
 	_leave("");
 }
+
+/*
+ * set up the iterator to start reading from the first line
+ */
+static void *fscache_oplist_start(struct seq_file *m, loff_t *_pos)
+	__acquires(rcu)
+{
+	rcu_read_lock();
+	return seq_hlist_start_head_rcu(&fscache_op_proc_list, *_pos);
+}
+
+/*
+ * move to the next line
+ */
+static void *fscache_oplist_next(struct seq_file *m, void *v, loff_t *_pos)
+{
+	return seq_hlist_next_rcu(v, &fscache_op_proc_list, _pos);
+}
+
+/*
+ * clean up after reading
+ */
+static void fscache_oplist_stop(struct seq_file *m, void *v)
+	__releases(rcu)
+{
+	rcu_read_unlock();
+}
+
+/*
+ * display an object
+ */
+static int fscache_oplist_show(struct seq_file *m, void *v)
+{
+	const struct fscache_operation *op;
+
+	if (v == SEQ_START_TOKEN) {
+		seq_puts(m, "OPER     OBJECT   TYPE  USE ST FL INFO\n");
+		seq_puts(m, "======== ======== ===== === == == ================\n");
+		return 0;
+	}
+
+	op = hlist_entry(v, struct fscache_operation, proc_link);
+	seq_printf(m,
+		   "%08x %08x %-5s %3u %2u %2lx",
+		   op->debug_id,
+		   op->object ? op->object->debug_id : 0,
+		   op->name,
+		   atomic_read(&op->usage),
+		   op->state,
+		   op->flags);
+
+	if (op->show)
+		op->show(op);
+
+	seq_putc(m, '\n');
+	return 0;
+}
+
+const struct seq_operations fscache_oplist_ops = {
+	.start		= fscache_oplist_start,
+	.stop		= fscache_oplist_stop,
+	.next		= fscache_oplist_next,
+	.show		= fscache_oplist_show,
+};

@@ -39,6 +39,10 @@ int __init fscache_proc_init(void)
 		goto error_objects;
 #endif
 
+	if (!proc_create_seq("fs/fscache/ops", S_IFREG | 0444, NULL,
+			 &fscache_oplist_ops))
+		goto error_objects;
+
 	_leave(" = 0");
 	return 0;
 
@@ -64,6 +68,7 @@ error_dir:
  */
 void fscache_proc_cleanup(void)
 {
+	remove_proc_entry("fs/fscache/ops", NULL);
 #ifdef CONFIG_FSCACHE_OBJECT_LIST
 	remove_proc_entry("fs/fscache/objects", NULL);
 #endif

@@ -95,9 +95,11 @@ enum fscache_operation_state {
 };
 
 struct fscache_operation {
+	struct rcu_head		rcu;
 	const char		*name;	/* Name of operation */
 	struct work_struct	work;		/* record for async ops */
 	struct list_head	pend_link;	/* link in object->pending_ops */
+	struct hlist_node	proc_link;	/* Link in /proc/fs/fscache/ops list */
 	struct fscache_object	*object;	/* object to be operated upon */
 
 	unsigned long		flags;
@@ -124,6 +126,9 @@ struct fscache_operation {
 
 	/* operation releaser */
 	fscache_operation_release_t release;
+
+	/* operation display */
+	void (*show)(const struct fscache_operation *op);
 };
 
 extern atomic_t fscache_op_debug_id;

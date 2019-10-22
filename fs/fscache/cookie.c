@@ -964,7 +964,7 @@ inconsistent:
 	spin_unlock(&cookie->lock);
 	if (wake_cookie)
 		__fscache_wake_unused_cookie(cookie);
-	kfree(op);
+	fscache_put_operation(op);
 	_leave(" = -ESTALE");
 	return -ESTALE;
 }
