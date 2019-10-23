@@ -95,6 +95,7 @@ enum fscache_operation_state {
 };
 
 struct fscache_operation {
+	const char		*name;	/* Name of operation */
 	struct work_struct	work;		/* record for async ops */
 	struct list_head	pend_link;	/* link in object->pending_ops */
 	struct fscache_object	*object;	/* object to be operated upon */
@@ -133,6 +134,7 @@ extern void fscache_op_complete(struct fscache_operation *, bool);
 extern void fscache_put_operation(struct fscache_operation *);
 extern void fscache_operation_init(struct fscache_cookie *,
 				   struct fscache_operation *,
+				   const char *,
 				   fscache_operation_processor_t,
 				   fscache_operation_cancel_t,
 				   fscache_operation_release_t);

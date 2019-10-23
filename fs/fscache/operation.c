@@ -30,6 +30,7 @@ static void fscache_operation_dummy_cancel(struct fscache_operation *op)
  */
 void fscache_operation_init(struct fscache_cookie *cookie,
 			    struct fscache_operation *op,
+			    const char *name,
 			    fscache_operation_processor_t processor,
 			    fscache_operation_cancel_t cancel,
 			    fscache_operation_release_t release)
@@ -41,6 +42,7 @@ void fscache_operation_init(struct fscache_cookie *cookie,
 	op->processor = processor;
 	op->cancel = cancel ?: fscache_operation_dummy_cancel;
 	op->release = release;
+	op->name = name;
 	INIT_LIST_HEAD(&op->pend_link);
 	fscache_stat(&fscache_n_op_initialised);
 	trace_fscache_op(cookie->debug_id, op->debug_id, 1, fscache_op_init);

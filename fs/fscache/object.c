@@ -989,7 +989,8 @@ static const struct fscache_state *_fscache_invalidate_object(struct fscache_obj
 	if (!op)
 		goto nomem;
 
-	fscache_operation_init(cookie, op, object->cache->ops->invalidate_object,
+	fscache_operation_init(cookie, op, "inval",
+			       object->cache->ops->invalidate_object,
 			       NULL, NULL);
 	op->flags = FSCACHE_OP_ASYNC |
 		(1 << FSCACHE_OP_EXCLUSIVE) |
