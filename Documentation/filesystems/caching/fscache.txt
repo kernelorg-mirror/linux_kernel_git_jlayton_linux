@@ -231,6 +231,7 @@ proc files.
 		ok=N	Number of acq reqs succeeded
 		nbf=N	Number of acq reqs rejected due to error
 		oom=N	Number of acq reqs failed on ENOMEM
+		wrq=N	Number of waits for relinquishment of conflicting old cookies.
 	Lookups	n=N	Number of lookup calls made on cache backends
 		neg=N	Number of negative lookups made
 		pos=N	Number of positive lookups made

@@ -209,7 +209,9 @@ struct fscache_cookie *fscache_hash_cookie(struct fscache_cookie *candidate)
 	struct hlist_bl_head *h;
 	struct hlist_bl_node *p;
 	unsigned int bucket;
+	int ret;
 
+retry:
 	bucket = candidate->key_hash & (ARRAY_SIZE(fscache_cookie_hash) - 1);
 	h = &fscache_cookie_hash[bucket];
 
@@ -227,19 +229,37 @@ struct fscache_cookie *fscache_hash_cookie(struct fscache_cookie *candidate)
 	return candidate;
 
 collision:
-	if (test_and_set_bit(FSCACHE_COOKIE_ACQUIRED, &cursor->flags)) {
-		trace_fscache_cookie(cursor, fscache_cookie_collision,
-				     atomic_read(&cursor->usage));
-		pr_err("Duplicate cookie detected\n");
-		fscache_print_cookie(cursor, 'O');
-		fscache_print_cookie(candidate, 'N');
-		hlist_bl_unlock(h);
-		return NULL;
-	}
+	if (test_and_set_bit(FSCACHE_COOKIE_ACQUIRED, &cursor->flags))
+		goto duplicate;
 
 	fscache_cookie_get(cursor, fscache_cookie_get_reacquire);
 	hlist_bl_unlock(h);
 	return cursor;
+
+duplicate:
+	if (test_bit(FSCACHE_COOKIE_RELINQUISHED, &cursor->flags))
+		goto wait_for_removal;
+
+	trace_fscache_cookie(cursor, fscache_cookie_collision,
+			     atomic_read(&cursor->usage));
+	pr_err("Duplicate cookie detected\n");
+	fscache_print_cookie(cursor, 'O');
+	fscache_print_cookie(candidate, 'N');
+	hlist_bl_unlock(h);
+	return NULL;
+
+wait_for_removal:
+	fscache_cookie_get(cursor, fscache_cookie_get_wait);
+	hlist_bl_unlock(h);
+
+	fscache_stat(&fscache_n_acquires_wait_relinq);
+	ret = wait_on_bit(&cursor->flags, FSCACHE_COOKIE_RELINQUISHING,
+			  TASK_INTERRUPTIBLE);
+
+	fscache_cookie_put(cursor, fscache_cookie_put_wait);
+	if (ret < 0)
+		return NULL;
+	goto retry;
 }
 
 /*
@@ -823,8 +843,15 @@ void __fscache_relinquish_cookie(struct fscache_cookie *cookie,
 	/* No further netfs-accessing operations on this cookie permitted */
 	if (test_and_set_bit(FSCACHE_COOKIE_RELINQUISHED, &cookie->flags))
 		BUG();
+	set_bit(FSCACHE_COOKIE_RELINQUISHING, &cookie->flags);
 
 	__fscache_disable_cookie(cookie, aux_data, retire);
+
+	spin_lock(&cookie->lock);
+	if (test_bit(FSCACHE_COOKIE_RELINQUISHING, &cookie->flags) &&
+	    hlist_empty(&cookie->backing_objects))
+		fscache_unhash_cookie(cookie);
+	spin_unlock(&cookie->lock);
 
 	/* Clear pointers back to the netfs */
 	cookie->netfs_data	= NULL;
@@ -846,19 +873,24 @@ void __fscache_relinquish_cookie(struct fscache_cookie *cookie,
 EXPORT_SYMBOL(__fscache_relinquish_cookie);
 
 /*
- * Remove a cookie from the hash table.
+ * Remove a cookie from the hash table and wake up anyone waiting on this.
  */
-static void fscache_unhash_cookie(struct fscache_cookie *cookie)
+void fscache_unhash_cookie(struct fscache_cookie *cookie)
 {
 	struct hlist_bl_head *h;
 	unsigned int bucket;
+
+	_enter("%p", cookie);
 
 	bucket = cookie->key_hash & (ARRAY_SIZE(fscache_cookie_hash) - 1);
 	h = &fscache_cookie_hash[bucket];
 
 	hlist_bl_lock(h);
-	hlist_bl_del(&cookie->hash_link);
+	hlist_bl_del_init(&cookie->hash_link);
 	hlist_bl_unlock(h);
+
+	if (test_and_clear_bit(FSCACHE_COOKIE_RELINQUISHING, &cookie->flags))
+		wake_up_bit(&cookie->flags, FSCACHE_COOKIE_RELINQUISHING);
 }
 
 /*
@@ -880,8 +912,8 @@ void fscache_cookie_put(struct fscache_cookie *cookie,
 			return;
 		BUG_ON(usage < 0);
 
+		ASSERT(hlist_bl_unhashed(&cookie->hash_link));
 		parent = cookie->parent;
-		fscache_unhash_cookie(cookie);
 		fscache_free_cookie(cookie);
 
 		cookie = parent;

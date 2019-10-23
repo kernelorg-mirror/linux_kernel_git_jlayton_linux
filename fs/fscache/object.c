@@ -702,7 +702,7 @@ static const struct fscache_state *fscache_drop_object(struct fscache_object *ob
 	struct fscache_object *parent = object->parent;
 	struct fscache_cookie *cookie = object->cookie;
 	struct fscache_cache *cache = object->cache;
-	bool awaken = false;
+	int awaken = 0;
 
 	_enter("{OBJ%x,%d},%d", object->debug_id, object->n_children, event);
 
@@ -719,13 +719,18 @@ static const struct fscache_state *fscache_drop_object(struct fscache_object *ob
 	 */
 	spin_lock(&cookie->lock);
 	hlist_del_init(&object->cookie_link);
-	if (hlist_empty(&cookie->backing_objects) &&
-	    test_and_clear_bit(FSCACHE_COOKIE_INVALIDATING, &cookie->flags))
-		awaken = true;
+	if (hlist_empty(&cookie->backing_objects)) {
+		if (test_bit(FSCACHE_COOKIE_RELINQUISHING, &cookie->flags))
+			awaken = 2;
+		else if (test_and_clear_bit(FSCACHE_COOKIE_INVALIDATING, &cookie->flags))
+			awaken = 1;
+	}
 	spin_unlock(&cookie->lock);
 
 	if (awaken)
 		wake_up_bit(&cookie->flags, FSCACHE_COOKIE_INVALIDATING);
+	if (awaken == 2)
+		fscache_unhash_cookie(cookie);
 	if (test_and_clear_bit(FSCACHE_COOKIE_LOOKING_UP, &cookie->flags))
 		wake_up_bit(&cookie->flags, FSCACHE_COOKIE_LOOKING_UP);
 
