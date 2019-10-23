@@ -427,6 +427,29 @@ TRACE_EVENT(fscache_wake_cookie,
 	    TP_printk("c=%08x", __entry->cookie)
 	    );
 
+TRACE_EVENT(fscache_op_alloc,
+	    TP_PROTO(struct fscache_operation *op, unsigned int op_debug_id,
+		     bool alloc),
+
+	    TP_ARGS(op, op_debug_id, alloc),
+
+	    TP_STRUCT__entry(
+		    __field(struct fscache_operation *,	op		)
+		    __field(unsigned int,		op_debug_id	)
+		    __field(bool,			alloc		)
+			     ),
+
+	    TP_fast_assign(
+		    __entry->op			= op;
+		    __entry->op_debug_id	= op_debug_id;
+		    __entry->alloc		= alloc;
+			   ),
+
+	    TP_printk("op=%08x %s p=%px",
+		      __entry->op_debug_id, __entry->alloc ? "ALLOC" : "FREE ",
+		      __entry->op)
+	    );
+
 TRACE_EVENT(fscache_op,
 	    TP_PROTO(unsigned int cookie_debug_id, unsigned int op_debug_id,
 		     unsigned int op_usage, enum fscache_op_trace why),

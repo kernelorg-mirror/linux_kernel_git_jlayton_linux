@@ -35,6 +35,8 @@ void fscache_operation_init(struct fscache_cookie *cookie,
 			    fscache_operation_cancel_t cancel,
 			    fscache_operation_release_t release)
 {
+	trace_fscache_op_alloc(op, op->debug_id, true);
+
 	INIT_WORK(&op->work, fscache_op_work_func);
 	atomic_set(&op->usage, 1);
 	op->state = FSCACHE_OP_ST_INITIALISED;
@@ -532,6 +534,8 @@ void fscache_put_operation(struct fscache_operation *op)
 	trace_fscache_op(cookie_id, op_id, u, fscache_op_put);
 	if (u != 0)
 		return;
+
+	trace_fscache_op_alloc(op, op_id, false);
 
 	_debug("PUT OP");
 	ASSERTIFCMP(op->state != FSCACHE_OP_ST_INITIALISED &&
