@@ -242,7 +242,8 @@ error_unsupported:
 	fsdef->dentry = NULL;
 	dput(root);
 error_open_root:
-	kmem_cache_free(cachefiles_object_jar, fsdef);
+	cachefiles_cache_ops.put_object(&fsdef->fscache,
+					fscache_obj_put_alloc_fail);
 error_root_object:
 	cachefiles_end_secure(cache, saved_cred);
 	pr_err("Failed to register: %d\n", ret);

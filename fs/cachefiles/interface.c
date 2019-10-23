@@ -103,8 +103,8 @@ nomem_key:
 	kfree(buffer);
 nomem_buffer:
 	BUG_ON(test_bit(CACHEFILES_OBJECT_ACTIVE, &object->flags));
-	kmem_cache_free(cachefiles_object_jar, object);
-	fscache_object_destroyed(&cache->cache);
+	cachefiles_cache_ops.put_object(&object->fscache,
+					fscache_obj_put_alloc_fail);
 nomem_object:
 	kfree(lookup_data);
 nomem_lookup_data:
