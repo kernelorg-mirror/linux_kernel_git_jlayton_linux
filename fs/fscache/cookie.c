@@ -353,20 +353,10 @@ struct fscache_cookie *__fscache_acquire_cookie(
 		/* if the object is an index then we need do nothing more here
 		 * - we create indices on disk when we need them as an index
 		 * may exist in multiple caches */
-		if (cookie->type != FSCACHE_COOKIE_TYPE_INDEX) {
-			if (fscache_acquire_non_index_cookie(cookie, object_size) == 0) {
-				set_bit(FSCACHE_COOKIE_ENABLED, &cookie->flags);
-			} else {
-				atomic_dec(&parent->n_children);
-				fscache_cookie_put(cookie,
-						   fscache_cookie_put_acquire_nobufs);
-				fscache_stat(&fscache_n_acquires_nobufs);
-				_leave(" = NULL");
-				return NULL;
-			}
-		} else {
-			set_bit(FSCACHE_COOKIE_ENABLED, &cookie->flags);
-		}
+		if (cookie->type != FSCACHE_COOKIE_TYPE_INDEX &&
+		    fscache_acquire_non_index_cookie(cookie, object_size) < 0)
+			goto failed;
+		set_bit(FSCACHE_COOKIE_ENABLED, &cookie->flags);
 	}
 
 	fscache_stat(&fscache_n_acquires_ok);
@@ -374,6 +364,14 @@ struct fscache_cookie *__fscache_acquire_cookie(
 out:
 	fscache_free_cookie(candidate);
 	return cookie;
+
+failed:
+	atomic_dec(&parent->n_children);
+	fscache_unhash_cookie(cookie);
+	fscache_cookie_put(cookie, fscache_cookie_put_acquire_nobufs);
+	fscache_stat(&fscache_n_acquires_nobufs);
+	_leave(" = NULL");
+	return NULL;
 }
 EXPORT_SYMBOL(__fscache_acquire_cookie);
 
