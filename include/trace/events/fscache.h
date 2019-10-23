@@ -428,10 +428,10 @@ TRACE_EVENT(fscache_wake_cookie,
 	    );
 
 TRACE_EVENT(fscache_op,
-	    TP_PROTO(struct fscache_cookie *cookie, struct fscache_operation *op,
+	    TP_PROTO(unsigned int cookie_debug_id, unsigned int op_debug_id,
 		     enum fscache_op_trace why),
 
-	    TP_ARGS(cookie, op, why),
+	    TP_ARGS(cookie_debug_id, op_debug_id, why),
 
 	    TP_STRUCT__entry(
 		    __field(unsigned int,		cookie		)
@@ -440,8 +440,8 @@ TRACE_EVENT(fscache_op,
 			     ),
 
 	    TP_fast_assign(
-		    __entry->cookie		= cookie->debug_id;
-		    __entry->op			= op->debug_id;
+		    __entry->cookie		= cookie_debug_id;
+		    __entry->op			= op_debug_id;
 		    __entry->why		= why;
 			   ),
 
