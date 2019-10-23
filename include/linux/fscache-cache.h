@@ -131,6 +131,7 @@ extern void fscache_op_work_func(struct work_struct *work);
 
 extern void fscache_enqueue_operation(struct fscache_operation *);
 extern void fscache_op_complete(struct fscache_operation *, bool);
+extern void fscache_get_operation(struct fscache_operation *);
 extern void fscache_put_operation(struct fscache_operation *);
 extern void fscache_operation_init(struct fscache_cookie *,
 				   struct fscache_operation *,
@@ -171,7 +172,7 @@ typedef int (*fscache_pages_retrieval_func_t)(struct fscache_retrieval *op,
 static inline
 struct fscache_retrieval *fscache_get_retrieval(struct fscache_retrieval *op)
 {
-	atomic_inc(&op->op.usage);
+	fscache_get_operation(&op->op);
 	return op;
 }
 

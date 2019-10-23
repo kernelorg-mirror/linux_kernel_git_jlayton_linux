@@ -515,6 +515,19 @@ void fscache_op_complete(struct fscache_operation *op, bool cancelled)
 EXPORT_SYMBOL(fscache_op_complete);
 
 /*
+ * Get a ref on an operation.
+ */
+void fscache_get_operation(struct fscache_operation *op)
+{
+	unsigned int u;
+
+	u = atomic_inc_return(&op->usage);
+	trace_fscache_op(op->object ? op->object->cookie->debug_id : 0,
+			 op->debug_id, u, fscache_op_get);
+}
+EXPORT_SYMBOL(fscache_get_operation);
+
+/*
  * release an operation
  * - queues pending ops if this is the last in-progress op
  */

@@ -59,6 +59,7 @@ enum fscache_op_trace {
 	fscache_op_enqueue_async,
 	fscache_op_enqueue_mythread,
 	fscache_op_gc,
+	fscache_op_get,
 	fscache_op_init,
 	fscache_op_put,
 	fscache_op_run,
@@ -122,6 +123,7 @@ enum fscache_page_op_trace {
 	EM(fscache_op_enqueue_async,		"EnqAsyn")		\
 	EM(fscache_op_enqueue_mythread,		"EnqMyTh")		\
 	EM(fscache_op_gc,			"GC     ")		\
+	EM(fscache_op_get,			"Get    ")		\
 	EM(fscache_op_init,			"Init   ")		\
 	EM(fscache_op_put,			"Put    ")		\
 	EM(fscache_op_run,			"Run    ")		\
