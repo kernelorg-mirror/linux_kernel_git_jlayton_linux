@@ -386,7 +386,7 @@ int fscache_wait_for_operation_activation(struct fscache_object *object,
 	if (wait_on_bit(&op->flags, FSCACHE_OP_WAITING,
 			TASK_INTERRUPTIBLE) != 0) {
 		trace_fscache_op(object->cookie->debug_id, op->debug_id,
-				 fscache_op_signal);
+				 atomic_read(&op->usage), fscache_op_signal);
 		ret = fscache_cancel_op(op, false);
 		if (ret == 0)
 			return -ERESTARTSYS;
@@ -409,7 +409,7 @@ check_if_dead:
 		     fscache_cache_is_broken(object))) {
 		enum fscache_operation_state state = op->state;
 		trace_fscache_op(object->cookie->debug_id, op->debug_id,
-				 fscache_op_signal);
+				 atomic_read(&op->usage), fscache_op_signal);
 		fscache_cancel_op(op, true);
 		if (stat_object_dead)
 			fscache_stat(stat_object_dead);

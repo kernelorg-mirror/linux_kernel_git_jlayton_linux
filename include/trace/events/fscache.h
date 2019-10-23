@@ -429,24 +429,26 @@ TRACE_EVENT(fscache_wake_cookie,
 
 TRACE_EVENT(fscache_op,
 	    TP_PROTO(unsigned int cookie_debug_id, unsigned int op_debug_id,
-		     enum fscache_op_trace why),
+		     unsigned int op_usage, enum fscache_op_trace why),
 
-	    TP_ARGS(cookie_debug_id, op_debug_id, why),
+	    TP_ARGS(cookie_debug_id, op_debug_id, op_usage, why),
 
 	    TP_STRUCT__entry(
 		    __field(unsigned int,		cookie		)
 		    __field(unsigned int,		op		)
+		    __field(unsigned int,		op_usage	)
 		    __field(enum fscache_op_trace,	why		)
 			     ),
 
 	    TP_fast_assign(
 		    __entry->cookie		= cookie_debug_id;
 		    __entry->op			= op_debug_id;
+		    __entry->op_usage		= op_usage;
 		    __entry->why		= why;
 			   ),
 
-	    TP_printk("c=%08x op=%08x %s",
-		      __entry->cookie, __entry->op,
+	    TP_printk("c=%08x op=%08x u=%u %s",
+		      __entry->cookie, __entry->op, __entry->op_usage,
 		      __print_symbolic(__entry->why, fscache_op_traces))
 	    );
 
