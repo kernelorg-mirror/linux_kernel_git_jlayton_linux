@@ -331,6 +331,35 @@ TRACE_EVENT(fscache_disable,
 		      __entry->n_children, __entry->n_active, __entry->flags)
 	    );
 
+TRACE_EVENT(fscache_parent,
+	    TP_PROTO(struct fscache_object *obj, bool done),
+
+	    TP_ARGS(obj, done),
+
+	    TP_STRUCT__entry(
+		    __field(unsigned int,	cookie	   )
+		    __field(unsigned int,	parent	   )
+		    __field(int,		n_obj_ops  )
+		    __field(int,		n_ops      )
+		    __field(int,		n_children )
+		    __field(bool,		done       )
+			     ),
+
+	    TP_fast_assign(
+		    __entry->cookie	= obj->cookie->debug_id;
+		    __entry->parent	= obj->parent->cookie->debug_id;
+		    __entry->n_obj_ops	= obj->parent->n_obj_ops;
+		    __entry->n_ops	= obj->parent->n_ops;
+		    __entry->n_children	= obj->parent->n_children;
+		    __entry->done	= done;
+			   ),
+
+	    TP_printk("c=%08x pc=%08x Noo=%d No=%d Nc=%d %s",
+		      __entry->cookie, __entry->parent, __entry->n_obj_ops,
+		      __entry->n_ops, __entry->n_children,
+		      __entry->done ? "DONE" : "READY")
+	    );
+
 TRACE_EVENT(fscache_osm,
 	    TP_PROTO(struct fscache_object *object,
 		     const struct fscache_state *state,

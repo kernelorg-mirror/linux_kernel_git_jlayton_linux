@@ -156,6 +156,7 @@ static inline void fscache_done_parent_op(struct fscache_object *object)
 	spin_lock_nested(&parent->lock, 1);
 	parent->n_obj_ops--;
 	parent->n_ops--;
+	trace_fscache_parent(object, true);
 	if (parent->n_ops == 0)
 		fscache_raise_event(parent, FSCACHE_OBJECT_EV_CLEARED);
 	spin_unlock(&parent->lock);
@@ -437,6 +438,7 @@ static const struct fscache_state *fscache_parent_ready(struct fscache_object *o
 	parent->n_ops++;
 	parent->n_obj_ops++;
 	object->lookup_jif = jiffies;
+	trace_fscache_parent(object, false);
 	spin_unlock(&parent->lock);
 
 	_leave("");
