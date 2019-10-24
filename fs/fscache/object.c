@@ -15,6 +15,7 @@
 #include "internal.h"
 
 static const struct fscache_state *fscache_abort_initialisation(struct fscache_object *, int);
+static const struct fscache_state *fscache_abort_parent(struct fscache_object *, int);
 static const struct fscache_state *fscache_kill_dependents(struct fscache_object *, int);
 static const struct fscache_state *fscache_drop_object(struct fscache_object *, int);
 static const struct fscache_state *fscache_initialise_object(struct fscache_object *, int);
@@ -75,6 +76,7 @@ static const struct fscache_state *fscache_object_dead(struct fscache_object *, 
  */
 static WORK_STATE(INIT_OBJECT,		"INIT", fscache_initialise_object);
 static WORK_STATE(PARENT_READY,		"PRDY", fscache_parent_ready);
+static WORK_STATE(ABORT_PARENT,		"ABTP",	fscache_abort_parent);
 static WORK_STATE(ABORT_INIT,		"ABRT", fscache_abort_initialisation);
 static WORK_STATE(LOOK_UP_OBJECT,	"LOOK", fscache_look_up_object);
 static WORK_STATE(CREATE_OBJECT,	"CRTO", fscache_look_up_object);
@@ -115,6 +117,13 @@ static WAIT_STATE(WAIT_FOR_CLEARANCE,	"?CLR",
  */
 static const struct fscache_transition fscache_osm_init_oob[] = {
 	   TRANSIT_TO(ABORT_INIT,
+		      (1 << FSCACHE_OBJECT_EV_ERROR) |
+		      (1 << FSCACHE_OBJECT_EV_KILL)),
+	   { 0, NULL }
+};
+
+static const struct fscache_transition fscache_osm_parent_oob[] = {
+	   TRANSIT_TO(ABORT_PARENT,
 		      (1 << FSCACHE_OBJECT_EV_ERROR) |
 		      (1 << FSCACHE_OBJECT_EV_KILL)),
 	   { 0, NULL }
@@ -350,9 +359,7 @@ static inline void fscache_mark_object_dead(struct fscache_object *object)
 	spin_unlock(&object->lock);
 }
 
-/*
- * Abort object initialisation before we start it.
- */
+/* Abort object initialisation before we start it. */
 static const struct fscache_state *fscache_abort_initialisation(struct fscache_object *object,
 								int event)
 {
@@ -361,6 +368,15 @@ static const struct fscache_state *fscache_abort_initialisation(struct fscache_o
 	object->oob_event_mask = 0;
 	fscache_dequeue_object(object);
 	return transit_to(KILL_OBJECT);
+}
+
+/* Abort object init after the parent is ready. */
+static const struct fscache_state *fscache_abort_parent(struct fscache_object *object,
+								int event)
+{
+	_enter("{OBJ%x},%d", object->debug_id, event);
+	fscache_done_parent_op(object);
+	return transit_to(ABORT_INIT);
 }
 
 /*
@@ -433,6 +449,8 @@ static const struct fscache_state *fscache_parent_ready(struct fscache_object *o
 	_enter("{OBJ%x},%d", object->debug_id, event);
 
 	ASSERT(parent != NULL);
+
+	object->oob_table = fscache_osm_parent_oob;
 
 	spin_lock(&parent->lock);
 	parent->n_ops++;
