@@ -16,6 +16,7 @@
 #include "mds_client.h"
 #include "cache.h"
 #include "io.h"
+#include "trace.h"
 
 static __le32 ceph_flags_sys2wire(u32 flags)
 {
@@ -733,6 +734,7 @@ retry:
 				err = ceph_finish_async_create(dir, dentry,
 							file, mode, req,
 							&as_ctx, &lo);
+				trace_ceph_async_create(dir, dentry);
 			} else if (err == -EJUKEBOX) {
 				restore_deleg_ino(dir, req->r_deleg_ino);
 				ceph_mdsc_put_request(req);
@@ -779,6 +781,7 @@ retry:
 		}
 		err = finish_open(file, dentry, ceph_open);
 	}
+	trace_ceph_sync_create(dir, dentry);
 out_req:
 	if (!req->r_err && req->r_target_inode)
 		ceph_put_fmode(ceph_inode(req->r_target_inode), req->r_fmode);
