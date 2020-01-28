@@ -679,6 +679,7 @@ extern int __ceph_caps_used(struct ceph_inode_info *ci);
 
 extern int __ceph_caps_file_wanted(struct ceph_inode_info *ci);
 extern int __ceph_caps_wanted(struct ceph_inode_info *ci);
+extern int __ceph_caps_file_pin_if_open(struct ceph_inode_info *ci);
 
 /* what the mds thinks we want */
 extern int __ceph_caps_mds_wanted(struct ceph_inode_info *ci, bool check);

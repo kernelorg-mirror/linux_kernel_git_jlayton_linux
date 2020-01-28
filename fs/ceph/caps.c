@@ -623,13 +623,6 @@ void ceph_add_cap(struct inode *inode,
 	dout("add_cap %p mds%d cap %llx %s seq %d\n", inode,
 	     session->s_mds, cap_id, ceph_cap_string(issued), seq);
 
-	/*
-	 * If we are opening the file, include file mode wanted bits
-	 * in wanted.
-	 */
-	if (fmode >= 0)
-		wanted |= ceph_caps_for_mode(fmode);
-
 	spin_lock(&session->s_gen_ttl_lock);
 	gen = session->s_cap_gen;
 	spin_unlock(&session->s_gen_ttl_lock);
@@ -989,12 +982,23 @@ int __ceph_caps_file_wanted(struct ceph_inode_info *ci)
 	return ceph_caps_for_mode(bits >> 1);
 }
 
+int __ceph_caps_file_pin_if_open(struct ceph_inode_info *ci)
+{
+	int i;
+
+	for (i = 0; i < CEPH_FILE_MODE_BITS; i++) {
+		if (ci->i_nr_by_mode[i])
+			return CEPH_CAP_PIN;
+	}
+	return 0;
+}
+
 /*
  * wanted, by virtue of open file modes AND cap refs (buffered/cached data)
  */
 int __ceph_caps_wanted(struct ceph_inode_info *ci)
 {
-	int w = __ceph_caps_file_wanted(ci) | __ceph_caps_used(ci);
+	int w = __ceph_caps_file_pin_if_open(ci) | __ceph_caps_used(ci);
 	if (S_ISDIR(ci->vfs_inode.i_mode)) {
 		/* we want EXCL if holding caps of dir ops */
 		if (w & CEPH_CAP_ANY_DIR_OPS)
@@ -1872,7 +1876,7 @@ void ceph_check_caps(struct ceph_inode_info *ci, int flags,
 retry:
 	spin_lock(&ci->i_ceph_lock);
 retry_locked:
-	file_wanted = __ceph_caps_file_wanted(ci);
+	file_wanted = __ceph_caps_file_pin_if_open(ci);
 	used = __ceph_caps_used(ci);
 	issued = __ceph_caps_issued(ci, &implemented);
 	revoking = implemented & ~issued;
