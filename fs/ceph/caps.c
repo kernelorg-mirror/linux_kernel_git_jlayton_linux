@@ -4262,7 +4262,7 @@ int ceph_encode_inode_release(void **p, struct inode *inode,
 
 		if (force || (cap->issued & drop)) {
 			if (cap->issued & drop) {
-				int wanted = __ceph_caps_wanted(ci);
+				int wanted = __ceph_caps_file_pin_if_open(ci);
 				if ((ci->i_ceph_flags & CEPH_I_NODELAY) == 0)
 					wanted |= cap->mds_wanted;
 				dout("encode_inode_release %p cap %p "
