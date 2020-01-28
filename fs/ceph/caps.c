@@ -733,16 +733,19 @@ void ceph_add_cap(struct inode *inode,
 		WARN_ON(ci->i_auth_cap == cap);
 	}
 
-	dout("add_cap inode %p (%llx.%llx) cap %p %s now %s seq %d mds%d\n",
-	     inode, ceph_vinop(inode), cap, ceph_cap_string(issued),
-	     ceph_cap_string(issued|cap->issued), seq, mds);
-	cap->cap_id = cap_id;
-	cap->issued = issued;
-	cap->implemented |= issued;
 	if (ceph_seq_cmp(mseq, cap->mseq) > 0)
 		cap->mds_wanted = wanted;
 	else
 		cap->mds_wanted |= wanted;
+
+	dout("add_cap inode %p (%llx.%llx) cap %p %s now %s wanted %s seq %d mds%d\n",
+	     inode, ceph_vinop(inode), cap, ceph_cap_string(issued),
+	     ceph_cap_string(issued|cap->issued),
+	     ceph_cap_string(cap->mds_wanted), seq, mds);
+
+	cap->cap_id = cap_id;
+	cap->issued = issued;
+	cap->implemented |= issued;
 	cap->seq = seq;
 	cap->issue_seq = seq;
 	cap->mseq = mseq;
