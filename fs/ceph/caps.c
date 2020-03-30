@@ -2111,8 +2111,11 @@ ack:
 
 		mds = cap->mds;  /* remember mds, so we don't repeat */
 
-		__prep_cap(&arg, cap, CEPH_CAP_OP_UPDATE, 0, cap_used, want,
-			   retain, flushing, flush_tid, oldest_flush_tid);
+		__prep_cap(&arg, cap, CEPH_CAP_OP_UPDATE,
+			   (flags & CHECK_CAPS_FLUSH) ?
+			    CEPH_CLIENT_CAPS_SYNC : 0,
+			   cap_used, want, retain, flushing, flush_tid,
+			   oldest_flush_tid);
 		spin_unlock(&ci->i_ceph_lock);
 
 		__send_cap(mdsc, &arg, ci);
