@@ -727,6 +727,19 @@ void ceph_add_cap(struct inode *inode,
 	if (flags & CEPH_CAP_FLAG_AUTH) {
 		if (!ci->i_auth_cap ||
 		    ceph_seq_cmp(ci->i_auth_cap->mseq, mseq) < 0) {
+			if (ci->i_auth_cap &&
+			    ci->i_auth_cap->session != cap->session) {
+				/*
+				 * If auth cap session changed, and the cap is
+				 * dirty, move it to the correct session's list
+				 */
+				if (!list_empty(&ci->i_dirty_item)) {
+					spin_lock(&mdsc->cap_dirty_lock);
+					list_move(&ci->i_dirty_item,
+						  &cap->session->s_cap_dirty);
+					spin_unlock(&mdsc->cap_dirty_lock);
+				}
+			}
 			ci->i_auth_cap = cap;
 			cap->mds_wanted = wanted;
 		}
@@ -1123,8 +1136,10 @@ void __ceph_remove_cap(struct ceph_cap *cap, bool queue_release)
 
 	/* remove from inode's cap rbtree, and clear auth cap */
 	rb_erase(&cap->ci_node, &ci->i_caps);
-	if (ci->i_auth_cap == cap)
+	if (ci->i_auth_cap == cap) {
+		WARN_ON_ONCE(!list_empty(&ci->i_dirty_item));
 		ci->i_auth_cap = NULL;
+	}
 
 	/* remove from session list */
 	spin_lock(&session->s_cap_lock);
@@ -1690,6 +1705,8 @@ int __ceph_mark_dirty_caps(struct ceph_inode_info *ci, int mask,
 	     ceph_cap_string(was | mask));
 	ci->i_dirty_caps |= mask;
 	if (was == 0) {
+		struct ceph_mds_session *session = ci->i_auth_cap->session;
+
 		WARN_ON_ONCE(ci->i_prealloc_cap_flush);
 		swap(ci->i_prealloc_cap_flush, *pcf);
 
@@ -1702,7 +1719,7 @@ int __ceph_mark_dirty_caps(struct ceph_inode_info *ci, int mask,
 		     &ci->vfs_inode, ci->i_head_snapc, ci->i_auth_cap);
 		BUG_ON(!list_empty(&ci->i_dirty_item));
 		spin_lock(&mdsc->cap_dirty_lock);
-		list_add(&ci->i_dirty_item, &mdsc->cap_dirty);
+		list_add(&ci->i_dirty_item, &session->s_cap_dirty);
 		spin_unlock(&mdsc->cap_dirty_lock);
 		if (ci->i_flushing_caps == 0) {
 			ihold(inode);
@@ -3753,6 +3770,13 @@ retry:
 			if (cap == ci->i_auth_cap)
 				ci->i_auth_cap = tcap;
 
+			if (!list_empty(&ci->i_dirty_item)) {
+				spin_lock(&mdsc->cap_dirty_lock);
+				list_move(&ci->i_dirty_item,
+					  &tcap->session->s_cap_dirty);
+				spin_unlock(&mdsc->cap_dirty_lock);
+			}
+
 			if (!list_empty(&ci->i_cap_flush_list) &&
 			    ci->i_auth_cap == tcap) {
 				spin_lock(&mdsc->cap_dirty_lock);
@@ -4176,15 +4200,16 @@ void ceph_check_delayed_caps(struct ceph_mds_client *mdsc)
 /*
  * Flush all dirty caps to the mds
  */
-void ceph_flush_dirty_caps(struct ceph_mds_client *mdsc)
+static void flush_dirty_session_caps(struct ceph_mds_session *s)
 {
+	struct ceph_mds_client *mdsc = s->s_mdsc;
 	struct ceph_inode_info *ci;
 	struct inode *inode;
 
 	dout("flush_dirty_caps\n");
 	spin_lock(&mdsc->cap_dirty_lock);
-	while (!list_empty(&mdsc->cap_dirty)) {
-		ci = list_first_entry(&mdsc->cap_dirty, struct ceph_inode_info,
+	while (!list_empty(&s->s_cap_dirty)) {
+		ci = list_first_entry(&s->s_cap_dirty, struct ceph_inode_info,
 				      i_dirty_item);
 		inode = &ci->vfs_inode;
 		ihold(inode);
@@ -4196,6 +4221,35 @@ void ceph_flush_dirty_caps(struct ceph_mds_client *mdsc)
 	}
 	spin_unlock(&mdsc->cap_dirty_lock);
 	dout("flush_dirty_caps done\n");
+}
+
+static void iterate_sessions(struct ceph_mds_client *mdsc,
+			     void (*cb)(struct ceph_mds_session *))
+{
+	int mds = 0;
+
+	mutex_lock(&mdsc->mutex);
+	for (mds = 0; mds < mdsc->max_sessions; ++mds) {
+		struct ceph_mds_session *s;
+
+		if (!mdsc->sessions[mds])
+			continue;
+
+		s = ceph_get_mds_session(mdsc->sessions[mds]);
+		if (!s)
+			continue;
+
+		mutex_unlock(&mdsc->mutex);
+		cb(s);
+		ceph_put_mds_session(s);
+		mutex_lock(&mdsc->mutex);
+	};
+	mutex_unlock(&mdsc->mutex);
+}
+
+void ceph_flush_dirty_caps(struct ceph_mds_client *mdsc)
+{
+	iterate_sessions(mdsc, flush_dirty_session_caps);
 }
 
 void __ceph_touch_fmode(struct ceph_inode_info *ci,
