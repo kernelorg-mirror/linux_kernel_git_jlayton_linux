@@ -3400,6 +3400,12 @@ void ceph_mdsc_release_dir_caps(struct ceph_mds_request *req)
 		dout("releasing r_dir_caps=%s\n", ceph_cap_string(dcaps));
 		ceph_put_cap_refs(ceph_inode(req->r_parent), dcaps);
 	}
+
+	dcaps = xchg(&req->r_old_dir_caps, 0);
+	if (dcaps) {
+		dout("releasing r_old_dir_caps=%s\n", ceph_cap_string(dcaps));
+		ceph_put_cap_refs(ceph_inode(req->r_old_dentry_dir), dcaps);
+	}
 }
 
 /*

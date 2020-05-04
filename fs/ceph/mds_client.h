@@ -299,6 +299,7 @@ struct ceph_mds_request {
 
 	struct page *r_locked_page;
 	int r_dir_caps;
+	int r_old_dir_caps;
 	int r_num_caps;
 	u32               r_readdir_offset;
 
