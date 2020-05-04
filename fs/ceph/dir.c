@@ -1008,6 +1008,75 @@ out:
 	return err;
 }
 
+enum ceph_link_type {
+	CEPH_LINK_CREATE = 0,
+	CEPH_LINK_UNLINK,
+	CEPH_LINK_REPLACE,
+};
+
+static int get_caps_for_async_link_op(struct inode *dir, struct dentry *dentry,
+				      enum ceph_link_type type)
+{
+	struct ceph_inode_info *ci = ceph_inode(dir);
+	struct ceph_dentry_info *di;
+	int got = 0, want = CEPH_CAP_FILE_EXCL;
+
+	switch (type) {
+		break;
+	case CEPH_LINK_UNLINK:
+		want |= CEPH_CAP_DIR_UNLINK;
+		break;
+	case CEPH_LINK_REPLACE:
+		if (d_really_is_positive(dentry))
+			want |= CEPH_CAP_DIR_UNLINK;
+		/* Fallthrough */
+	case CEPH_LINK_CREATE:
+		want |= CEPH_CAP_DIR_CREATE;
+	}
+
+	spin_lock(&ci->i_ceph_lock);
+	if ((__ceph_caps_issued(ci, NULL) & want) == want) {
+		ceph_take_cap_refs(ci, want, false);
+		got = want;
+	}
+	spin_unlock(&ci->i_ceph_lock);
+
+	/* If we didn't get anything, return 0 */
+	if (!got)
+		goto out;
+
+	/* We are holding Fx, which implies Fs caps. */
+	di = ceph_dentry(dentry);
+        spin_lock(&dentry->d_lock);
+	/* Ensure the dentry is up to date */
+	if (atomic_read(&ci->i_shared_gen) != di->lease_shared_gen) {
+		spin_unlock(&dentry->d_lock);
+		want = 0;
+		goto out;
+	}
+
+	switch (type) {
+	case CEPH_LINK_CREATE:
+		break;
+	case CEPH_LINK_REPLACE:
+		/* Only need to check primary link if it's positive */
+		if (!d_really_is_positive(dentry))
+			break;
+		/* Fallthrough */
+	case CEPH_LINK_UNLINK:
+		if (!(di->flags & CEPH_DENTRY_PRIMARY_LINK))
+			want = 0;
+		break;
+	}
+	spin_unlock(&dentry->d_lock);
+
+	if (want == got)
+		return got;
+out:
+	ceph_put_cap_refs(ci, got);
+	return 0;
+}
+
 static int ceph_link(struct dentry *old_dentry, struct inode *dir,
 		     struct dentry *dentry)
 {
@@ -1082,42 +1151,6 @@ out:
 	ceph_mdsc_release_dir_caps(req);
 }
 
-static int get_caps_for_async_unlink(struct inode *dir, struct dentry *dentry)
-{
-	struct ceph_inode_info *ci = ceph_inode(dir);
-	struct ceph_dentry_info *di;
-	int got = 0, want = CEPH_CAP_FILE_EXCL | CEPH_CAP_DIR_UNLINK;
-
-	spin_lock(&ci->i_ceph_lock);
-	if ((__ceph_caps_issued(ci, NULL) & want) == want) {
-		ceph_take_cap_refs(ci, want, false);
-		got = want;
-	}
-	spin_unlock(&ci->i_ceph_lock);
-
-	/* If we didn't get anything, return 0 */
-	if (!got)
-		return 0;
-
-        spin_lock(&dentry->d_lock);
-        di = ceph_dentry(dentry);
-	/*
-	 * - We are holding Fx, which implies Fs caps.
-	 * - Only support async unlink for primary linkage
-	 */
-	if (atomic_read(&ci->i_shared_gen) != di->lease_shared_gen ||
-	    !(di->flags & CEPH_DENTRY_PRIMARY_LINK))
-		want = 0;
-        spin_unlock(&dentry->d_lock);
-
-	/* Do we still want what we've got? */
-	if (want == got)
-		return got;
-
-	ceph_put_cap_refs(ci, got);
-	return 0;
-}
-
 /*
  * rmdir and unlink are differ only by the metadata op code
  */
@@ -1156,7 +1189,8 @@ retry:
 	req->r_inode_drop = ceph_drop_caps_for_unlink(inode);
 
 	if (try_async && op == CEPH_MDS_OP_UNLINK &&
-	    (req->r_dir_caps = get_caps_for_async_unlink(dir, dentry))) {
+	    (req->r_dir_caps = get_caps_for_async_link_op(dir, dentry,
+							  CEPH_LINK_UNLINK))) {
 		dout("async unlink on %lu/%.*s caps=%s", dir->i_ino,
 		     dentry->d_name.len, dentry->d_name.name,
 		     ceph_cap_string(req->r_dir_caps));
