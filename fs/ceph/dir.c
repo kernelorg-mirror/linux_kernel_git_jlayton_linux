@@ -1077,12 +1077,45 @@ out:
 	return 0;
 }
 
+static void ceph_async_link_cb(struct ceph_mds_client *mdsc,
+			       struct ceph_mds_request *req)
+{
+	int result = req->r_err ? req->r_err :
+			le32_to_cpu(req->r_reply_info.head->result);
+
+	/* If op failed, mark everyone involved for errors */
+	if (result && result != -EJUKEBOX) {
+		int pathlen = 0;
+		u64 base = 0;
+		char *path = ceph_mdsc_build_path(req->r_dentry, &pathlen,
+						  &base, 0);
+
+		/* mark error on parent + clear complete */
+		mapping_set_error(req->r_parent->i_mapping, result);
+		ceph_dir_clear_complete(req->r_parent);
+
+		/* drop the dentry -- we don't know its status */
+		if (!d_unhashed(req->r_dentry))
+			d_drop(req->r_dentry);
+
+		/* mark inode itself for an error (since metadata is bogus) */
+		mapping_set_error(d_inode(req->r_old_dentry)->i_mapping,
+				  result);
+
+		pr_warn("ceph: async link failure path=(%llx)%s result=%d!\n",
+			base, IS_ERR(path) ? "<<bad>>" : path, result);
+		ceph_mdsc_free_path(path, pathlen);
+	}
+	ceph_mdsc_release_dir_caps(req);
+}
+
 static int ceph_link(struct dentry *old_dentry, struct inode *dir,
 		     struct dentry *dentry)
 {
 	struct ceph_fs_client *fsc = ceph_sb_to_client(dir->i_sb);
 	struct ceph_mds_client *mdsc = fsc->mdsc;
 	struct ceph_mds_request *req;
+	bool try_async = ceph_test_mount_opt(fsc, ASYNC_DIROPS);
 	int err;
 
 	if (ceph_snap(dir) != CEPH_NOSNAP)
@@ -1090,6 +1123,7 @@ static int ceph_link(struct dentry *old_dentry, struct inode *dir,
 
 	dout("link in dir %p old_dentry %p dentry %p\n", dir,
 	     old_dentry, dentry);
+retry:
 	req = ceph_mdsc_create_request(mdsc, CEPH_MDS_OP_LINK, USE_AUTH_MDS);
 	if (IS_ERR(req)) {
 		d_drop(dentry);
@@ -1099,17 +1133,33 @@ static int ceph_link(struct dentry *old_dentry, struct inode *dir,
 	req->r_num_caps = 2;
 	req->r_old_dentry = dget(old_dentry);
 	req->r_parent = dir;
-	set_bit(CEPH_MDS_R_PARENT_LOCKED, &req->r_req_flags);
 	req->r_dentry_drop = CEPH_CAP_FILE_SHARED;
 	req->r_dentry_unless = CEPH_CAP_FILE_EXCL;
 	/* release LINK_SHARED on source inode (mds will lock it) */
 	req->r_old_inode_drop = CEPH_CAP_LINK_SHARED | CEPH_CAP_LINK_EXCL;
-	err = ceph_mdsc_do_request(mdsc, dir, req);
-	if (err) {
-		d_drop(dentry);
-	} else if (!req->r_reply_info.head->is_dentry) {
-		ihold(d_inode(old_dentry));
-		d_instantiate(dentry, d_inode(old_dentry));
+	if (try_async &&
+	    (req->r_dir_caps = get_caps_for_async_link_op(dir, dentry,
+							 CEPH_LINK_CREATE))) {
+		set_bit(CEPH_MDS_R_ASYNC, &req->r_req_flags);
+		req->r_callback = ceph_async_link_cb;
+		err = ceph_mdsc_submit_request(mdsc, dir, req);
+		if (!err) {
+			ihold(d_inode(old_dentry));
+			d_instantiate(dentry, d_inode(old_dentry));
+		} else if (err == -EJUKEBOX) {
+			try_async = false;
+			ceph_mdsc_put_request(req);
+			goto retry;
+		}
+	} else {
+		set_bit(CEPH_MDS_R_PARENT_LOCKED, &req->r_req_flags);
+		err = ceph_mdsc_do_request(mdsc, dir, req);
+		if (err) {
+			d_drop(dentry);
+		} else if (!req->r_reply_info.head->is_dentry) {
+			ihold(d_inode(old_dentry));
+			d_instantiate(dentry, d_inode(old_dentry));
+		}
 	}
 	ceph_mdsc_put_request(req);
 	return err;
