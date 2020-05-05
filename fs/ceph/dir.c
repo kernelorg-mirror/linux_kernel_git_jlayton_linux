@@ -1273,6 +1273,46 @@ out:
 	return err;
 }
 
+static void ceph_async_rename_cb(struct ceph_mds_client *mdsc,
+				 struct ceph_mds_request *req)
+{
+	int result = req->r_err ? req->r_err :
+			le32_to_cpu(req->r_reply_info.head->result);
+
+	/* If op failed, mark everyone involved for errors */
+	if (result && result != -EJUKEBOX) {
+		int oldpathlen = 0, newpathlen = 0;
+		u64 oldbase = 0, newbase = 0;
+		char *oldpath = ceph_mdsc_build_path(req->r_old_dentry,
+						     &oldpathlen, &oldbase, 0);
+		char *newpath = ceph_mdsc_build_path(req->r_dentry,
+						     &newpathlen, &newbase, 0);
+
+		/* mark error on parent + clear complete */
+		mapping_set_error(req->r_parent->i_mapping, result);
+		ceph_dir_clear_complete(req->r_parent);
+		mapping_set_error(req->r_old_dentry_dir->i_mapping, result);
+		ceph_dir_clear_complete(req->r_old_dentry_dir);
+
+		/* drop the dentries -- we don't know their status */
+		if (!d_unhashed(req->r_dentry))
+			d_drop(req->r_dentry);
+		if (!d_unhashed(req->r_old_dentry))
+			d_drop(req->r_old_dentry);
+
+		/* mark inode itself for an error (since metadata is bogus) */
+		mapping_set_error(req->r_old_inode->i_mapping, result);
+
+		pr_warn("ceph: async rename failure oldpath=(%llx)%s newpath=(%llx)%s result=%d!\n",
+			oldbase, IS_ERR(oldpath) ? "<<bad>>" : oldpath,
+			newbase, IS_ERR(newpath) ? "<<bad>>" : newpath,
+			result);
+		ceph_mdsc_free_path(oldpath, oldpathlen);
+		ceph_mdsc_free_path(newpath, newpathlen);
+	}
+	ceph_mdsc_release_dir_caps(req);
+}
+
 static int ceph_rename(struct inode *old_dir, struct dentry *old_dentry,
 		       struct inode *new_dir, struct dentry *new_dentry,
 		       unsigned int flags)
@@ -1280,6 +1320,7 @@ static int ceph_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct ceph_fs_client *fsc = ceph_sb_to_client(old_dir->i_sb);
 	struct ceph_mds_client *mdsc = fsc->mdsc;
 	struct ceph_mds_request *req;
+	bool try_async = ceph_test_mount_opt(fsc, ASYNC_DIROPS);
 	int op = CEPH_MDS_OP_RENAME;
 	int err;
 
@@ -1302,6 +1343,7 @@ static int ceph_rename(struct inode *old_dir, struct dentry *old_dentry,
 
 	dout("rename dir %p dentry %p to dir %p dentry %p\n",
 	     old_dir, old_dentry, new_dir, new_dentry);
+retry:
 	req = ceph_mdsc_create_request(mdsc, op, USE_AUTH_MDS);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
@@ -1311,7 +1353,6 @@ static int ceph_rename(struct inode *old_dir, struct dentry *old_dentry,
 	req->r_old_dentry = dget(old_dentry);
 	req->r_old_dentry_dir = old_dir;
 	req->r_parent = new_dir;
-	set_bit(CEPH_MDS_R_PARENT_LOCKED, &req->r_req_flags);
 	req->r_old_dentry_drop = CEPH_CAP_FILE_SHARED;
 	req->r_old_dentry_unless = CEPH_CAP_FILE_EXCL;
 	req->r_dentry_drop = CEPH_CAP_FILE_SHARED;
@@ -1322,14 +1363,46 @@ static int ceph_rename(struct inode *old_dir, struct dentry *old_dentry,
 		req->r_inode_drop =
 			ceph_drop_caps_for_unlink(d_inode(new_dentry));
 	}
-	err = ceph_mdsc_do_request(mdsc, old_dir, req);
-	if (!err && !req->r_reply_info.head->is_dentry) {
-		/*
-		 * Normally d_move() is done by fill_trace (called by
-		 * do_request, above).  If there is no trace, we need
-		 * to do it here.
-		 */
-		d_move(old_dentry, new_dentry);
+	if (try_async) {
+		req->r_dir_caps = get_caps_for_async_link_op(old_dir,
+							     old_dentry,
+							     CEPH_LINK_UNLINK);
+		if (req->r_dir_caps) {
+			req->r_old_dir_caps =
+				get_caps_for_async_link_op(new_dir, new_dentry,
+							   CEPH_LINK_REPLACE);
+			if (!req->r_old_dir_caps) {
+				ceph_mdsc_put_request(req);
+				try_async = false;
+				goto retry;
+			}
+		} else {
+			try_async = false;
+		}
+	}
+
+	if (try_async) {
+		set_bit(CEPH_MDS_R_ASYNC, &req->r_req_flags);
+		req->r_callback = ceph_async_rename_cb;
+		err = ceph_mdsc_submit_request(mdsc, old_dir, req);
+		if (!err) {
+			d_move(old_dentry, new_dentry);
+		} else if (err == -EJUKEBOX) {
+			ceph_mdsc_put_request(req);
+			try_async = false;
+			goto retry;
+		}
+	} else {
+		set_bit(CEPH_MDS_R_PARENT_LOCKED, &req->r_req_flags);
+		err = ceph_mdsc_do_request(mdsc, old_dir, req);
+		if (!err && !req->r_reply_info.head->is_dentry) {
+			/*
+			 * Normally d_move() is done by fill_trace (called by
+			 * do_request, above).  If there is no trace, we need
+			 * to do it here.
+			 */
+			d_move(old_dentry, new_dentry);
+		}
 	}
 	ceph_mdsc_put_request(req);
 	return err;
