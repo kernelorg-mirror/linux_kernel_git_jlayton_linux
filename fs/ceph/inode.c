@@ -622,6 +622,7 @@ int ceph_fill_file_size(struct inode *inode, int issued,
 		}
 		i_size_write(inode, size);
 		inode->i_blocks = calc_inode_blocks(size);
+		ceph_fscache_update_cookie(inode);
 		ci->i_reported_size = size;
 		if (truncate_seq != ci->i_truncate_seq) {
 			dout("truncate_seq %u -> %u\n",
@@ -654,10 +655,6 @@ int ceph_fill_file_size(struct inode *inode, int issued,
 		     truncate_size);
 		ci->i_truncate_size = truncate_size;
 	}
-
-	if (queue_trunc)
-		ceph_fscache_invalidate(inode);
-
 	return queue_trunc;
 }
 
@@ -926,6 +923,7 @@ int ceph_fill_inode(struct inode *inode, struct page *locked_page,
 		inode->i_op = &ceph_file_iops;
 		break;
 	case S_IFREG:
+		ceph_fscache_register_inode_cookie(inode);
 		inode->i_op = &ceph_file_iops;
 		inode->i_fop = &ceph_file_fops;
 		break;
@@ -1789,11 +1787,13 @@ bool ceph_inode_set_size(struct inode *inode, loff_t size)
 	spin_lock(&ci->i_ceph_lock);
 	dout("set_size %p %llu -> %llu\n", inode, inode->i_size, size);
 	i_size_write(inode, size);
+	ceph_fscache_update_cookie(inode);
 	inode->i_blocks = calc_inode_blocks(size);
 
 	ret = __ceph_should_report_size(ci);
 
 	spin_unlock(&ci->i_ceph_lock);
+
 	return ret;
 }
 
@@ -1865,6 +1865,7 @@ void ceph_queue_vmtruncate(struct inode *inode)
 	set_bit(CEPH_I_WORK_VMTRUNCATE, &ci->i_work_mask);
 
 	ihold(inode);
+	ceph_fscache_invalidate(inode, 0);
 	if (queue_work(ceph_inode_to_client(inode)->inode_wq,
 		       &ci->i_work)) {
 		dout("ceph_queue_vmtruncate %p\n", inode);
@@ -1974,6 +1975,10 @@ retry:
 	spin_unlock(&ci->i_ceph_lock);
 
 	truncate_pagecache(inode, to);
+	ceph_fscache_use_cookie(inode, true);
+	ceph_fscache_resize_cookie(ci, to);
+	ceph_fscache_unuse_cookie(inode, true);
+
 
 	spin_lock(&ci->i_ceph_lock);
 	if (to == ci->i_truncate_size) {
@@ -2135,6 +2140,7 @@ int __ceph_setattr(struct inode *inode, struct iattr *attr)
 		if ((issued & CEPH_CAP_FILE_EXCL) &&
 		    attr->ia_size > inode->i_size) {
 			i_size_write(inode, attr->ia_size);
+			ceph_fscache_update_cookie(inode);
 			inode->i_blocks = calc_inode_blocks(attr->ia_size);
 			ci->i_reported_size = attr->ia_size;
 			dirtied |= CEPH_CAP_FILE_EXCL;
