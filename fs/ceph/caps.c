@@ -235,7 +235,7 @@ int ceph_reserve_caps(struct ceph_mds_client *mdsc,
 		}
 
 		if (!trimmed) {
-			for (j = 0; j < mdsc->max_sessions; j++) {
+			for (j = 0; j < max_sessions(mdsc); j++) {
 				s = __ceph_lookup_mds_session(mdsc, j);
 				if (!s)
 					continue;
@@ -4242,15 +4242,17 @@ static void iterate_sessions(struct ceph_mds_client *mdsc,
 			     void (*cb)(struct ceph_mds_session *))
 {
 	int mds;
+	struct ceph_session_array *sa;
 
 	mutex_lock(&mdsc->mutex);
-	for (mds = 0; mds < mdsc->max_sessions; ++mds) {
-		struct ceph_mds_session *s;
+	sa = rcu_dereference_protected(mdsc->sessions, 1);
+	for (mds = 0; mds < max_sessions(mdsc); ++mds) {
+		struct ceph_mds_session *s = sa->csa_sessions[mds];
 
-		if (!mdsc->sessions[mds])
+		if (!s)
 			continue;
 
-		s = ceph_get_mds_session(mdsc->sessions[mds]);
+		s = ceph_get_mds_session(s);
 		if (!s)
 			continue;
 

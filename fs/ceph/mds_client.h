@@ -376,6 +376,12 @@ struct cap_wait {
 	int			want;
 };
 
+struct ceph_session_array {
+	struct rcu_head		csa_rcu;
+	int			csa_max_sessions;
+	struct ceph_mds_session	*csa_sessions[];
+};
+
 /*
  * mds client state
  */
@@ -389,9 +395,8 @@ struct ceph_mds_client {
 	struct list_head        waiting_for_map;
 	int 			mdsmap_err;
 
-	struct ceph_mds_session **sessions;    /* NULL for mds if no session */
+	struct ceph_session_array __rcu *sessions;    /* NULL for mds if no session */
 	atomic_t		num_sessions;
-	int                     max_sessions;  /* len of s_mds_sessions */
 	int                     stopping;      /* true if shutting down */
 
 	atomic64_t		quotarealms_count; /* # realms with quota */
@@ -474,6 +479,15 @@ struct ceph_mds_client {
 
 	char nodename[__NEW_UTS_LEN + 1];
 };
+
+static inline int max_sessions(struct ceph_mds_client *mdsc)
+{
+	struct ceph_session_array *csa = rcu_dereference(mdsc->sessions);
+
+	if (csa)
+		return csa->csa_max_sessions;
+	return 0;
+}
 
 extern const char *ceph_mds_op_name(int op);
 

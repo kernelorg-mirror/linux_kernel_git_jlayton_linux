@@ -226,7 +226,7 @@ static int caps_show(struct seq_file *s, void *p)
 	seq_printf(s, "-----------------------------------------------\n");
 
 	mutex_lock(&mdsc->mutex);
-	for (i = 0; i < mdsc->max_sessions; i++) {
+	for (i = 0; i < max_sessions(mdsc); i++) {
 		struct ceph_mds_session *session;
 
 		session = __ceph_lookup_mds_session(mdsc, i);
@@ -273,7 +273,7 @@ static int mds_sessions_show(struct seq_file *s, void *ptr)
 	seq_printf(s, "name \"%s\"\n", opt->name ? opt->name : "");
 
 	/* The list of MDS session rank+state */
-	for (mds = 0; mds < mdsc->max_sessions; mds++) {
+	for (mds = 0; mds < max_sessions(mdsc); mds++) {
 		struct ceph_mds_session *session =
 			__ceph_lookup_mds_session(mdsc, mds);
 		if (!session) {

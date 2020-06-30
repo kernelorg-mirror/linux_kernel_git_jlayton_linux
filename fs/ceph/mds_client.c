@@ -671,24 +671,30 @@ void ceph_put_mds_session(struct ceph_mds_session *s)
 struct ceph_mds_session *__ceph_lookup_mds_session(struct ceph_mds_client *mdsc,
 						   int mds)
 {
-	if (mds >= mdsc->max_sessions || !mdsc->sessions[mds])
+	struct ceph_session_array *sa = rcu_dereference(mdsc->sessions);
+
+	if (!sa)
 		return NULL;
-	return ceph_get_mds_session(mdsc->sessions[mds]);
+
+	if (mds >= sa->csa_max_sessions || !sa->csa_sessions[mds])
+		return NULL;
+
+	return ceph_get_mds_session(sa->csa_sessions[mds]);
 }
 
 static bool __have_session(struct ceph_mds_client *mdsc, int mds)
 {
-	if (mds >= mdsc->max_sessions || !mdsc->sessions[mds])
-		return false;
-	else
-		return true;
+	struct ceph_session_array *sa = rcu_dereference(mdsc->sessions);
+
+	return (sa && mds < sa->csa_max_sessions && sa->csa_sessions[mds]);
 }
 
 static int __verify_registered_session(struct ceph_mds_client *mdsc,
 				       struct ceph_mds_session *s)
 {
-	if (s->s_mds >= mdsc->max_sessions ||
-	    mdsc->sessions[s->s_mds] != s)
+	struct ceph_session_array *sa = rcu_dereference(mdsc->sessions);
+
+	if (!sa || s->s_mds >= sa->csa_max_sessions || sa->csa_sessions[s->s_mds] != s)
 		return -ENOENT;
 	return 0;
 }
@@ -701,6 +707,7 @@ static struct ceph_mds_session *register_session(struct ceph_mds_client *mdsc,
 						 int mds)
 {
 	struct ceph_mds_session *s;
+	struct ceph_session_array *sa;
 
 	if (mds >= mdsc->mdsmap->possible_max_rank)
 		return ERR_PTR(-EINVAL);
@@ -709,21 +716,23 @@ static struct ceph_mds_session *register_session(struct ceph_mds_client *mdsc,
 	if (!s)
 		return ERR_PTR(-ENOMEM);
 
-	if (mds >= mdsc->max_sessions) {
+	if (mds >= max_sessions(mdsc)) {
 		int newmax = 1 << get_count_order(mds + 1);
-		struct ceph_mds_session **sa;
+		struct ceph_session_array *oldsa;
 
 		dout("%s: realloc to %d\n", __func__, newmax);
-		sa = kcalloc(newmax, sizeof(void *), GFP_NOFS);
+		sa = kzalloc(struct_size(sa, csa_sessions, newmax), GFP_NOFS);
 		if (!sa)
 			goto fail_realloc;
-		if (mdsc->sessions) {
-			memcpy(sa, mdsc->sessions,
-			       mdsc->max_sessions * sizeof(void *));
-			kfree(mdsc->sessions);
-		}
-		mdsc->sessions = sa;
-		mdsc->max_sessions = newmax;
+		sa->csa_max_sessions = newmax;
+
+		oldsa = rcu_dereference_protected(mdsc->sessions, 1);
+		if (oldsa)
+			memcpy(sa->csa_sessions, oldsa->csa_sessions,
+			       max_sessions(mdsc) * sizeof(*oldsa->csa_sessions));
+		rcu_assign_pointer(mdsc->sessions, sa);
+		if (oldsa)
+			kfree_rcu(oldsa, csa_rcu);
 	}
 
 	dout("%s: mds%d\n", __func__, mds);
@@ -758,7 +767,8 @@ static struct ceph_mds_session *register_session(struct ceph_mds_client *mdsc,
 	INIT_LIST_HEAD(&s->s_cap_dirty);
 	INIT_LIST_HEAD(&s->s_cap_flushing);
 
-	mdsc->sessions[mds] = s;
+	sa = rcu_dereference_protected(mdsc->sessions, 1);
+	sa->csa_sessions[mds] = s;
 	atomic_inc(&mdsc->num_sessions);
 	refcount_inc(&s->s_ref);  /* one ref to sessions[], one to caller */
 
@@ -778,9 +788,11 @@ fail_realloc:
 static void __unregister_session(struct ceph_mds_client *mdsc,
 			       struct ceph_mds_session *s)
 {
+	struct ceph_session_array *sa = rcu_dereference_protected(mdsc->sessions, 1);
+
 	dout("__unregister_session mds%d %p\n", s->s_mds, s);
-	BUG_ON(mdsc->sessions[s->s_mds] != s);
-	mdsc->sessions[s->s_mds] = NULL;
+	BUG_ON(sa->csa_sessions[s->s_mds] != s);
+	sa->csa_sessions[s->s_mds] = NULL;
 	ceph_con_close(&s->s_con);
 	ceph_put_mds_session(s);
 	atomic_dec(&mdsc->num_sessions);
@@ -3992,10 +4004,12 @@ static void check_new_map(struct ceph_mds_client *mdsc,
 	dout("check_new_map new %u old %u\n",
 	     newmap->m_epoch, oldmap->m_epoch);
 
-	for (i = 0; i < oldmap->possible_max_rank && i < mdsc->max_sessions; i++) {
-		if (!mdsc->sessions[i])
+	for (i = 0; i < oldmap->possible_max_rank && i < max_sessions(mdsc); i++) {
+		struct ceph_session_array *sa = rcu_dereference_protected(mdsc->sessions, 1);
+
+		if (!sa->csa_sessions[i])
 			continue;
-		s = mdsc->sessions[i];
+		s = sa->csa_sessions[i];
 		oldstate = ceph_mdsmap_get_state(oldmap, i);
 		newstate = ceph_mdsmap_get_state(newmap, i);
 
@@ -4067,8 +4081,10 @@ static void check_new_map(struct ceph_mds_client *mdsc,
 		}
 	}
 
-	for (i = 0; i < newmap->possible_max_rank && i < mdsc->max_sessions; i++) {
-		s = mdsc->sessions[i];
+	for (i = 0; i < newmap->possible_max_rank && i < max_sessions(mdsc); i++) {
+		struct ceph_session_array *sa = rcu_dereference_protected(mdsc->sessions, 1);
+
+		s = sa->csa_sessions[i];
 		if (!s)
 			continue;
 		if (!ceph_mdsmap_is_laggy(newmap, i))
@@ -4252,7 +4268,7 @@ static void lock_unlock_sessions(struct ceph_mds_client *mdsc)
 	int i;
 
 	mutex_lock(&mdsc->mutex);
-	for (i = 0; i < mdsc->max_sessions; i++) {
+	for (i = 0; i < max_sessions(mdsc); i++) {
 		struct ceph_mds_session *s = __ceph_lookup_mds_session(mdsc, i);
 		if (!s)
 			continue;
@@ -4337,7 +4353,7 @@ static void delayed_work(struct work_struct *work)
 	if (renew_caps)
 		mdsc->last_renew_caps = jiffies;
 
-	for (i = 0; i < mdsc->max_sessions; i++) {
+	for (i = 0; i < max_sessions(mdsc); i++) {
 		struct ceph_mds_session *s = __ceph_lookup_mds_session(mdsc, i);
 		if (!s)
 			continue;
@@ -4397,7 +4413,6 @@ int ceph_mdsc_init(struct ceph_fs_client *fsc)
 	INIT_LIST_HEAD(&mdsc->waiting_for_map);
 	mdsc->sessions = NULL;
 	atomic_set(&mdsc->num_sessions, 0);
-	mdsc->max_sessions = 0;
 	mdsc->stopping = 0;
 	atomic64_set(&mdsc->quotarealms_count, 0);
 	mdsc->quotarealms_inodes = RB_ROOT;
@@ -4607,7 +4622,7 @@ void ceph_mdsc_close_sessions(struct ceph_mds_client *mdsc)
 
 	/* close sessions */
 	mutex_lock(&mdsc->mutex);
-	for (i = 0; i < mdsc->max_sessions; i++) {
+	for (i = 0; i < max_sessions(mdsc); i++) {
 		session = __ceph_lookup_mds_session(mdsc, i);
 		if (!session)
 			continue;
@@ -4628,9 +4643,11 @@ void ceph_mdsc_close_sessions(struct ceph_mds_client *mdsc)
 
 	/* tear down remaining sessions */
 	mutex_lock(&mdsc->mutex);
-	for (i = 0; i < mdsc->max_sessions; i++) {
-		if (mdsc->sessions[i]) {
-			session = ceph_get_mds_session(mdsc->sessions[i]);
+	for (i = 0; i < max_sessions(mdsc); i++) {
+		struct ceph_session_array *sa = rcu_dereference_protected(mdsc->sessions, 1);
+
+		if (sa->csa_sessions[i]) {
+			session = ceph_get_mds_session(sa->csa_sessions[i]);
 			__unregister_session(mdsc, session);
 			mutex_unlock(&mdsc->mutex);
 			mutex_lock(&session->s_mutex);
@@ -4660,7 +4677,7 @@ void ceph_mdsc_force_umount(struct ceph_mds_client *mdsc)
 	dout("force umount\n");
 
 	mutex_lock(&mdsc->mutex);
-	for (mds = 0; mds < mdsc->max_sessions; mds++) {
+	for (mds = 0; mds < max_sessions(mdsc); mds++) {
 		session = __ceph_lookup_mds_session(mdsc, mds);
 		if (!session)
 			continue;
@@ -4692,7 +4709,7 @@ static void ceph_mdsc_stop(struct ceph_mds_client *mdsc)
 	cancel_delayed_work_sync(&mdsc->delayed_work); /* cancel timer */
 	if (mdsc->mdsmap)
 		ceph_mdsmap_destroy(mdsc->mdsmap);
-	kfree(mdsc->sessions);
+	kfree_rcu(rcu_dereference(mdsc->sessions), csa_rcu);
 	ceph_caps_finalize(mdsc);
 	ceph_pool_perm_destroy(mdsc);
 }
