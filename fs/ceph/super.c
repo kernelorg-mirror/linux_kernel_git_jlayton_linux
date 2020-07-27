@@ -20,6 +20,7 @@
 #include "super.h"
 #include "mds_client.h"
 #include "cache.h"
+#include "crypto.h"
 
 #include <linux/ceph/ceph_features.h>
 #include <linux/ceph/decode.h>
@@ -983,6 +984,10 @@ static int ceph_set_super(struct super_block *s, struct fs_context *fc)
 	s->s_time_gran = 1;
 	s->s_time_min = 0;
 	s->s_time_max = U32_MAX;
+
+	ret = ceph_fscrypt_set_ops(s);
+	if (ret)
+		goto out;
 
 	ret = set_anon_super_fc(s, fc);
 	if (ret != 0)
