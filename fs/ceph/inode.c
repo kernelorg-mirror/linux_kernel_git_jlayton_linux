@@ -532,6 +532,8 @@ void ceph_free_inode(struct inode *inode)
 	struct ceph_inode_info *ci = ceph_inode(inode);
 
 	kfree(ci->i_symlink);
+	// FIXME: only call this once we have symlink support
+	// fscrypt_free_inode(inode);
 	kmem_cache_free(ceph_inode_cachep, ci);
 }
 
@@ -543,6 +545,7 @@ void ceph_evict_inode(struct inode *inode)
 
 	dout("evict_inode %p ino %llx.%llx\n", inode, ceph_vinop(inode));
 
+	fscrypt_put_encryption_info(inode);
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
 

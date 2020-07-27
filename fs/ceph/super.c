@@ -20,6 +20,7 @@
 #include "super.h"
 #include "mds_client.h"
 #include "cache.h"
+#include "crypto.h"
 
 #include <linux/ceph/ceph_features.h>
 #include <linux/ceph/decode.h>
@@ -44,6 +45,7 @@ static void ceph_put_super(struct super_block *s)
 	struct ceph_fs_client *fsc = ceph_sb_to_client(s);
 
 	dout("put_super\n");
+	fscrypt_free_dummy_context(&fsc->dummy_enc_ctx);
 	ceph_mdsc_close_sessions(fsc->mdsc);
 }
 
@@ -159,6 +161,7 @@ enum {
 	Opt_quotadf,
 	Opt_copyfrom,
 	Opt_wsync,
+	Opt_test_dummy_encryption,
 };
 
 enum ceph_recover_session_mode {
@@ -197,6 +200,8 @@ static const struct fs_parameter_spec ceph_mount_parameters[] = {
 	fsparam_u32	("rsize",			Opt_rsize),
 	fsparam_string	("snapdirname",			Opt_snapdirname),
 	fsparam_string	("source",			Opt_source),
+	fsparam_flag_no ("test_dummy_encryption",	Opt_test_dummy_encryption),
+	fsparam_string	("test_dummy_encryption",	Opt_test_dummy_encryption),
 	fsparam_u32	("wsize",			Opt_wsize),
 	fsparam_flag_no	("wsync",			Opt_wsync),
 	{}
@@ -455,6 +460,21 @@ static int ceph_parse_mount_param(struct fs_context *fc,
 		else
 			fsopt->flags |= CEPH_MOUNT_OPT_ASYNC_DIROPS;
 		break;
+	case Opt_test_dummy_encryption:
+		kfree(fsopt->test_dummy_encryption);
+		fsopt->test_dummy_encryption = NULL;
+		if (!result.negated) {
+#ifdef CONFIG_FS_ENCRYPTION
+			fsopt->test_dummy_encryption = param->string;
+			param->string = NULL;
+			fsopt->flags |= CEPH_MOUNT_OPT_TEST_DUMMY_ENC;
+#else
+			return warnfc(fc, "FS encryption not supported: test_dummy_encryption mount option ignored");
+#endif
+		} else {
+			fsopt->flags &= ~CEPH_MOUNT_OPT_TEST_DUMMY_ENC;
+		}
+		break;
 	default:
 		BUG();
 	}
@@ -474,6 +494,7 @@ static void destroy_mount_options(struct ceph_mount_options *args)
 	kfree(args->mds_namespace);
 	kfree(args->server_path);
 	kfree(args->fscache_uniq);
+	kfree(args->test_dummy_encryption);
 	kfree(args);
 }
 
@@ -580,6 +601,8 @@ static int ceph_show_options(struct seq_file *m, struct dentry *root)
 
 	if (fsopt->flags & CEPH_MOUNT_OPT_ASYNC_DIROPS)
 		seq_puts(m, ",nowsync");
+
+	fscrypt_show_test_dummy_encryption(m, ',', root->d_sb);
 
 	if (fsopt->wsize != CEPH_MAX_WRITE_SIZE)
 		seq_printf(m, ",wsize=%u", fsopt->wsize);
@@ -984,7 +1007,12 @@ static int ceph_set_super(struct super_block *s, struct fs_context *fc)
 	s->s_time_min = 0;
 	s->s_time_max = U32_MAX;
 
+	ret = ceph_fscrypt_set_ops(s);
+	if (ret)
+		goto out;
+
 	ret = set_anon_super_fc(s, fc);
+out:
 	if (ret != 0)
 		fsc->sb = NULL;
 	return ret;
@@ -1139,6 +1167,15 @@ static int ceph_reconfigure_fc(struct fs_context *fc)
 		ceph_set_mount_opt(fsc, ASYNC_DIROPS);
 	else
 		ceph_clear_mount_opt(fsc, ASYNC_DIROPS);
+
+	/* Don't allow test_dummy_encryption to change on remount */
+	if (fsopt->flags & CEPH_MOUNT_OPT_TEST_DUMMY_ENC) {
+		if (!ceph_test_mount_opt(fsc, TEST_DUMMY_ENC))
+			return -EEXIST;
+	} else {
+		if (ceph_test_mount_opt(fsc, TEST_DUMMY_ENC))
+			return -EEXIST;
+	}
 
 	sync_filesystem(fc->root->d_sb);
 	return 0;
