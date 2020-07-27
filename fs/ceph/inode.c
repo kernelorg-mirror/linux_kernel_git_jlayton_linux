@@ -543,6 +543,7 @@ void ceph_evict_inode(struct inode *inode)
 
 	dout("evict_inode %p ino %llx.%llx\n", inode, ceph_vinop(inode));
 
+	fscrypt_put_encryption_info(inode);
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
 
