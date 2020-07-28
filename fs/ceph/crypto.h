@@ -11,6 +11,9 @@
 #define	CEPH_XATTR_NAME_ENCRYPTION_CONTEXT	"encryption.ctx"
 
 #ifdef CONFIG_FS_ENCRYPTION
+struct ceph_fs_client;
+struct ceph_acl_sec_ctx;
+struct ceph_mds_request;
 
 #define CEPH_FSCRYPT_AUTH_VERSION	1
 struct ceph_fscrypt_auth {
@@ -19,9 +22,18 @@ struct ceph_fscrypt_auth {
 	u8	cfa_blob[FSCRYPT_SET_CONTEXT_MAX_SIZE];
 } __packed;
 
+static inline u32 ceph_fscrypt_auth_size(u32 ctxsize)
+{
+	return offsetof(struct ceph_fscrypt_auth, cfa_blob) + ctxsize;
+}
+
 void ceph_fscrypt_set_ops(struct super_block *sb);
 
 void ceph_fscrypt_free_dummy_policy(struct ceph_fs_client *fsc);
+
+int ceph_fscrypt_prepare_context(struct inode *dir, struct inode *inode,
+				 struct ceph_acl_sec_ctx *as);
+void ceph_fscrypt_as_ctx_to_req(struct ceph_mds_request *req, struct ceph_acl_sec_ctx *as);
 
 #else /* CONFIG_FS_ENCRYPTION */
 
@@ -30,6 +42,19 @@ static inline void ceph_fscrypt_set_ops(struct super_block *sb)
 }
 
 static inline void ceph_fscrypt_free_dummy_policy(struct ceph_fs_client *fsc)
+{
+}
+
+static inline int ceph_fscrypt_prepare_context(struct inode *dir, struct inode *inode,
+						struct ceph_acl_sec_ctx *as)
+{
+	if (IS_ENCRYPTED(dir))
+		return -EOPNOTSUPP;
+	return 0;
+}
+
+static inline void ceph_fscrypt_as_ctx_to_req(struct ceph_mds_request *req,
+						struct ceph_acl_sec_ctx *as_ctx)
 {
 }
 #endif /* CONFIG_FS_ENCRYPTION */
