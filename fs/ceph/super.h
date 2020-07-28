@@ -1004,6 +1004,9 @@ struct ceph_acl_sec_ctx {
 	void *sec_ctx;
 	u32 sec_ctxlen;
 #endif
+#ifdef CONFIG_FS_ENCRYPTION
+	u8	fscrypt[FSCRYPT_SET_CONTEXT_MAX_SIZE];
+#endif
 	struct ceph_pagelist *pagelist;
 };
 
