@@ -19,6 +19,7 @@
 #include "cache.h"
 #include "io.h"
 #include "metric.h"
+#include "crypto.h"
 
 static __le32 ceph_flags_sys2wire(u32 flags)
 {
@@ -684,6 +685,9 @@ int ceph_atomic_open(struct inode *dir, struct dentry *dentry,
 		if (err < 0)
 			return err;
 		err = ceph_security_init_secctx(dentry, mode, &as_ctx);
+		if (err < 0)
+			goto out_ctx;
+		err = ceph_fscrypt_new_context(dir, &as_ctx);
 		if (err < 0)
 			goto out_ctx;
 	} else if (!d_in_lookup(dentry)) {

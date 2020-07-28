@@ -9,6 +9,7 @@
 
 #include "super.h"
 #include "mds_client.h"
+#include "crypto.h"
 
 /*
  * Directory operations: readdir, lookup, create, link, unlink,
@@ -848,6 +849,12 @@ static int ceph_mknod(struct inode *dir, struct dentry *dentry,
 	if (err < 0)
 		goto out;
 
+	if (S_ISREG(mode)) {
+		err = ceph_fscrypt_new_context(dir, &as_ctx);
+		if (err < 0)
+			goto out;
+	}
+
 	dout("mknod in dir %p dentry %p mode 0%ho rdev %d\n",
 	     dir, dentry, mode, rdev);
 	req = ceph_mdsc_create_request(mdsc, CEPH_MDS_OP_MKNOD, USE_AUTH_MDS);
@@ -904,6 +911,10 @@ static int ceph_symlink(struct inode *dir, struct dentry *dentry,
 	}
 
 	err = ceph_security_init_secctx(dentry, S_IFLNK | 0777, &as_ctx);
+	if (err < 0)
+		goto out;
+
+	err = ceph_fscrypt_new_context(dir, &as_ctx);
 	if (err < 0)
 		goto out;
 
@@ -972,6 +983,10 @@ static int ceph_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	if (err < 0)
 		goto out;
 	err = ceph_security_init_secctx(dentry, mode, &as_ctx);
+	if (err < 0)
+		goto out;
+
+	err = ceph_fscrypt_new_context(dir, &as_ctx);
 	if (err < 0)
 		goto out;
 
