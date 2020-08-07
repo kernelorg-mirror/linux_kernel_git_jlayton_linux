@@ -1701,6 +1701,12 @@ static int ceph_d_revalidate(struct dentry *dentry, unsigned int flags)
 	dout("d_revalidate %p '%pd' inode %p offset 0x%llx\n", dentry,
 	     dentry, inode, ceph_dentry(dentry)->offset);
 
+	if (IS_ENCRYPTED(dir)) {
+		valid = fscrypt_d_revalidate(dentry, flags);
+		if (valid <= 0)
+			return valid;
+	}
+
 	mdsc = ceph_sb_to_client(dir->i_sb)->mdsc;
 
 	/* always trust cached snapped dentries, snapdir dentry */
