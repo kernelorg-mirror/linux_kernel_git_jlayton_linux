@@ -684,3 +684,6 @@ config GENERIC_LIB_UCMPDI2
 config PLDMFW
 	bool
 	default n
+
+config BASE64
+	tristate
