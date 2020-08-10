@@ -2,6 +2,7 @@
 #include <linux/ceph/ceph_debug.h>
 #include <linux/xattr.h>
 #include <linux/fscrypt.h>
+#include <linux/base64.h>
 
 #include "super.h"
 #include "crypto.h"
@@ -120,5 +121,51 @@ int ceph_fscrypt_new_context(struct inode *parent, struct ceph_acl_sec_ctx *as)
 out:
 	if (pagelist && !as->pagelist)
 		ceph_pagelist_release(pagelist);
+	return ret;
+}
+
+int ceph_fname_to_usr(struct inode *parent, char *name, u32 len,
+			struct fscrypt_str *tname, struct fscrypt_str *oname)
+{
+	int ret, declen;
+	u32 save_len;
+	struct fscrypt_str myname = FSTR_INIT(NULL, 0);
+
+	if (!IS_ENCRYPTED(parent)) {
+		oname->name = name;
+		oname->len = len;
+		return 0;
+	}
+
+	ret = fscrypt_get_encryption_info(parent);
+	if (ret)
+		return ret;
+
+	if (tname) {
+		save_len = tname->len;
+	} else {
+		int err;
+
+		save_len = 0;
+		err = fscrypt_fname_alloc_buffer(NAME_MAX, &myname);
+		if (err)
+			return err;
+		tname = &myname;
+	}
+
+	declen = base64_decode(name, len, tname->name);
+	if (declen < 0 || declen > NAME_MAX) {
+		ret = -EIO;
+		goto out;
+	}
+
+	tname->len = declen;
+
+	ret = fscrypt_fname_disk_to_usr(parent, 0, 0, tname, oname);
+
+	if (save_len)
+		tname->len = save_len;
+out:
+	fscrypt_fname_free_buffer(&myname);
 	return ret;
 }
