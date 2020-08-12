@@ -567,7 +567,7 @@ int fscrypt_get_encryption_info(struct inode *inode)
 		const union fscrypt_context *dummy_ctx =
 			fscrypt_get_dummy_context(inode->i_sb);
 
-		if (IS_ENCRYPTED(inode) || !dummy_ctx) {
+		if (!dummy_ctx) {
 			fscrypt_warn(inode,
 				     "Error %d getting encryption context",
 				     res);
