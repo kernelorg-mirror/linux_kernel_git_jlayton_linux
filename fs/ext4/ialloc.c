@@ -763,13 +763,12 @@ static int ext4_xattr_credits_for_new_inode(struct inode *dir, mode_t mode,
 	}
 #endif
 
-#ifdef CONFIG_SECURITY
-	{
+	if (IS_ENABLED(CONFIG_SECURITY)) {
 		int num_security_xattrs = 1;
 
-#ifdef CONFIG_INTEGRITY
-		num_security_xattrs++;
-#endif
+		if (IS_ENABLED(CONFIG_INTEGRITY))
+			num_security_xattrs++;
+
 		/*
 		 * We assume that security xattrs are never more than 1k.
 		 * In practice they are under 128 bytes.
@@ -779,7 +778,7 @@ static int ext4_xattr_credits_for_new_inode(struct inode *dir, mode_t mode,
 						 NULL /* block_bh */, 1024,
 						 true /* is_create */);
 	}
-#endif
+
 	if (encrypt)
 		nblocks += __ext4_xattr_set_credits(sb,
 						    NULL /* inode */,
