@@ -477,7 +477,7 @@ fscrypt_setup_encryption_info(struct inode *inode,
 	struct key *master_key = NULL;
 	int res;
 
-	crypt_info = kmem_cache_zalloc(fscrypt_info_cachep, GFP_NOFS);
+	crypt_info = kmem_cache_zalloc(fscrypt_info_cachep, GFP_KERNEL);
 	if (!crypt_info)
 		return -ENOMEM;
 
