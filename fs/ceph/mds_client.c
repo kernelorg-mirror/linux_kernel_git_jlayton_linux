@@ -820,6 +820,7 @@ void ceph_mdsc_release_request(struct kref *kref)
 		ceph_async_iput(req->r_parent);
 	}
 	ceph_async_iput(req->r_target_inode);
+	ceph_async_iput(req->r_new_inode);
 	if (req->r_dentry)
 		dput(req->r_dentry);
 	if (req->r_old_dentry)
