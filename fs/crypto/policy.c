@@ -192,10 +192,15 @@ static bool fscrypt_supported_v2_policy(const struct fscrypt_policy_v2 *policy,
 					  32, 32))
 		return false;
 
+	/*
+	 * IV_INO_LBLK_32 hashes the inode number, so in principle it can
+	 * support any ino_bits.  However, currently the inode number is gotten
+	 * from inode::i_ino which is 'unsigned long'.  So for now the
+	 * implementation limit is 32 bits.
+	 */
 	if ((policy->flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) &&
-	    /* This uses hashed inode numbers, so ino_bits doesn't matter. */
 	    !supported_iv_ino_lblk_policy(policy, inode, "IV_INO_LBLK_32",
-					  INT_MAX, 32))
+					  32, 32))
 		return false;
 
 	if (memchr_inv(policy->__reserved, 0, sizeof(policy->__reserved))) {
@@ -235,14 +240,17 @@ bool fscrypt_supported_policy(const union fscrypt_policy *policy_u,
  *				       an fscrypt_policy
  * @ctx_u: output context
  * @policy_u: input policy
+ * @nonce: nonce to use
  *
  * Create an fscrypt_context for an inode that is being assigned the given
- * encryption policy.  A new nonce is randomly generated.
+ * encryption policy.  @nonce must be a new random nonce.
  *
  * Return: the size of the new context in bytes.
  */
-static int fscrypt_new_context_from_policy(union fscrypt_context *ctx_u,
-					   const union fscrypt_policy *policy_u)
+static int
+fscrypt_new_context_from_policy(union fscrypt_context *ctx_u,
+				const union fscrypt_policy *policy_u,
+				const u8 nonce[FSCRYPT_FILE_NONCE_SIZE])
 {
 	memset(ctx_u, 0, sizeof(*ctx_u));
 
@@ -260,7 +268,7 @@ static int fscrypt_new_context_from_policy(union fscrypt_context *ctx_u,
 		memcpy(ctx->master_key_descriptor,
 		       policy->master_key_descriptor,
 		       sizeof(ctx->master_key_descriptor));
-		get_random_bytes(ctx->nonce, sizeof(ctx->nonce));
+		memcpy(ctx->nonce, nonce, FSCRYPT_FILE_NONCE_SIZE);
 		return sizeof(*ctx);
 	}
 	case FSCRYPT_POLICY_V2: {
@@ -276,7 +284,7 @@ static int fscrypt_new_context_from_policy(union fscrypt_context *ctx_u,
 		memcpy(ctx->master_key_identifier,
 		       policy->master_key_identifier,
 		       sizeof(ctx->master_key_identifier));
-		get_random_bytes(ctx->nonce, sizeof(ctx->nonce));
+		memcpy(ctx->nonce, nonce, FSCRYPT_FILE_NONCE_SIZE);
 		return sizeof(*ctx);
 	}
 	}
@@ -372,6 +380,7 @@ static int fscrypt_get_policy(struct inode *inode, union fscrypt_policy *policy)
 static int set_encryption_policy(struct inode *inode,
 				 const union fscrypt_policy *policy)
 {
+	u8 nonce[FSCRYPT_FILE_NONCE_SIZE];
 	union fscrypt_context ctx;
 	int ctxsize;
 	int err;
@@ -409,7 +418,8 @@ static int set_encryption_policy(struct inode *inode,
 		return -EINVAL;
 	}
 
-	ctxsize = fscrypt_new_context_from_policy(&ctx, policy);
+	get_random_bytes(nonce, FSCRYPT_FILE_NONCE_SIZE);
+	ctxsize = fscrypt_new_context_from_policy(&ctx, policy, nonce);
 
 	return inode->i_sb->s_cop->set_context(inode, &ctx, ctxsize, NULL);
 }
@@ -621,39 +631,44 @@ int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
 EXPORT_SYMBOL(fscrypt_has_permitted_context);
 
 /**
- * fscrypt_inherit_context() - Sets a child context from its parent
- * @parent: Parent inode from which the context is inherited.
- * @child:  Child inode that inherits the context from @parent.
- * @fs_data:  private data given by FS.
- * @preload:  preload child i_crypt_info if true
+ * fscrypt_set_context() - Set the fscrypt context of a new inode
+ * @inode: A new inode
+ * @fs_data: private data given by FS and passed to ->set_context()
+ *
+ * This should be called after fscrypt_prepare_new_inode(), generally during a
+ * filesystem transaction.  Everything here must be %GFP_NOFS-safe.
  *
  * Return: 0 on success, -errno on failure
  */
-int fscrypt_inherit_context(struct inode *parent, struct inode *child,
-						void *fs_data, bool preload)
+int fscrypt_set_context(struct inode *inode, void *fs_data)
 {
+	struct fscrypt_info *ci = inode->i_crypt_info;
 	union fscrypt_context ctx;
 	int ctxsize;
-	struct fscrypt_info *ci;
-	int res;
 
-	res = fscrypt_get_encryption_info(parent);
-	if (res < 0)
-		return res;
-
-	ci = fscrypt_get_info(parent);
-	if (ci == NULL)
+	/* fscrypt_prepare_new_inode() should have set up the key already. */
+	if (WARN_ON_ONCE(!ci))
 		return -ENOKEY;
 
-	ctxsize = fscrypt_new_context_from_policy(&ctx, &ci->ci_policy);
+	/*
+	 * This may be the first time the inode number is available, so do any
+	 * delayed key setup that requires the inode number.
+	 */
+	if (ci->ci_policy.version == FSCRYPT_POLICY_V2 &&
+	    (ci->ci_policy.v2.flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32)) {
+		const struct fscrypt_master_key *mk =
+			ci->ci_master_key->payload.data[0];
+
+		fscrypt_hash_inode_number(ci, mk);
+	}
+
+	ctxsize = fscrypt_new_context_from_policy(&ctx, &ci->ci_policy,
+						  ci->ci_nonce);
 
 	BUILD_BUG_ON(sizeof(ctx) != FSCRYPT_SET_CONTEXT_MAX_SIZE);
-	res = parent->i_sb->s_cop->set_context(child, &ctx, ctxsize, fs_data);
-	if (res)
-		return res;
-	return preload ? fscrypt_get_encryption_info(child): 0;
+	return inode->i_sb->s_cop->set_context(inode, &ctx, ctxsize, fs_data);
 }
-EXPORT_SYMBOL(fscrypt_inherit_context);
+EXPORT_SYMBOL_GPL(fscrypt_set_context);
 
 /**
  * fscrypt_set_test_dummy_encryption() - handle '-o test_dummy_encryption'

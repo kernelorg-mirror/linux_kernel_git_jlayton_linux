@@ -10,6 +10,7 @@
 
 #include <crypto/skcipher.h>
 #include <linux/key.h>
+#include <linux/random.h>
 
 #include "fscrypt_private.h"
 
@@ -222,6 +223,16 @@ int fscrypt_derive_dirhash_key(struct fscrypt_info *ci,
 	return 0;
 }
 
+void fscrypt_hash_inode_number(struct fscrypt_info *ci,
+			       const struct fscrypt_master_key *mk)
+{
+	WARN_ON(ci->ci_inode->i_ino == 0);
+	WARN_ON(!mk->mk_ino_hash_key_initialized);
+
+	ci->ci_hashed_ino = (u32)siphash_1u64(ci->ci_inode->i_ino,
+					      &mk->mk_ino_hash_key);
+}
+
 static int fscrypt_setup_iv_ino_lblk_32_key(struct fscrypt_info *ci,
 					    struct fscrypt_master_key *mk)
 {
@@ -254,8 +265,10 @@ unlock:
 			return err;
 	}
 
-	ci->ci_hashed_ino = (u32)siphash_1u64(ci->ci_inode->i_ino,
-					      &mk->mk_ino_hash_key);
+	if (ci->ci_inode->i_ino == 0)
+		WARN_ON(!(ci->ci_inode->i_state & I_NEW));
+	else
+		fscrypt_hash_inode_number(ci, mk);
 	return 0;
 }
 
@@ -454,57 +467,23 @@ static void put_crypt_info(struct fscrypt_info *ci)
 	kmem_cache_free(fscrypt_info_cachep, ci);
 }
 
-int fscrypt_get_encryption_info(struct inode *inode)
+static int
+fscrypt_setup_encryption_info(struct inode *inode,
+			      const union fscrypt_policy *policy,
+			      const u8 nonce[FSCRYPT_FILE_NONCE_SIZE])
 {
 	struct fscrypt_info *crypt_info;
-	union fscrypt_context ctx;
 	struct fscrypt_mode *mode;
 	struct key *master_key = NULL;
 	int res;
 
-	if (fscrypt_has_encryption_key(inode))
-		return 0;
-
-	res = fscrypt_initialize(inode->i_sb->s_cop->flags);
-	if (res)
-		return res;
-
-	res = inode->i_sb->s_cop->get_context(inode, &ctx, sizeof(ctx));
-	if (res < 0) {
-		const union fscrypt_context *dummy_ctx =
-			fscrypt_get_dummy_context(inode->i_sb);
-
-		if (IS_ENCRYPTED(inode) || !dummy_ctx) {
-			fscrypt_warn(inode,
-				     "Error %d getting encryption context",
-				     res);
-			return res;
-		}
-		/* Fake up a context for an unencrypted directory */
-		res = fscrypt_context_size(dummy_ctx);
-		memcpy(&ctx, dummy_ctx, res);
-	}
-
-	crypt_info = kmem_cache_zalloc(fscrypt_info_cachep, GFP_NOFS);
+	crypt_info = kmem_cache_zalloc(fscrypt_info_cachep, GFP_KERNEL);
 	if (!crypt_info)
 		return -ENOMEM;
 
 	crypt_info->ci_inode = inode;
-
-	res = fscrypt_policy_from_context(&crypt_info->ci_policy, &ctx, res);
-	if (res) {
-		fscrypt_warn(inode,
-			     "Unrecognized or corrupt encryption context");
-		goto out;
-	}
-
-	memcpy(crypt_info->ci_nonce, fscrypt_context_nonce(&ctx),
-	       FSCRYPT_FILE_NONCE_SIZE);
-
-	if (!fscrypt_supported_policy(&crypt_info->ci_policy, inode)) {
-		res = -EINVAL;
-		goto out;
-	}
+	crypt_info->ci_policy = *policy;
+	memcpy(crypt_info->ci_nonce, nonce, FSCRYPT_FILE_NONCE_SIZE);
 
 	mode = select_encryption_mode(&crypt_info->ci_policy, inode);
 	if (IS_ERR(mode)) {
@@ -555,7 +534,132 @@ out:
 	put_crypt_info(crypt_info);
 	return res;
 }
+
+/**
+ * fscrypt_get_encryption_info() - set up an inode's encryption key
+ * @inode: the inode to set up the key for.  Must either be encrypted, or be an
+ *	   unencrypted directory with '-o test_dummy_encryption'.
+ *
+ * Create ->i_crypt_info, if it's not already set.
+ *
+ * Note: unless ->i_crypt_info is already set, this isn't %GFP_NOFS-safe.  So
+ * generally this shouldn't be called from within a filesystem transaction.
+ *
+ * Return: 0 if ->i_crypt_info was set or was already set, *or* if the
+ *	   encryption key is unavailable.  (Use fscrypt_has_encryption_key() to
+ *	   distinguish these cases.)  Also can return another -errno code.
+ */
+int fscrypt_get_encryption_info(struct inode *inode)
+{
+	int res;
+	union fscrypt_context ctx;
+	union fscrypt_policy policy;
+
+	if (fscrypt_has_encryption_key(inode))
+		return 0;
+
+	res = fscrypt_initialize(inode->i_sb->s_cop->flags);
+	if (res)
+		return res;
+
+	res = inode->i_sb->s_cop->get_context(inode, &ctx, sizeof(ctx));
+	if (res < 0) {
+		const union fscrypt_context *dummy_ctx =
+			fscrypt_get_dummy_context(inode->i_sb);
+
+		if (IS_ENCRYPTED(inode) || !dummy_ctx) {
+			fscrypt_warn(inode,
+				     "Error %d getting encryption context",
+				     res);
+			return res;
+		}
+		/* Fake up a context for an unencrypted directory */
+		res = fscrypt_context_size(dummy_ctx);
+		memcpy(&ctx, dummy_ctx, res);
+	}
+
+	res = fscrypt_policy_from_context(&policy, &ctx, res);
+	if (res) {
+		fscrypt_warn(inode,
+			     "Unrecognized or corrupt encryption context");
+		return res;
+	}
+
+	if (!fscrypt_supported_policy(&policy, inode))
+		return -EINVAL;
+
+	return fscrypt_setup_encryption_info(inode, &policy,
+					     fscrypt_context_nonce(&ctx));
+}
 EXPORT_SYMBOL(fscrypt_get_encryption_info);
+
+/**
+ * fscrypt_prepare_new_inode() - prepare to create a new inode in a directory
+ * @dir: a possibly-encrypted directory
+ * @inode: the inode that is being created.  ->i_mode must be set already.
+ *	   ->i_ino does *not* need to be set yet.
+ * @encrypt_ret: (output) set to true if the new inode will be encrypted.
+ *
+ * Prepares to create a new inode in a directory.  If either the inode or its
+ * filename will be encrypted, this sets up the directory's
+ * ->i_crypt_info.  Additionally, if the inode will be encrypted, this sets up
+ * its ->i_crypt_info and sets *encrypt_ret to true.
+ *
+ * Note that the new inode's ->i_crypt_info *usually* isn't actually needed
+ * right away.  However, symlinks do need it.
+ *
+ * This isn't %GFP_NOFS-safe, and therefore it should be called before starting
+ * any filesystem transaction to create the inode.  For this reason, ->i_ino
+ * isn't required to be set yet, as the filesystem may not have set it yet.
+ *
+ * This doesn't actually store the new inode's encryption context to disk.
+ * That still needs to be done later by calling fscrypt_set_context().
+ *
+ * Return: 0 on success, -ENOKEY if the directory's encryption key is missing,
+ *	   or another -errno code
+ */
+int fscrypt_prepare_new_inode(struct inode *dir, struct inode *inode,
+			      bool *encrypt_ret)
+{
+	int err;
+	u8 nonce[FSCRYPT_FILE_NONCE_SIZE];
+
+	/*
+	 * If the filesystem is mounted with '-o test_dummy_encryption', files
+	 * created in unencrypted directories are automatically encrypted.  For
+	 * that case, we just need to treat the directory as encrypted here.
+	 */
+
+	if (!IS_ENCRYPTED(dir) && fscrypt_get_dummy_context(dir->i_sb) == NULL)
+		return 0;
+
+	err = fscrypt_get_encryption_info(dir);
+	if (err)
+		return err;
+	if (!fscrypt_has_encryption_key(dir))
+		return -ENOKEY;
+
+	if (WARN_ON_ONCE(inode->i_mode == 0))
+		return -EINVAL;
+
+	/*
+	 * Only regular files, directories, and symlinks are encrypted.
+	 * Special files like device nodes and named pipes aren't.
+	 */
+	if (!S_ISREG(inode->i_mode) &&
+	    !S_ISDIR(inode->i_mode) &&
+	    !S_ISLNK(inode->i_mode))
+		return 0;
+
+	*encrypt_ret = true;
+
+	get_random_bytes(nonce, FSCRYPT_FILE_NONCE_SIZE);
+
+	return fscrypt_setup_encryption_info(inode,
+					     &dir->i_crypt_info->ci_policy,
+					     nonce);
+}
+EXPORT_SYMBOL_GPL(fscrypt_prepare_new_inode);
 
 /**
  * fscrypt_put_encryption_info() - free most of an inode's fscrypt data
