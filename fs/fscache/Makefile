@@ -3,19 +3,24 @@
 # Makefile for general filesystem caching code
 #
 
-fscache-y := \
+ifeq ($(CONFIG_FSCACHE),y)
+fscache-$(CONFIG_FSCACHE) := \
 	cache.o \
 	cookie.o \
+	dispatcher.o \
 	fsdef.o \
+	io.o \
 	main.o \
 	netfs.o \
-	object.o \
-	operation.o \
-	page.o
+	obj.o \
+	object_bits.o
 
 fscache-$(CONFIG_PROC_FS) += proc.o
 fscache-$(CONFIG_FSCACHE_STATS) += stats.o
 fscache-$(CONFIG_FSCACHE_HISTOGRAM) += histogram.o
 fscache-$(CONFIG_FSCACHE_OBJECT_LIST) += object-list.o
+endif
 
-obj-$(CONFIG_FSCACHE) := fscache.o
+fscache-$(CONFIG_FSCACHE_READ_HELPER) += read_helper.o
+
+obj-$(CONFIG_FSCACHE_SERVICES) := fscache.o
