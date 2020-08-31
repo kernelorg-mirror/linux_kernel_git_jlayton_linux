@@ -5,7 +5,7 @@
  * Written by David Howells (dhowells@redhat.com)
  */
 
-#define FSCACHE_DEBUG_LEVEL OPERATION
+#define FSCACHE_DEBUG_LEVEL CACHE
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -16,10 +16,12 @@
  */
 int __init fscache_proc_init(void)
 {
-	_enter("");
-
 	if (!proc_mkdir("fs/fscache", NULL))
 		goto error_dir;
+
+	if (!proc_create_seq("fs/fscache/cookies", S_IFREG | 0444, NULL,
+			     &fscache_cookies_seq_ops))
+		goto error_cookies;
 
 #ifdef CONFIG_FSCACHE_STATS
 	if (!proc_create_single("fs/fscache/stats", S_IFREG | 0444, NULL,
@@ -39,7 +41,6 @@ int __init fscache_proc_init(void)
 		goto error_objects;
 #endif
 
-	_leave(" = 0");
 	return 0;
 
 #ifdef CONFIG_FSCACHE_OBJECT_LIST
@@ -53,9 +54,10 @@ error_histogram:
 	remove_proc_entry("fs/fscache/stats", NULL);
 error_stats:
 #endif
+	remove_proc_entry("fs/fscache/cookies", NULL);
+error_cookies:
 	remove_proc_entry("fs/fscache", NULL);
 error_dir:
-	_leave(" = -ENOMEM");
 	return -ENOMEM;
 }
 
@@ -73,5 +75,6 @@ void fscache_proc_cleanup(void)
 #ifdef CONFIG_FSCACHE_STATS
 	remove_proc_entry("fs/fscache/stats", NULL);
 #endif
+	remove_proc_entry("fs/fscache/cookies", NULL);
 	remove_proc_entry("fs/fscache", NULL);
 }
