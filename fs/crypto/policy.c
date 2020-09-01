@@ -671,6 +671,26 @@ int fscrypt_set_context(struct inode *inode, void *fs_data)
 EXPORT_SYMBOL_GPL(fscrypt_set_context);
 
 /**
+ * fscrypt_context_from_inode() - fetch the encryption context out of in-core inode
+ * @ctx: where context should be written
+ * @inode: inode from which to fetch context
+ *
+ * Given an in-core prepared, but not-necessarily fully-instantiated inode,
+ * generate an encryption context from its policy and write it to ctx.
+ *
+ * Returns size of the context.
+ */
+int fscrypt_new_context_from_inode(union fscrypt_context *ctx, struct inode *inode)
+{
+	struct fscrypt_info *ci = inode->i_crypt_info;
+
+	BUILD_BUG_ON(sizeof(*ctx) != FSCRYPT_SET_CONTEXT_MAX_SIZE);
+
+	return fscrypt_new_context_from_policy(ctx, &ci->ci_policy, ci->ci_nonce);
+}
+EXPORT_SYMBOL_GPL(fscrypt_new_context_from_inode);
+
+/**
  * fscrypt_set_test_dummy_encryption() - handle '-o test_dummy_encryption'
  * @sb: the filesystem on which test_dummy_encryption is being specified
  * @arg: the argument to the test_dummy_encryption option.

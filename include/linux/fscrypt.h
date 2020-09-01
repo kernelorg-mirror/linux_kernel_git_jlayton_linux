@@ -157,6 +157,7 @@ int fscrypt_ioctl_get_policy_ex(struct file *filp, void __user *arg);
 int fscrypt_ioctl_get_nonce(struct file *filp, void __user *arg);
 int fscrypt_has_permitted_context(struct inode *parent, struct inode *child);
 int fscrypt_set_context(struct inode *inode, void *fs_data);
+int fscrypt_new_context_from_inode(union fscrypt_context *ctx, struct inode *inode);
 
 struct fscrypt_dummy_context {
 	const union fscrypt_context *ctx;
