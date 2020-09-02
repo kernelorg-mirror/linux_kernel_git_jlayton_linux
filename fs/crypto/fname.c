@@ -300,48 +300,12 @@ void fscrypt_fname_free_buffer(struct fscrypt_str *crypto_str)
 }
 EXPORT_SYMBOL(fscrypt_fname_free_buffer);
 
-/**
- * fscrypt_fname_disk_to_usr() - convert an encrypted filename to
- *				 user-presentable form
- * @inode: inode of the parent directory (for regular filenames)
- *	   or of the symlink (for symlink targets)
- * @hash: first part of the name's dirhash, if applicable.  This only needs to
- *	  be provided if the filename is located in an indexed directory whose
- *	  encryption key may be unavailable.  Not needed for symlink targets.
- * @minor_hash: second part of the name's dirhash, if applicable
- * @iname: encrypted filename to convert.  May also be "." or "..", which
- *	   aren't actually encrypted.
- * @oname: output buffer for the user-presentable filename.  The caller must
- *	   have allocated enough space for this, e.g. using
- *	   fscrypt_fname_alloc_buffer().
- *
- * If the key is available, we'll decrypt the disk name.  Otherwise, we'll
- * encode it for presentation in fscrypt_nokey_name format.
- * See struct fscrypt_nokey_name for details.
- *
- * Return: 0 on success, -errno on failure
- */
-int fscrypt_fname_disk_to_usr(const struct inode *inode,
-			      u32 hash, u32 minor_hash,
-			      const struct fscrypt_str *iname,
-			      struct fscrypt_str *oname)
+void fscrypt_encode_nokey_name(u32 hash, u32 minor_hash,
+			     const struct fscrypt_str *iname,
+			     struct fscrypt_str *oname)
 {
-	const struct qstr qname = FSTR_TO_QSTR(iname);
 	struct fscrypt_nokey_name nokey_name;
 	u32 size; /* size of the unencoded no-key name */
-
-	if (fscrypt_is_dot_dotdot(&qname)) {
-		oname->name[0] = '.';
-		oname->name[iname->len - 1] = '.';
-		oname->len = iname->len;
-		return 0;
-	}
-
-	if (iname->len < FS_CRYPTO_BLOCK_SIZE)
-		return -EUCLEAN;
-
-	if (fscrypt_has_encryption_key(inode))
-		return fname_decrypt(inode, iname, oname);
 
 	/*
 	 * Sanity check that struct fscrypt_nokey_name doesn't have padding
@@ -372,6 +336,51 @@ int fscrypt_fname_disk_to_usr(const struct inode *inode,
 		size = FSCRYPT_NOKEY_NAME_MAX;
 	}
 	oname->len = base64_encode((const u8 *)&nokey_name, size, oname->name);
+}
+EXPORT_SYMBOL(fscrypt_encode_nokey_name);
+
+/**
+ * fscrypt_fname_disk_to_usr() - convert an encrypted filename to
+ *				 user-presentable form
+ * @inode: inode of the parent directory (for regular filenames)
+ *	   or of the symlink (for symlink targets)
+ * @hash: first part of the name's dirhash, if applicable.  This only needs to
+ *	  be provided if the filename is located in an indexed directory whose
+ *	  encryption key may be unavailable.  Not needed for symlink targets.
+ * @minor_hash: second part of the name's dirhash, if applicable
+ * @iname: encrypted filename to convert.  May also be "." or "..", which
+ *	   aren't actually encrypted.
+ * @oname: output buffer for the user-presentable filename.  The caller must
+ *	   have allocated enough space for this, e.g. using
+ *	   fscrypt_fname_alloc_buffer().
+ *
+ * If the key is available, we'll decrypt the disk name.  Otherwise, we'll
+ * encode it for presentation in fscrypt_nokey_name format.
+ * See struct fscrypt_nokey_name for details.
+ *
+ * Return: 0 on success, -errno on failure
+ */
+int fscrypt_fname_disk_to_usr(const struct inode *inode,
+			      u32 hash, u32 minor_hash,
+			      const struct fscrypt_str *iname,
+			      struct fscrypt_str *oname)
+{
+	const struct qstr qname = FSTR_TO_QSTR(iname);
+
+	if (fscrypt_is_dot_dotdot(&qname)) {
+		oname->name[0] = '.';
+		oname->name[iname->len - 1] = '.';
+		oname->len = iname->len;
+		return 0;
+	}
+
+	if (iname->len < FS_CRYPTO_BLOCK_SIZE)
+		return -EUCLEAN;
+
+	if (fscrypt_has_encryption_key(inode))
+		return fname_decrypt(inode, iname, oname);
+
+	fscrypt_encode_nokey_name(hash, minor_hash, iname, oname);
 	return 0;
 }
 EXPORT_SYMBOL(fscrypt_fname_disk_to_usr);
