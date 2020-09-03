@@ -948,6 +948,7 @@ static int ceph_symlink(struct inode *dir, struct dentry *dentry,
 	struct ceph_mds_client *mdsc = fsc->mdsc;
 	struct ceph_mds_request *req;
 	struct ceph_acl_sec_ctx as_ctx = {};
+	struct fscrypt_str osd_link = FSTR_INIT(NULL, 0);
 	umode_t mode = S_IFLNK | 0777;
 	int err;
 
@@ -973,11 +974,33 @@ static int ceph_symlink(struct inode *dir, struct dentry *dentry,
 		goto out_req;
 	}
 
-	req->r_path2 = kstrdup(dest, GFP_KERNEL);
-	if (!req->r_path2) {
-		err = -ENOMEM;
-		goto out_req;
+	if (IS_ENCRYPTED(req->r_new_inode)) {
+		int len = strlen(dest);
+
+		err = fscrypt_prepare_symlink(dir, dest, len, PATH_MAX, &osd_link);
+		if (err)
+			goto out_req;
+
+		err = fscrypt_encrypt_symlink(req->r_new_inode, dest, len, &osd_link);
+		if (err)
+			goto out_req;
+
+		req->r_path2 = kmalloc(BASE64_CHARS(osd_link.len) + 1, GFP_KERNEL);
+		if (!req->r_path2) {
+			err = -ENOMEM;
+			goto out_req;
+		}
+
+		len = base64_encode_fname(osd_link.name, osd_link.len, req->r_path2);
+		req->r_path2[len] = '\0';
+	} else {
+		req->r_path2 = kstrdup(dest, GFP_KERNEL);
+		if (!req->r_path2) {
+			err = -ENOMEM;
+			goto out_req;
+		}
 	}
+
 	req->r_parent = dir;
 	set_bit(CEPH_MDS_R_PARENT_LOCKED, &req->r_req_flags);
 	req->r_dentry = dget(dentry);
@@ -997,6 +1020,7 @@ out:
 	if (err)
 		d_drop(dentry);
 	ceph_release_acl_sec_ctx(&as_ctx);
+	fscrypt_fname_free_buffer(&osd_link);
 	return err;
 }
 

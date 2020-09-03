@@ -344,6 +344,7 @@ struct ceph_inode_info {
 	u64 i_max_bytes, i_max_files;
 
 	s32 i_dir_pin;
+	u32 i_symlink_len;
 
 	struct rb_root i_fragtree;
 	int i_fragtree_nsplits;
@@ -932,6 +933,8 @@ struct ceph_mds_reply_dirfrag;
 struct ceph_acl_sec_ctx;
 
 extern const struct inode_operations ceph_file_iops;
+extern const struct inode_operations ceph_symlink_iops;
+extern const struct inode_operations ceph_encrypted_symlink_iops;
 
 extern struct inode *ceph_alloc_inode(struct super_block *sb);
 extern void ceph_evict_inode(struct inode *inode);

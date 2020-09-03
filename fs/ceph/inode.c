@@ -14,6 +14,7 @@
 #include <linux/random.h>
 #include <linux/sort.h>
 #include <linux/iversion.h>
+#include <linux/base64_fname.h>
 
 #include "super.h"
 #include "mds_client.h"
@@ -32,8 +33,6 @@
  * and truncation for the benefit of those who can't afford to block
  * (typically because they are in the message handler path).
  */
-
-static const struct inode_operations ceph_symlink_iops;
 
 static void ceph_inode_work(struct work_struct *work);
 
@@ -503,6 +502,7 @@ struct inode *ceph_alloc_inode(struct super_block *sb)
 	atomic64_set(&ci->i_complete_seq[0], 0);
 	atomic64_set(&ci->i_complete_seq[1], 0);
 	ci->i_symlink = NULL;
+	ci->i_symlink_len = 0;
 
 	ci->i_max_bytes = 0;
 	ci->i_max_files = 0;
@@ -590,6 +590,7 @@ void ceph_free_inode(struct inode *inode)
 	struct ceph_inode_info *ci = ceph_inode(inode);
 
 	kfree(ci->i_symlink);
+	fscrypt_free_inode(inode);
 	kmem_cache_free(ceph_inode_cachep, ci);
 }
 
@@ -991,34 +992,60 @@ int ceph_fill_inode(struct inode *inode, struct page *locked_page,
 		inode->i_fop = &ceph_file_fops;
 		break;
 	case S_IFLNK:
-		inode->i_op = &ceph_symlink_iops;
 		if (!ci->i_symlink) {
 			u32 symlen = iinfo->symlink_len;
 			char *sym;
 
 			spin_unlock(&ci->i_ceph_lock);
 
-			if (symlen != i_size_read(inode)) {
-				pr_err("%s %llx.%llx BAD symlink "
-					"size %lld\n", __func__,
-					ceph_vinop(inode),
-					i_size_read(inode));
+			if (IS_ENCRYPTED(inode)) {
+				/* Do base64 decode so that we get the right size (maybe?) */
+				err = -ENOMEM;
+				sym = kmalloc(symlen + 1, GFP_NOFS);
+				if (!sym)
+					goto out;
+
+				symlen = base64_decode_fname(iinfo->symlink, symlen, sym);
+				/*
+				 * i_size as reported by the MDS may be wrong, due to base64
+				 * inflation and padding. Fix it up here.
+				 */
 				i_size_write(inode, symlen);
 				inode->i_blocks = calc_inode_blocks(symlen);
+			} else {
+				if (symlen != i_size_read(inode)) {
+					pr_err("%s %llx.%llx BAD symlink size %lld\n",
+						__func__, ceph_vinop(inode), i_size_read(inode));
+					i_size_write(inode, symlen);
+					inode->i_blocks = calc_inode_blocks(symlen);
+				}
+
+				err = -ENOMEM;
+				sym = kstrndup(iinfo->symlink, symlen, GFP_NOFS);
+				if (!sym)
+					goto out;
 			}
 
-			err = -ENOMEM;
-			sym = kstrndup(iinfo->symlink, symlen, GFP_NOFS);
-			if (!sym)
-				goto out;
-
 			spin_lock(&ci->i_ceph_lock);
-			if (!ci->i_symlink)
+			if (!ci->i_symlink) {
 				ci->i_symlink = sym;
-			else
+				ci->i_symlink_len = symlen;
+			} else {
 				kfree(sym); /* lost a race */
+			}
 		}
-		inode->i_link = ci->i_symlink;
+
+		if (IS_ENCRYPTED(inode)) {
+			/*
+			 * Encrypted symlinks need to be decrypted before we can
+			 * cache their targets in i_link. Leave it blank for now.
+			 */
+			inode->i_link = NULL;
+			inode->i_op = &ceph_encrypted_symlink_iops;
+		} else {
+			inode->i_link = ci->i_symlink;
+			inode->i_op = &ceph_symlink_iops;
+		}
 		break;
 	case S_IFDIR:
 		inode->i_op = &ceph_dir_iops;
@@ -2123,11 +2150,32 @@ static void ceph_inode_work(struct work_struct *work)
 	iput(inode);
 }
 
+static const char *ceph_encrypted_get_link(struct dentry *dentry, struct inode *inode,
+					   struct delayed_call *done)
+{
+	struct ceph_inode_info *ci = ceph_inode(inode);
+
+	if (inode->i_link)
+		return inode->i_link;
+
+	if (!dentry)
+		return ERR_PTR(-ECHILD);
+
+	return fscrypt_get_symlink(inode, ci->i_symlink, ci->i_symlink_len, done);
+}
+
 /*
  * symlinks
  */
-static const struct inode_operations ceph_symlink_iops = {
+const struct inode_operations ceph_symlink_iops = {
 	.get_link = simple_get_link,
+	.setattr = ceph_setattr,
+	.getattr = ceph_getattr,
+	.listxattr = ceph_listxattr,
+};
+
+const struct inode_operations ceph_encrypted_symlink_iops = {
+	.get_link = ceph_encrypted_get_link,
 	.setattr = ceph_setattr,
 	.getattr = ceph_getattr,
 	.listxattr = ceph_listxattr,
