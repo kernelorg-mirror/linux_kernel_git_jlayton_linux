@@ -45,6 +45,7 @@ static void ceph_put_super(struct super_block *s)
 	struct ceph_fs_client *fsc = ceph_sb_to_client(s);
 
 	dout("put_super\n");
+	fscrypt_free_dummy_policy(&fsc->dummy_enc_policy);
 	ceph_mdsc_close_sessions(fsc->mdsc);
 }
 
@@ -160,6 +161,7 @@ enum {
 	Opt_quotadf,
 	Opt_copyfrom,
 	Opt_wsync,
+	Opt_test_dummy_encryption,
 };
 
 enum ceph_recover_session_mode {
@@ -198,6 +200,8 @@ static const struct fs_parameter_spec ceph_mount_parameters[] = {
 	fsparam_u32	("rsize",			Opt_rsize),
 	fsparam_string	("snapdirname",			Opt_snapdirname),
 	fsparam_string	("source",			Opt_source),
+	fsparam_flag	("test_dummy_encryption",	Opt_test_dummy_encryption),
+	fsparam_string	("test_dummy_encryption",	Opt_test_dummy_encryption),
 	fsparam_u32	("wsize",			Opt_wsize),
 	fsparam_flag_no	("wsync",			Opt_wsync),
 	{}
@@ -456,6 +460,16 @@ static int ceph_parse_mount_param(struct fs_context *fc,
 		else
 			fsopt->flags |= CEPH_MOUNT_OPT_ASYNC_DIROPS;
 		break;
+	case Opt_test_dummy_encryption:
+		kfree(fsopt->test_dummy_encryption);
+#ifdef CONFIG_FS_ENCRYPTION
+		fsopt->test_dummy_encryption = param->string;
+		param->string = NULL;
+		fsopt->flags |= CEPH_MOUNT_OPT_TEST_DUMMY_ENC;
+#else
+		warnfc(fc, "FS encryption not supported: test_dummy_encryption mount option ignored");
+#endif
+		break;
 	default:
 		BUG();
 	}
@@ -475,6 +489,7 @@ static void destroy_mount_options(struct ceph_mount_options *args)
 	kfree(args->mds_namespace);
 	kfree(args->server_path);
 	kfree(args->fscache_uniq);
+	kfree(args->test_dummy_encryption);
 	kfree(args);
 }
 
@@ -581,6 +596,8 @@ static int ceph_show_options(struct seq_file *m, struct dentry *root)
 
 	if (fsopt->flags & CEPH_MOUNT_OPT_ASYNC_DIROPS)
 		seq_puts(m, ",nowsync");
+
+	fscrypt_show_test_dummy_encryption(m, ',', root->d_sb);
 
 	if (fsopt->wsize != CEPH_MAX_WRITE_SIZE)
 		seq_printf(m, ",wsize=%u", fsopt->wsize);
@@ -964,6 +981,43 @@ out:
 	return ERR_PTR(err);
 }
 
+#ifdef CONFIG_FS_ENCRYPTION
+static int ceph_set_test_dummy_encryption(struct super_block *sb, struct fs_context *fc,
+						struct ceph_mount_options *fsopt)
+{
+	struct ceph_fs_client *fsc = sb->s_fs_info;
+
+	if (fsopt->flags & CEPH_MOUNT_OPT_TEST_DUMMY_ENC) {
+		substring_t arg = { };
+
+		/*
+		 * No changing encryption context on remount. Note that
+		 * fscrypt_set_test_dummy_encryption will validate the version
+		 * string passed in (if any).
+		 */
+		if (fc->purpose == FS_CONTEXT_FOR_RECONFIGURE && !fsc->dummy_enc_policy.policy)
+			return -EEXIST;
+
+		/* Ewwwwwwww */
+		if (fsc->mount_options->test_dummy_encryption) {
+			arg.from = fsc->mount_options->test_dummy_encryption;
+			arg.to = arg.from + strlen(arg.from) - 1;
+		}
+		return fscrypt_set_test_dummy_encryption(sb, &arg, &fsc->dummy_enc_policy);
+	} else {
+		if (fc->purpose == FS_CONTEXT_FOR_RECONFIGURE && fsc->dummy_enc_policy.policy)
+			return -EEXIST;
+	}
+	return 0;
+}
+#else
+static inline int ceph_set_test_dummy_encryption(struct super_block *sb, struct fs_context *fc,
+						struct ceph_mount_options *fsopt)
+{
+	return 0;
+}
+#endif
+
 static int ceph_set_super(struct super_block *s, struct fs_context *fc)
 {
 	struct ceph_fs_client *fsc = s->s_fs_info;
@@ -985,12 +1039,12 @@ static int ceph_set_super(struct super_block *s, struct fs_context *fc)
 	s->s_time_min = 0;
 	s->s_time_max = U32_MAX;
 
-	ret = ceph_fscrypt_set_ops(s);
-	if (ret)
-		goto out;
+	ceph_fscrypt_set_ops(s);
 
-	ret = set_anon_super_fc(s, fc);
-	if (ret != 0)
+	ret = ceph_set_test_dummy_encryption(s, fc, fsc->mount_options);
+	if (!ret)
+		ret = set_anon_super_fc(s, fc);
+	if (ret)
 		fsc->sb = NULL;
 	return ret;
 }
@@ -1136,16 +1190,22 @@ static void ceph_free_fc(struct fs_context *fc)
 
 static int ceph_reconfigure_fc(struct fs_context *fc)
 {
+	int err;
 	struct ceph_parse_opts_ctx *pctx = fc->fs_private;
 	struct ceph_mount_options *fsopt = pctx->opts;
-	struct ceph_fs_client *fsc = ceph_sb_to_client(fc->root->d_sb);
+	struct super_block *sb = fc->root->d_sb;
+	struct ceph_fs_client *fsc = ceph_sb_to_client(sb);
 
 	if (fsopt->flags & CEPH_MOUNT_OPT_ASYNC_DIROPS)
 		ceph_set_mount_opt(fsc, ASYNC_DIROPS);
 	else
 		ceph_clear_mount_opt(fsc, ASYNC_DIROPS);
 
-	sync_filesystem(fc->root->d_sb);
+	err = ceph_set_test_dummy_encryption(sb, fc, fsopt);
+	if (err)
+		return err;
+
+	sync_filesystem(sb);
 	return 0;
 }
 
