@@ -260,6 +260,7 @@ static int ext4_readdir(struct file *file, struct dir_context *ctx)
 					    get_dtype(sb, de->file_type)))
 						goto done;
 				} else {
+					bool is_nokey = false;
 					int save_len = fstr.len;
 					struct fscrypt_str de_name =
 							FSTR_INIT(de->name,
@@ -267,7 +268,7 @@ static int ext4_readdir(struct file *file, struct dir_context *ctx)
 
 					/* Directory is encrypted */
 					err = fscrypt_fname_disk_to_usr(inode,
-						0, 0, &de_name, &fstr);
+						0, 0, &de_name, &fstr, &is_nokey);
 					de_name = fstr;
 					fstr.len = save_len;
 					if (err)

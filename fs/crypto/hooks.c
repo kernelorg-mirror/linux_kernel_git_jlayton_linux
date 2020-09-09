@@ -310,7 +310,7 @@ const char *fscrypt_get_symlink(struct inode *inode, const void *caddr,
 {
 	const struct fscrypt_symlink_data *sd;
 	struct fscrypt_str cstr, pstr;
-	bool has_key;
+	bool has_key, is_nokey = false;
 	int err;
 
 	/* This is for encrypted symlinks only */
@@ -352,7 +352,7 @@ const char *fscrypt_get_symlink(struct inode *inode, const void *caddr,
 	if (err)
 		return ERR_PTR(err);
 
-	err = fscrypt_fname_disk_to_usr(inode, 0, 0, &cstr, &pstr);
+	err = fscrypt_fname_disk_to_usr(inode, 0, 0, &cstr, &pstr, &is_nokey);
 	if (err)
 		goto err_kfree;
 

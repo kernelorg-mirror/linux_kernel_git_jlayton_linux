@@ -658,6 +658,7 @@ static struct stats dx_show_leaf(struct inode *dir,
 					       (unsigned) ((char *) de
 							   - base));
 				} else {
+					bool is_nokey = false;
 					struct fscrypt_str de_name =
 						FSTR_INIT(name, len);
 
@@ -671,7 +672,7 @@ static struct stats dx_show_leaf(struct inode *dir,
 							"crypto\n");
 					res = fscrypt_fname_disk_to_usr(dir,
 						0, 0, &de_name,
-						&fname_crypto_str);
+						&fname_crypto_str, &is_nokey);
 					if (res) {
 						printk(KERN_WARNING "Error "
 							"converting filename "
@@ -1045,6 +1046,7 @@ static int htree_dirblock_to_tree(struct file *dir_file,
 				   hinfo->hash, hinfo->minor_hash, de,
 				   &tmp_str);
 		} else {
+			bool is_nokey = false;
 			int save_len = fname_crypto_str.len;
 			struct fscrypt_str de_name = FSTR_INIT(de->name,
 								de->name_len);
@@ -1052,7 +1054,7 @@ static int htree_dirblock_to_tree(struct file *dir_file,
 			/* Directory is encrypted */
 			err = fscrypt_fname_disk_to_usr(dir, hinfo->hash,
 					hinfo->minor_hash, &de_name,
-					&fname_crypto_str);
+					&fname_crypto_str, &is_nokey);
 			if (err) {
 				count = err;
 				goto errout;

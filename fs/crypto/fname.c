@@ -353,6 +353,7 @@ EXPORT_SYMBOL(fscrypt_encode_nokey_name);
  * @oname: output buffer for the user-presentable filename.  The caller must
  *	   have allocated enough space for this, e.g. using
  *	   fscrypt_fname_alloc_buffer().
+ * @is_nokey: set to true if oname is a no-key name
  *
  * If the key is available, we'll decrypt the disk name.  Otherwise, we'll
  * encode it for presentation in fscrypt_nokey_name format.
@@ -363,7 +364,8 @@ EXPORT_SYMBOL(fscrypt_encode_nokey_name);
 int fscrypt_fname_disk_to_usr(const struct inode *inode,
 			      u32 hash, u32 minor_hash,
 			      const struct fscrypt_str *iname,
-			      struct fscrypt_str *oname)
+			      struct fscrypt_str *oname,
+			      bool *is_nokey)
 {
 	const struct qstr qname = FSTR_TO_QSTR(iname);
 	struct fscrypt_nokey_name nokey_name;
@@ -411,6 +413,7 @@ int fscrypt_fname_disk_to_usr(const struct inode *inode,
 		size = FSCRYPT_NOKEY_NAME_MAX;
 	}
 	oname->len = fscrypt_base64_encode((const u8 *)&nokey_name, size, oname->name);
+	*is_nokey = true;
 	return 0;
 }
 EXPORT_SYMBOL(fscrypt_fname_disk_to_usr);

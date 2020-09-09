@@ -201,7 +201,7 @@ void fscrypt_fname_free_buffer(struct fscrypt_str *crypto_str);
 int fscrypt_fname_disk_to_usr(const struct inode *inode,
 			      u32 hash, u32 minor_hash,
 			      const struct fscrypt_str *iname,
-			      struct fscrypt_str *oname);
+			      struct fscrypt_str *oname, bool *is_nokey);
 bool fscrypt_match_name(const struct fscrypt_name *fname,
 			const u8 *de_name, u32 de_name_len);
 u64 fscrypt_fname_siphash(const struct inode *dir, const struct qstr *name);
@@ -442,7 +442,7 @@ static inline void fscrypt_fname_free_buffer(struct fscrypt_str *crypto_str)
 static inline int fscrypt_fname_disk_to_usr(const struct inode *inode,
 					    u32 hash, u32 minor_hash,
 					    const struct fscrypt_str *iname,
-					    struct fscrypt_str *oname)
+					    struct fscrypt_str *oname, bool *is_nokey)
 {
 	return -EOPNOTSUPP;
 }

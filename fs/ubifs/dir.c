@@ -584,12 +584,14 @@ static int ubifs_readdir(struct file *file, struct dir_context *ctx)
 		fname_name(&nm) = dent->name;
 
 		if (encrypted) {
+			bool is_nokey = false;
+
 			fstr.len = fstr_real_len;
 
 			err = fscrypt_fname_disk_to_usr(dir, key_hash_flash(c,
 							&dent->key),
 							le32_to_cpu(dent->cookie),
-							&nm.disk_name, &fstr);
+							&nm.disk_name, &fstr, &is_nokey);
 			if (err)
 				goto out;
 		} else {
