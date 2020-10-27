@@ -3237,6 +3237,20 @@ struct cap_extra_info {
 	struct timespec64 btime;
 };
 
+/* Do we need to break any leases? */
+static int ceph_lease_break(int revoking)
+{
+	/* If we lose any READ caps, then no leases allowed at all */
+	if (ceph_lease_caps_for_type(CephLeaseRead) & revoking)
+		return O_WRONLY | O_NONBLOCK;
+
+	/* If we just lose the write parts, then we can just drop write leases */
+	if (ceph_lease_caps_for_type(CephLeaseWrite) & revoking)
+		return O_RDONLY | O_NONBLOCK;
+
+	return 0;
+}
+
 /*
  * Handle a cap GRANT message from the MDS.  (Note that a GRANT may
  * actually be a revocation if it specifies a smaller cap set.)
@@ -3266,6 +3280,7 @@ static void handle_cap_grant(struct inode *inode,
 	bool queue_invalidate = false;
 	bool deleted_inode = false;
 	bool fill_inline = false;
+	int lease_break = 0;
 
 	dout("handle_cap_grant inode %p cap %p mds%d seq %d %s\n",
 	     inode, cap, session->s_mds, seq, ceph_cap_string(newcaps));
@@ -3438,6 +3453,7 @@ static void handle_cap_grant(struct inode *inode,
 		     ceph_cap_string(cap->issued),
 		     ceph_cap_string(newcaps),
 		     ceph_cap_string(revoking));
+		lease_break = ceph_lease_break(revoking);
 		if (S_ISREG(inode->i_mode) &&
 		    (revoking & used & CEPH_CAP_FILE_BUFFER))
 			writeback = true;  /* initiate writeback; will delay ack */
@@ -3496,6 +3512,9 @@ static void handle_cap_grant(struct inode *inode,
 	} else {
 		spin_unlock(&ci->i_ceph_lock);
 	}
+
+	if (lease_break)
+		break_lease(inode, lease_break);
 
 	if (fill_inline)
 		ceph_fill_inline_data(inode, NULL, extra_info->inline_data,
@@ -4503,4 +4522,42 @@ int ceph_encode_dentry_release(void **p, struct dentry *dentry,
 	}
 	spin_unlock(&dentry->d_lock);
 	return ret;
+}
+
+/**
+ * ceph_lease_caps_for_type - what caps are necessary for a lease?
+ * @type: Ceph lease request type
+ *
+ * Determine what caps are necessary in order to grant a lease of a given
+ * type. For read leases, we need whatever we require in order to do
+ * cached reads, plus AsLs to cover metadata changes that should trigger a
+ * recall. We also grab Xs since changing xattrs usually alters the mtime and
+ * so would trigger a recall.
+ *
+ * For write leases, we need whatever read leases need plus the
+ * caps to allow writing to the file (Fbwx).
+ */
+int ceph_lease_caps_for_type(enum ceph_lease_type type)
+{
+	int caps;
+
+	switch (type) {
+	case CephLeaseNone:
+		caps = 0;
+		break;
+	case CephLeaseWrite:
+		caps = CEPH_CAP_PIN | CEPH_CAP_FILE_EXCL |
+			CEPH_CAP_FILE_WR | CEPH_CAP_FILE_BUFFER;
+		fallthrough;
+	case CephLeaseRead:
+		caps = CEPH_CAP_PIN | CEPH_CAP_FILE_SHARED |
+			CEPH_CAP_FILE_RD | CEPH_CAP_FILE_CACHE |
+			CEPH_CAP_XATTR_SHARED |
+			CEPH_CAP_LINK_SHARED | CEPH_CAP_AUTH_SHARED;
+		break;
+	default:
+		WARN_ONCE(1, "Unknown lease type: 0x%x\n", type);
+		caps = 0;
+	}
+	return caps;
 }

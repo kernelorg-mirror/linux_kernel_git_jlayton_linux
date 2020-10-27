@@ -740,9 +740,17 @@ extern void ceph_reservation_status(struct ceph_fs_client *client,
 #define CEPH_F_SYNC     1
 #define CEPH_F_ATEND    2
 
+/* Lease type */
+enum ceph_lease_type {
+	CephLeaseNone = 0,
+	CephLeaseRead,
+	CephLeaseWrite,
+};
+
 struct ceph_file_info {
 	short fmode;     /* initialized on open */
 	short flags;     /* CEPH_F_* */
+	enum ceph_lease_type	lease_type;
 
 	spinlock_t rw_contexts_lock;
 	struct list_head rw_contexts;
@@ -1121,6 +1129,7 @@ extern int ceph_encode_inode_release(void **p, struct inode *inode,
 extern int ceph_encode_dentry_release(void **p, struct dentry *dn,
 				      struct inode *dir,
 				      int mds, int drop, int unless);
+int ceph_lease_caps_for_type(enum ceph_lease_type type);
 
 extern int ceph_get_caps(struct file *filp, int need, int want,
 			 loff_t endoff, int *got, struct page **pinned_page);

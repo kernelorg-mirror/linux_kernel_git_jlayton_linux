@@ -1922,6 +1922,9 @@ static int trim_caps_cb(struct inode *inode, struct ceph_cap *cap, void *arg)
 	if (*remaining <= 0)
 		return -1;
 
+	/* break any leases, but don't wait around for them */
+	break_lease(inode, O_WRONLY | O_NONBLOCK);
+
 	spin_lock(&ci->i_ceph_lock);
 	mine = cap->issued | cap->implemented;
 	used = __ceph_caps_used(ci);
