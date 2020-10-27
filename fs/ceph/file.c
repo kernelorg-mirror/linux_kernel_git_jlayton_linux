@@ -2484,6 +2484,75 @@ static ssize_t ceph_copy_file_range(struct file *src_file, loff_t src_off,
 	return ret;
 }
 
+static enum ceph_lease_type vfs_lease_to_ceph_lease(long arg)
+{
+	switch (arg) {
+	case F_UNLCK:
+		break;
+	case F_RDLCK:
+		return CephLeaseRead;
+	case F_WRLCK:
+		return CephLeaseWrite;
+	default:
+		WARN_ONCE(1, "Unknown lease arg: 0x%lx\n", arg);
+	}
+	return CephLeaseNone;
+}
+
+static int ceph_setlease(struct file *file, long arg, struct file_lock **lease, void **priv)
+{
+	struct inode *inode = file_inode(file);
+	struct ceph_inode_info *ci = ceph_inode(inode);
+	struct ceph_file_info *fi = file->private_data;
+	enum ceph_lease_type new_type;
+	int ret = 0, want, old, issued, release = 0;
+
+	new_type = vfs_lease_to_ceph_lease(arg);
+	want = ceph_lease_caps_for_type(new_type);
+
+	spin_lock(&ci->i_ceph_lock);
+
+	/* No change? */
+	if (fi->lease_type == new_type) {
+		spin_unlock(&ci->i_ceph_lock);
+		goto out;
+	}
+
+	old = ceph_lease_caps_for_type(fi->lease_type);
+	issued = __ceph_caps_issued(ci, NULL);
+	if (!want) {
+		/* F_UNLCK */
+		release = old;
+	} else if ((issued & want) == want) {
+		/* release anything we don't need anymore */
+		release = old & ~want;
+
+		/* take refs on anything we didn't already have */
+		ceph_take_cap_refs(ci, want & ~old, false);
+
+		/* set new lease_type */
+		fi->lease_type = new_type;
+	} else {
+		ret = -EAGAIN;
+	}
+
+	spin_unlock(&ci->i_ceph_lock);
+
+	dout("setlease issued=%s old=%s want=%s release=%s ret=%d\n",
+	     ceph_cap_string(issued), ceph_cap_string(old),
+	     ceph_cap_string(want), ceph_cap_string(release), ret);
+
+	if (ret)
+		goto out;
+
+	ret = generic_setlease(file, arg, lease, priv);
+
+	if (release)
+		ceph_put_cap_refs(ci, release);
+out:
+	return ret;
+}
+
 const struct file_operations ceph_file_fops = {
 	.open = ceph_open,
 	.release = ceph_release,
@@ -2493,7 +2562,7 @@ const struct file_operations ceph_file_fops = {
 	.mmap = ceph_mmap,
 	.fsync = ceph_fsync,
 	.lock = ceph_lock,
-	.setlease = simple_nosetlease,
+	.setlease = ceph_setlease,
 	.flock = ceph_flock,
 	.splice_read = generic_file_splice_read,
 	.splice_write = iter_file_splice_write,
