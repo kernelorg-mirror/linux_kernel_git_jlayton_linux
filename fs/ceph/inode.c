@@ -516,6 +516,10 @@ struct inode *ceph_alloc_inode(struct super_block *sb)
 	ci->i_requested_max_size = 0;
 
 	ci->i_pin_ref = 0;
+	ci->i_as_ref = 0;
+	ci->i_ls_ref = 0;
+	ci->i_xs_ref = 0;
+	ci->i_fs_ref = 0;
 	ci->i_fx_ref = 0;
 	ci->i_fr_ref = 0;
 	ci->i_fc_ref = 0;

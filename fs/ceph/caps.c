@@ -966,6 +966,16 @@ int __ceph_caps_used(struct ceph_inode_info *ci)
 	int used = 0;
 	if (ci->i_pin_ref)
 		used |= CEPH_CAP_PIN;
+	if (ci->i_as_ref)
+		used |= CEPH_CAP_AUTH_SHARED;
+	if (ci->i_ls_ref)
+		used |= CEPH_CAP_LINK_SHARED;
+	if (ci->i_xs_ref)
+		used |= CEPH_CAP_XATTR_SHARED;
+	if (ci->i_fs_ref)
+		used |= CEPH_CAP_FILE_SHARED;
+	if (ci->i_fx_ref)
+		used |= CEPH_CAP_FILE_EXCL;
 	if (ci->i_fr_ref)
 		used |= CEPH_CAP_FILE_RD;
 	if (ci->i_fc_ref ||
@@ -976,8 +986,6 @@ int __ceph_caps_used(struct ceph_inode_info *ci)
 		used |= CEPH_CAP_FILE_WR;
 	if (ci->i_fb_ref || ci->i_wrbuffer_ref)
 		used |= CEPH_CAP_FILE_BUFFER;
-	if (ci->i_fx_ref)
-		used |= CEPH_CAP_FILE_EXCL;
 	return used;
 }
 
@@ -2604,12 +2612,20 @@ void ceph_take_cap_refs(struct ceph_inode_info *ci, int got,
 
 	if (got & CEPH_CAP_PIN)
 		ci->i_pin_ref++;
+	if (got & CEPH_CAP_AUTH_SHARED)
+		ci->i_as_ref++;
+	if (got & CEPH_CAP_LINK_SHARED)
+		ci->i_ls_ref++;
+	if (got & CEPH_CAP_XATTR_SHARED)
+		ci->i_xs_ref++;
+	if (got & CEPH_CAP_FILE_SHARED)
+		ci->i_fs_ref++;
+	if (got & CEPH_CAP_FILE_EXCL)
+		ci->i_fx_ref++;
 	if (got & CEPH_CAP_FILE_RD)
 		ci->i_fr_ref++;
 	if (got & CEPH_CAP_FILE_CACHE)
 		ci->i_fc_ref++;
-	if (got & CEPH_CAP_FILE_EXCL)
-		ci->i_fx_ref++;
 	if (got & CEPH_CAP_FILE_WR) {
 		if (ci->i_fw_ref == 0 && !ci->i_head_snapc) {
 			BUG_ON(!snap_rwsem_locked);
@@ -3048,14 +3064,26 @@ static void __ceph_put_cap_refs(struct ceph_inode_info *ci, int had,
 	spin_lock(&ci->i_ceph_lock);
 	if (had & CEPH_CAP_PIN)
 		--ci->i_pin_ref;
+	if (had & CEPH_CAP_AUTH_SHARED)
+		if (--ci->i_as_ref == 0)
+			last++;
+	if (had & CEPH_CAP_LINK_SHARED)
+		if (--ci->i_ls_ref == 0)
+			last++;
+	if (had & CEPH_CAP_XATTR_SHARED)
+		if (--ci->i_xs_ref == 0)
+			last++;
+	if (had & CEPH_CAP_FILE_SHARED)
+		if (--ci->i_fs_ref == 0)
+			last++;
+	if (had & CEPH_CAP_FILE_EXCL)
+		if (--ci->i_fx_ref == 0)
+			last++;
 	if (had & CEPH_CAP_FILE_RD)
 		if (--ci->i_fr_ref == 0)
 			last++;
 	if (had & CEPH_CAP_FILE_CACHE)
 		if (--ci->i_fc_ref == 0)
-			last++;
-	if (had & CEPH_CAP_FILE_EXCL)
-		if (--ci->i_fx_ref == 0)
 			last++;
 	if (had & CEPH_CAP_FILE_BUFFER) {
 		if (--ci->i_fb_ref == 0) {

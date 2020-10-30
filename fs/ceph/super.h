@@ -409,8 +409,14 @@ struct ceph_inode_info {
 
 	/* held references to caps */
 	int i_pin_ref;
+	/* auth caps */
+	int i_as_ref;
+	/* link caps */
+	int i_ls_ref;
+	/* xattr caps */
+	int i_xs_ref;
 	/* file caps */
-	int i_fx_ref, i_fc_ref, i_fr_ref, i_fw_ref, i_fb_ref;
+	int i_fs_ref, i_fx_ref, i_fc_ref, i_fr_ref, i_fw_ref, i_fb_ref;
 
 	int i_wrbuffer_ref, i_wrbuffer_ref_head;
 	atomic_t i_filelock_ref;
