@@ -966,15 +966,15 @@ int __ceph_caps_used(struct ceph_inode_info *ci)
 	int used = 0;
 	if (ci->i_pin_ref)
 		used |= CEPH_CAP_PIN;
-	if (ci->i_rd_ref)
+	if (ci->i_fr_ref)
 		used |= CEPH_CAP_FILE_RD;
-	if (ci->i_rdcache_ref ||
+	if (ci->i_fc_ref ||
 	    (S_ISREG(ci->vfs_inode.i_mode) &&
 	     ci->vfs_inode.i_data.nrpages))
 		used |= CEPH_CAP_FILE_CACHE;
-	if (ci->i_wr_ref)
+	if (ci->i_fw_ref)
 		used |= CEPH_CAP_FILE_WR;
-	if (ci->i_wb_ref || ci->i_wrbuffer_ref)
+	if (ci->i_fb_ref || ci->i_wrbuffer_ref)
 		used |= CEPH_CAP_FILE_BUFFER;
 	if (ci->i_fx_ref)
 		used |= CEPH_CAP_FILE_EXCL;
@@ -1165,10 +1165,10 @@ void __ceph_remove_cap(struct ceph_cap *cap, bool queue_release)
 
 	if (!__ceph_is_any_real_caps(ci)) {
 		/* when reconnect denied, we remove session caps forcibly,
-		 * i_wr_ref can be non-zero. If there are ongoing write,
+		 * i_fw_ref can be non-zero. If there are ongoing write,
 		 * keep i_snap_realm.
 		 */
-		if (ci->i_wr_ref == 0 && ci->i_snap_realm)
+		if (ci->i_fw_ref == 0 && ci->i_snap_realm)
 			ceph_change_snap_realm(&ci->vfs_inode, NULL);
 
 		__cap_delay_cancel(mdsc, ci);
@@ -1986,7 +1986,7 @@ retry:
 	 */
 	if ((!(flags & CHECK_CAPS_NOINVAL) || mdsc->stopping) &&
 	    S_ISREG(inode->i_mode) &&
-	    !(ci->i_wb_ref || ci->i_wrbuffer_ref) &&   /* no dirty pages... */
+	    !(ci->i_fb_ref || ci->i_wrbuffer_ref) &&   /* no dirty pages... */
 	    inode->i_data.nrpages &&		/* have cached pages */
 	    (revoking & (CEPH_CAP_FILE_CACHE|
 			 CEPH_CAP_FILE_LAZYIO)) && /*  or revoking cache */
@@ -2605,25 +2605,25 @@ void ceph_take_cap_refs(struct ceph_inode_info *ci, int got,
 	if (got & CEPH_CAP_PIN)
 		ci->i_pin_ref++;
 	if (got & CEPH_CAP_FILE_RD)
-		ci->i_rd_ref++;
+		ci->i_fr_ref++;
 	if (got & CEPH_CAP_FILE_CACHE)
-		ci->i_rdcache_ref++;
+		ci->i_fc_ref++;
 	if (got & CEPH_CAP_FILE_EXCL)
 		ci->i_fx_ref++;
 	if (got & CEPH_CAP_FILE_WR) {
-		if (ci->i_wr_ref == 0 && !ci->i_head_snapc) {
+		if (ci->i_fw_ref == 0 && !ci->i_head_snapc) {
 			BUG_ON(!snap_rwsem_locked);
 			ci->i_head_snapc = ceph_get_snap_context(
 					ci->i_snap_realm->cached_context);
 		}
-		ci->i_wr_ref++;
+		ci->i_fw_ref++;
 	}
 	if (got & CEPH_CAP_FILE_BUFFER) {
-		if (ci->i_wb_ref == 0)
+		if (ci->i_fb_ref == 0)
 			ihold(&ci->vfs_inode);
-		ci->i_wb_ref++;
+		ci->i_fb_ref++;
 		dout("%s %p wb %d -> %d (?)\n", __func__,
-		     &ci->vfs_inode, ci->i_wb_ref-1, ci->i_wb_ref);
+		     &ci->vfs_inode, ci->i_fb_ref-1, ci->i_fb_ref);
 	}
 }
 
@@ -3049,26 +3049,26 @@ static void __ceph_put_cap_refs(struct ceph_inode_info *ci, int had,
 	if (had & CEPH_CAP_PIN)
 		--ci->i_pin_ref;
 	if (had & CEPH_CAP_FILE_RD)
-		if (--ci->i_rd_ref == 0)
+		if (--ci->i_fr_ref == 0)
 			last++;
 	if (had & CEPH_CAP_FILE_CACHE)
-		if (--ci->i_rdcache_ref == 0)
+		if (--ci->i_fc_ref == 0)
 			last++;
 	if (had & CEPH_CAP_FILE_EXCL)
 		if (--ci->i_fx_ref == 0)
 			last++;
 	if (had & CEPH_CAP_FILE_BUFFER) {
-		if (--ci->i_wb_ref == 0) {
+		if (--ci->i_fb_ref == 0) {
 			last++;
 			/* put the ref held by ceph_take_cap_refs() */
 			put++;
 			check_flushsnaps = true;
 		}
 		dout("put_cap_refs %p wb %d -> %d (?)\n",
-		     inode, ci->i_wb_ref+1, ci->i_wb_ref);
+		     inode, ci->i_fb_ref+1, ci->i_fb_ref);
 	}
 	if (had & CEPH_CAP_FILE_WR) {
-		if (--ci->i_wr_ref == 0) {
+		if (--ci->i_fw_ref == 0) {
 			last++;
 			check_flushsnaps = true;
 			if (ci->i_wrbuffer_ref_head == 0 &&
@@ -3167,7 +3167,7 @@ void ceph_put_wrbuffer_cap_refs(struct ceph_inode_info *ci, int nr,
 	if (ci->i_head_snapc == snapc) {
 		ci->i_wrbuffer_ref_head -= nr;
 		if (ci->i_wrbuffer_ref_head == 0 &&
-		    ci->i_wr_ref == 0 &&
+		    ci->i_fw_ref == 0 &&
 		    ci->i_dirty_caps == 0 &&
 		    ci->i_flushing_caps == 0) {
 			BUG_ON(!ci->i_head_snapc);
@@ -3324,7 +3324,7 @@ static void handle_cap_grant(struct inode *inode,
 	if (S_ISREG(inode->i_mode) && /* don't invalidate readdir cache */
 	    ((cap->issued & ~newcaps) & CEPH_CAP_FILE_CACHE) &&
 	    (newcaps & CEPH_CAP_FILE_LAZYIO) == 0 &&
-	    !(ci->i_wrbuffer_ref || ci->i_wb_ref)) {
+	    !(ci->i_wrbuffer_ref || ci->i_fb_ref)) {
 		if (try_nonblocking_invalidate(inode)) {
 			/* there were locked pages.. invalidate later
 			   in a separate thread. */
@@ -3661,7 +3661,7 @@ static void handle_cap_flush_ack(struct inode *inode, u64 flush_tid,
 			dout(" inode %p now clean\n", inode);
 			BUG_ON(!list_empty(&ci->i_dirty_item));
 			drop = true;
-			if (ci->i_wr_ref == 0 &&
+			if (ci->i_fw_ref == 0 &&
 			    ci->i_wrbuffer_ref_head == 0) {
 				BUG_ON(!ci->i_head_snapc);
 				ceph_put_snap_context(ci->i_head_snapc);
@@ -4666,7 +4666,7 @@ int ceph_purge_inode_cap(struct inode *inode, struct ceph_cap *cap, bool *invali
 			errseq_set(&ci->i_meta_err, -EIO);
 
 			if (ci->i_wrbuffer_ref_head == 0 &&
-			    ci->i_wr_ref == 0 &&
+			    ci->i_fw_ref == 0 &&
 			    ci->i_dirty_caps == 0 &&
 			    ci->i_flushing_caps == 0) {
 				ceph_put_snap_context(ci->i_head_snapc);

@@ -592,7 +592,7 @@ static void ceph_queue_cap_snap(struct ceph_inode_info *ci)
 
 update_snapc:
        if (ci->i_wrbuffer_ref_head == 0 &&
-           ci->i_wr_ref == 0 &&
+           ci->i_fw_ref == 0 &&
            ci->i_dirty_caps == 0 &&
            ci->i_flushing_caps == 0) {
                ci->i_head_snapc = NULL;
@@ -641,7 +641,7 @@ int __ceph_finish_cap_snap(struct ceph_inode_info *ci,
 	}
 
 	/* Fb cap still in use, delay it */
-	if (ci->i_wb_ref) {
+	if (ci->i_fb_ref) {
 		dout("finish_cap_snap %p cap_snap %p snapc %p %llu %s s=%llu "
 		     "used WRBUFFER, delaying\n", inode, capsnap,
 		     capsnap->context, capsnap->context->seq,

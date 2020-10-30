@@ -516,11 +516,11 @@ struct inode *ceph_alloc_inode(struct super_block *sb)
 	ci->i_requested_max_size = 0;
 
 	ci->i_pin_ref = 0;
-	ci->i_rd_ref = 0;
-	ci->i_rdcache_ref = 0;
-	ci->i_wr_ref = 0;
-	ci->i_wb_ref = 0;
 	ci->i_fx_ref = 0;
+	ci->i_fr_ref = 0;
+	ci->i_fc_ref = 0;
+	ci->i_fw_ref = 0;
+	ci->i_fb_ref = 0;
 	ci->i_wrbuffer_ref = 0;
 	ci->i_wrbuffer_ref_head = 0;
 	atomic_set(&ci->i_filelock_ref, 0);
@@ -1931,7 +1931,7 @@ retry:
 	}
 
 	/* there should be no reader or writer */
-	WARN_ON_ONCE(ci->i_rd_ref || ci->i_wr_ref);
+	WARN_ON_ONCE(ci->i_fr_ref || ci->i_fw_ref);
 
 	to = ci->i_truncate_size;
 	wrbuffer_refs = ci->i_wrbuffer_ref;
