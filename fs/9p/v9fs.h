@@ -123,6 +123,15 @@ static inline struct v9fs_inode *V9FS_I(const struct inode *inode)
 {
 	return container_of(inode, struct v9fs_inode, vfs_inode);
 }
+ 
+static inline struct fscache_cookie *v9fs_inode_cookie(struct v9fs_inode *v9inode)
+{
+#ifdef CONFIG_9P_FSCACHE
+	return v9inode->fscache;
+#else
+	return NULL;
+#endif	
+}
 
 extern int v9fs_show_options(struct seq_file *m, struct dentry *root);
 
