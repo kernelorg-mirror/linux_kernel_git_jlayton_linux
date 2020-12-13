@@ -18,18 +18,22 @@ these functions can be called from any context.
 Note that there is a risk of collisions if new errors are being recorded
 frequently, since we have so few bits to use as a counter.
 
-To mitigate this, the bit between the error value and counter is used as
-a flag to tell whether the value has been sampled since a new value was
-recorded.  That allows us to avoid bumping the counter if no one has
-sampled it since the last time an error was recorded.
+To mitigate this, the bits between the error value and counter are used
+as flags to tell whether the value has been sampled since a new value
+was recorded, and whether the latest error has been seen by userland.
+That allows us to avoid bumping the counter if no one has sampled it
+since the last time an error was recorded, and also ensures that any
+recorded error will be seen at least once.
 
 Thus we end up with a value that looks something like this:
 
-+--------------------------------------+----+------------------------+
-| 31..13                               | 12 | 11..0                  |
-+--------------------------------------+----+------------------------+
-| counter                              | SF | errno                  |
-+--------------------------------------+----+------------------------+
++---------------------------------+----+----+------------------------+
+| 31..14                          | 13 | 12 | 11..0                  |
++---------------------------------+----+----+------------------------+
+| counter                         | OF | RF | errno                  |
++---------------------------------+----+----+------------------------+
+OF = ERRSEQ_OBSERVED flag
+RF = ERRSEQ_REPORTED flag
 
 The general idea is for "watchers" to sample an errseq_t value and keep
 it as a running cursor.  That value can later be used to tell whether
