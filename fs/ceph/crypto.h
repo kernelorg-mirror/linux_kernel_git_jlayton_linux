@@ -52,6 +52,10 @@ struct ceph_fscrypt_auth {
 	u8	cfa_blob[FSCRYPT_SET_CONTEXT_MAX_SIZE];
 } __packed;
 
+#define CEPH_FSCRYPT_BLOCK_SHIFT	12
+#define CEPH_FSCRYPT_BLOCK_SIZE		(_AC(1,UL) << CEPH_FSCRYPT_BLOCK_SHIFT)
+#define CEPH_FSCRYPT_BLOCK_MASK		(~(CEPH_FSCRYPT_BLOCK_SIZE-1))
+
 #define CEPH_FSCRYPT_AUTH_VERSION	1
 static inline u32 ceph_fscrypt_auth_len(struct ceph_fscrypt_auth *fa)
 {
