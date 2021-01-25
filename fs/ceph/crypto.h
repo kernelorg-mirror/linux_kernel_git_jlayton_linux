@@ -52,6 +52,10 @@ struct ceph_fscrypt_auth {
 	u8	cfa_blob[FSCRYPT_SET_CONTEXT_MAX_SIZE];
 } __packed;
 
+#define CEPH_FSCRYPT_BLOCK_SHIFT	12
+#define CEPH_FSCRYPT_BLOCK_SIZE		(_AC(1,UL) << CEPH_FSCRYPT_BLOCK_SHIFT)
+#define CEPH_FSCRYPT_BLOCK_MASK		(~(CEPH_FSCRYPT_BLOCK_SIZE-1))
+
 #define CEPH_FSCRYPT_AUTH_VERSION	1
 static inline u32 ceph_fscrypt_auth_len(struct ceph_fscrypt_auth *fa)
 {
@@ -104,6 +108,14 @@ static inline void ceph_fname_free_buffer(struct inode *parent, struct fscrypt_s
 int ceph_fname_to_usr(const struct ceph_fname *fname, struct fscrypt_str *tname,
 			struct fscrypt_str *oname, bool *is_nokey);
 
+static inline unsigned int ceph_fscrypt_blocks(u64 off, u64 len)
+{
+	/* crypto blocks cannot span more than one page */
+	BUILD_BUG_ON(CEPH_FSCRYPT_BLOCK_SHIFT > PAGE_SHIFT);
+
+	return ((off+len+CEPH_FSCRYPT_BLOCK_SIZE-1) >> CEPH_FSCRYPT_BLOCK_SHIFT) -
+		(off >> CEPH_FSCRYPT_BLOCK_SHIFT);
+}
 #else /* CONFIG_FS_ENCRYPTION */
 
 static inline void ceph_fscrypt_set_ops(struct super_block *sb)
