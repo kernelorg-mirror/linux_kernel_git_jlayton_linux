@@ -1256,6 +1256,7 @@ extern int ceph_uninline_data(struct file *file);
 extern int ceph_pool_perm_check(struct inode *inode, int need);
 extern void ceph_pool_perm_destroy(struct ceph_mds_client* mdsc);
 int ceph_purge_inode_cap(struct inode *inode, struct ceph_cap *cap, bool *invalidate);
+int ceph_sparse_read_pp(struct inode *inode, struct page *page, u64 off, u64 len);
 
 /* file.c */
 extern const struct file_operations ceph_file_fops;
