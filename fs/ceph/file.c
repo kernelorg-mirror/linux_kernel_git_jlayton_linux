@@ -940,6 +940,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 
 	if (!len)
 		return 0;
+
 	/*
 	 * flush any page cache pages in this range.  this
 	 * will make concurrent normal and sync io slow,
@@ -960,9 +961,17 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 		bool more;
 		int idx;
 		size_t left;
+		u64 read_off = off;
+		u64 read_len = len;
 
+		fscrypt_adjust_off_and_len(inode, &read_off, &read_len);
+
+		dout("sync_read orig %llu~%llu reading %llu~%llu",
+		     off, len, read_off, read_len);
+
+		/* determine new offset/length if encrypted */
 		req = ceph_osdc_new_request(osdc, &ci->i_layout,
-					ci->i_vino, off, &len, 0, 1,
+					ci->i_vino, read_off, &read_len, 0, 1,
 					CEPH_OSD_OP_READ, CEPH_OSD_FLAG_READ,
 					NULL, ci->i_truncate_seq,
 					ci->i_truncate_size, false);
@@ -971,10 +980,9 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 			break;
 		}
 
-		more = len < iov_iter_count(to);
+		more = read_len < iov_iter_count(to);
 
-		num_pages = calc_pages_for(off, len);
-		page_off = off & ~PAGE_MASK;
+		num_pages = calc_pages_for(read_off, read_len);
 		pages = ceph_alloc_page_vector(num_pages, GFP_KERNEL);
 		if (IS_ERR(pages)) {
 			ceph_osdc_put_request(req);
@@ -982,7 +990,8 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 			break;
 		}
 
-		osd_req_op_extent_osd_data_pages(req, 0, pages, len, page_off,
+		page_off = offset_in_page(read_off);
+		osd_req_op_extent_osd_data_pages(req, 0, pages, read_len, page_off,
 						 false, false);
 		ret = ceph_osdc_start_request(osdc, req, false);
 		if (!ret)
@@ -991,18 +1000,50 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 		ceph_update_read_metrics(&fsc->mdsc->metric,
 					 req->r_start_latency,
 					 req->r_end_latency,
-					 len, ret);
+					 read_len, ret);
 
 		if (ret > 0)
 			objvers = req->r_version;
-		ceph_osdc_put_request(req);
 
 		i_size = i_size_read(inode);
 		dout("sync_read %llu~%llu got %zd i_size %llu%s\n",
 		     off, len, ret, i_size, (more ? " MORE" : ""));
 
-		if (ret == -ENOENT)
+		if (ret == -ENOENT) {
+			/* No object? Then this is a hole */
 			ret = 0;
+		} else if (ret > 0 && IS_ENCRYPTED(inode)) {
+			int i;
+			u64 baseblk = read_off >> CEPH_FSCRYPT_BLOCK_SHIFT;
+			int num_blocks = ceph_fscrypt_blocks(read_off, ret);
+
+			/* Can't deal with partial blocks */
+			WARN_ON_ONCE(ret & ~CEPH_FSCRYPT_BLOCK_MASK);
+
+			/* Decrypt each block */
+			for (i = 0; i < num_blocks; ++i) {
+				int blkoff = i << CEPH_FSCRYPT_BLOCK_SHIFT;
+				int pgidx = blkoff >> PAGE_SHIFT;
+				unsigned int pgoffs = offset_in_page(blkoff);
+				int fret;
+
+				fret = fscrypt_decrypt_block_inplace(inode, pages[pgidx],
+						CEPH_FSCRYPT_BLOCK_SIZE, pgoffs,
+						baseblk + i);
+				if (fret < 0) {
+					ret = fret;
+					ceph_release_page_vector(pages, num_pages);
+					goto out;
+				}
+			}
+
+			/* fudge read length now if we expanded earlier */
+			ret -= (off - read_off);
+			ret = min_t(ssize_t, ret, len);
+		}
+
+		/* Zero out parts of the buffer that didn't get read */
+		page_off = offset_in_page(off);
 		if (ret >= 0 && ret < len && (off + ret < i_size)) {
 			int zlen = min(len - ret, i_size - off - ret);
 			int zoff = page_off + ret;
@@ -1016,18 +1057,18 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 		left = ret > 0 ? ret : 0;
 		while (left > 0) {
 			size_t plen, copied;
-			page_off = off & ~PAGE_MASK;
-			len = min_t(size_t, left, PAGE_SIZE - page_off);
-			SetPageUptodate(pages[idx]);
+			plen = min_t(size_t, left, PAGE_SIZE - page_off);
 			copied = copy_page_to_iter(pages[idx++],
 						   page_off, plen, to);
 			off += copied;
 			left -= copied;
+			page_off = 0;
 			if (copied < plen) {
 				ret = -EFAULT;
 				break;
 			}
 		}
+		ceph_osdc_put_request(req);
 		ceph_release_page_vector(pages, num_pages);
 
 		if (ret < 0) {
@@ -1053,7 +1094,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 
 	if (last_objvers && ret > 0)
 		*last_objvers = objvers;
-
+out:
 	dout("sync_read result %zd retry_op %d\n", ret, *retry_op);
 	return ret;
 }
