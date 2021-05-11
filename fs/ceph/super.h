@@ -430,6 +430,12 @@ struct ceph_inode_info {
 #ifdef CONFIG_CEPH_FSCACHE
 	struct fscache_cookie *fscache;
 #endif
+#ifdef CONFIG_FS_ENCRYPTION
+	u32 fscrypt_auth_len;
+	u32 fscrypt_file_len;
+	u8 *fscrypt_auth;
+	u8 *fscrypt_file;
+#endif
 	errseq_t i_meta_err;
 
 	struct inode vfs_inode; /* at end */
