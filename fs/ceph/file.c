@@ -2445,6 +2445,16 @@ static ssize_t __ceph_copy_file_range(struct file *src_file, loff_t src_off,
 		    ceph_quota_is_max_bytes_approaching(dst_inode, dst_off))
 			ceph_check_caps(dst_ci, CHECK_CAPS_AUTHONLY, NULL);
 	}
+
+	/* Drop dst file cached pages */
+	ceph_fscache_invalidate(dst_inode, 0);
+	ret = invalidate_inode_pages2_range(dst_inode->i_mapping,
+					    dst_off >> PAGE_SHIFT,
+					    (dst_off + len) >> PAGE_SHIFT);
+	if (ret < 0) {
+		dout("Failed to invalidate inode pages (%zd)\n", ret);
+		ret = 0; /* XXX */
+	}
 	/* Mark Fw dirty */
 	spin_lock(&dst_ci->i_ceph_lock);
 	dst_ci->i_inline_version = CEPH_INLINE_NONE;
