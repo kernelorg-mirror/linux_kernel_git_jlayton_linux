@@ -42,7 +42,8 @@ static inline void ceph_fscache_resize(struct inode *inode, loff_t to)
 
 	if (cookie) {
 		ceph_fscache_use_cookie(inode, true);
-		fscache_resize_cookie(cookie, to);
+//		fscache_resize_cookie(cookie, to);
+		ceph_fscache_invalidate(inode, 0);
 		ceph_fscache_unuse_cookie(inode, true);
 	}
 }
