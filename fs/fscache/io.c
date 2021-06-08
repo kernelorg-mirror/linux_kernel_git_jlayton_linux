@@ -42,6 +42,7 @@ again:
 			goto ready; /* There can be no content */
 		fallthrough;
 	case FSCACHE_COOKIE_STAGE_LOOKING_UP:
+	case FSCACHE_COOKIE_STAGE_COMMITTING:
 		wait_var_event(&cookie->stage, READ_ONCE(cookie->stage) != stage);
 		goto again;
 
@@ -91,6 +92,7 @@ again:
 
 	switch (stage) {
 	case FSCACHE_COOKIE_STAGE_LOOKING_UP:
+	case FSCACHE_COOKIE_STAGE_COMMITTING:
 		goto wait_and_validate;
 	case FSCACHE_COOKIE_STAGE_INVALIDATING:
 	case FSCACHE_COOKIE_STAGE_CREATING:
