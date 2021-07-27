@@ -82,12 +82,15 @@ void ceph_get_snap_realm(struct ceph_mds_client *mdsc,
 	}
 }
 
-static void __insert_snap_realm(struct rb_root *root,
+static void __insert_snap_realm(struct ceph_mds_client *mdsc,
 				struct ceph_snap_realm *new)
 {
+	struct rb_root *root = &mdsc->snap_realms;
 	struct rb_node **p = &root->rb_node;
 	struct rb_node *parent = NULL;
 	struct ceph_snap_realm *r = NULL;
+
+	lockdep_assert_held_write(&mdsc->snap_rwsem);
 
 	while (*p) {
 		parent = *p;
@@ -102,6 +105,7 @@ static void __insert_snap_realm(struct rb_root *root,
 
 	rb_link_node(&new->node, parent, p);
 	rb_insert_color(&new->node, root);
+	mdsc->num_snap_realms++;
 }
 
 /*
@@ -115,22 +119,19 @@ static struct ceph_snap_realm *ceph_create_snap_realm(
 {
 	struct ceph_snap_realm *realm;
 
-	lockdep_assert_held_write(&mdsc->snap_rwsem);
-
 	realm = kzalloc(sizeof(*realm), GFP_NOFS);
 	if (!realm)
 		return ERR_PTR(-ENOMEM);
 
 	atomic_set(&realm->nref, 1);    /* for caller */
 	realm->ino = ino;
+	RB_CLEAR_NODE(&realm->node);
 	INIT_LIST_HEAD(&realm->children);
 	INIT_LIST_HEAD(&realm->child_item);
 	INIT_LIST_HEAD(&realm->empty_item);
 	INIT_LIST_HEAD(&realm->dirty_item);
 	INIT_LIST_HEAD(&realm->inodes_with_caps);
 	spin_lock_init(&realm->inodes_with_caps_lock);
-	__insert_snap_realm(&mdsc->snap_realms, realm);
-	mdsc->num_snap_realms++;
 
 	dout("create_snap_realm %llx %p\n", realm->ino, realm);
 	return realm;
@@ -186,8 +187,10 @@ static void __destroy_snap_realm(struct ceph_mds_client *mdsc,
 
 	dout("__destroy_snap_realm %p %llx\n", realm, realm->ino);
 
-	rb_erase(&realm->node, &mdsc->snap_realms);
-	mdsc->num_snap_realms--;
+	if (!RB_EMPTY_NODE(&realm->node)) {
+		rb_erase(&realm->node, &mdsc->snap_realms);
+		mdsc->num_snap_realms--;
+	}
 
 	if (realm->parent) {
 		list_del_init(&realm->child_item);
@@ -291,6 +294,7 @@ static int adjust_snap_realm_parent(struct ceph_mds_client *mdsc,
 		parent = ceph_create_snap_realm(mdsc, parentino);
 		if (IS_ERR(parent))
 			return PTR_ERR(parent);
+		__insert_snap_realm(mdsc, parent);
 	}
 	dout("adjust_snap_realm_parent %llx %p: %llx %p -> %llx %p\n",
 	     realm->ino, realm, realm->parent_ino, realm->parent,
@@ -729,6 +733,7 @@ more:
 			err = PTR_ERR(realm);
 			goto fail;
 		}
+		__insert_snap_realm(mdsc, realm);
 	}
 
 	/* ensure the parent is correct */
@@ -959,6 +964,7 @@ void ceph_handle_snap(struct ceph_mds_client *mdsc,
 			realm = ceph_create_snap_realm(mdsc, split);
 			if (IS_ERR(realm))
 				goto out;
+			__insert_snap_realm(mdsc, realm);
 		}
 
 		dout("splitting snap_realm %llx %p\n", realm->ino, realm);
