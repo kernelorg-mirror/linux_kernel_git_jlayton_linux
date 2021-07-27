@@ -4624,6 +4624,18 @@ int ceph_mdsc_init(struct ceph_fs_client *fsc)
 		goto err_mdsc;
 	}
 
+	err = ceph_metric_init(&mdsc->metric);
+	if (err)
+		goto err_mdsmap;
+
+	/* fake up a shared realm for the mdsdirs */
+	mdsc->mdsdir_realm = ceph_create_snap_realm(mdsc, CEPH_MDS_INO_MDSDIR_OFFSET);
+	if (IS_ERR(mdsc->mdsdir_realm)) {
+		err = PTR_ERR(mdsc->mdsdir_realm);
+		goto err_metric;
+	}
+	mdsc->mdsdir_realm->seq = 1;
+
 	init_completion(&mdsc->safe_umount_waiters);
 	init_waitqueue_head(&mdsc->session_close_wq);
 	INIT_LIST_HEAD(&mdsc->waiting_for_map);
@@ -4647,10 +4659,6 @@ int ceph_mdsc_init(struct ceph_fs_client *fsc)
 	spin_lock_init(&mdsc->cap_dirty_lock);
 	init_waitqueue_head(&mdsc->cap_flushing_wq);
 	INIT_WORK(&mdsc->cap_reclaim_work, ceph_cap_reclaim_work);
-	err = ceph_metric_init(&mdsc->metric);
-	if (err)
-		goto err_mdsmap;
-
 	spin_lock_init(&mdsc->dentry_list_lock);
 	INIT_LIST_HEAD(&mdsc->dentry_leases);
 	INIT_LIST_HEAD(&mdsc->dentry_dir_leases);
@@ -4671,6 +4679,8 @@ int ceph_mdsc_init(struct ceph_fs_client *fsc)
 	fsc->mdsc = mdsc;
 	return 0;
 
+err_metric:
+	ceph_metric_destroy(&mdsc->metric);
 err_mdsmap:
 	kfree(mdsc->mdsmap);
 err_mdsc:
@@ -4968,6 +4978,8 @@ void ceph_mdsc_destroy(struct ceph_fs_client *fsc)
 	ceph_mdsc_stop(mdsc);
 
 	ceph_metric_destroy(&mdsc->metric);
+
+	ceph_put_snap_realm(mdsc, mdsc->mdsdir_realm);
 
 	fsc->mdsc = NULL;
 	kfree(mdsc);

@@ -113,9 +113,7 @@ static void __insert_snap_realm(struct ceph_mds_client *mdsc,
  *
  * caller must hold snap_rwsem for write.
  */
-static struct ceph_snap_realm *ceph_create_snap_realm(
-	struct ceph_mds_client *mdsc,
-	u64 ino)
+struct ceph_snap_realm *ceph_create_snap_realm(struct ceph_mds_client *mdsc, u64 ino)
 {
 	struct ceph_snap_realm *realm;
 
@@ -168,7 +166,12 @@ struct ceph_snap_realm *ceph_lookup_snap_realm(struct ceph_mds_client *mdsc,
 					       u64 ino)
 {
 	struct ceph_snap_realm *r;
-	r = __lookup_snap_realm(mdsc, ino);
+
+	if (ino >= CEPH_MDS_INO_MDSDIR_OFFSET && ino <= CEPH_MDS_INO_MDSDIR_MAX)
+		r = mdsc->mdsdir_realm;
+	else
+		r = __lookup_snap_realm(mdsc, ino);
+
 	if (r)
 		ceph_get_snap_realm(mdsc, r);
 	return r;

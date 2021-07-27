@@ -66,6 +66,7 @@ enum ceph_feature_type {
 
 struct ceph_fs_client;
 struct ceph_cap;
+struct ceph_snap_realm;
 
 /*
  * parsed info about a single inode.  pointers are into the encoded
@@ -411,6 +412,7 @@ struct ceph_mds_client {
 	 */
 	u64			last_snap_seq;
 	struct rw_semaphore     snap_rwsem;
+	struct ceph_snap_realm	*mdsdir_realm;
 	struct rb_root          snap_realms;
 	struct list_head        snap_empty;
 	int			num_snap_realms;

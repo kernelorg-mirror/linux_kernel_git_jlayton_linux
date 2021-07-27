@@ -540,9 +540,13 @@ static inline int ceph_ino_compare(struct inode *inode, void *data)
  *
  * These come from src/mds/mdstypes.h in the ceph sources.
  */
-#define CEPH_MAX_MDS		0x100
-#define CEPH_NUM_STRAY		10
+#define CEPH_MAX_MDS			0x100
+#define CEPH_NUM_STRAY			10
+/* inode number of first mdsdir */
 #define CEPH_MDS_INO_MDSDIR_OFFSET	(1 * CEPH_MAX_MDS)
+/* inode number of last mdsdir */
+#define CEPH_MDS_INO_MDSDIR_MAX		(1 * CEPH_MAX_MDS + 0xff)
+/* last MDS-private inode number */
 #define CEPH_INO_SYSTEM_BASE		((6*CEPH_MAX_MDS) + (CEPH_MAX_MDS * CEPH_NUM_STRAY))
 
 static inline bool ceph_vino_is_reserved(const struct ceph_vino vino)
@@ -923,12 +927,12 @@ static inline int default_congestion_kb(void)
 /* super.c */
 extern int ceph_force_reconnect(struct super_block *sb);
 /* snap.c */
-struct ceph_snap_realm *ceph_lookup_snap_realm(struct ceph_mds_client *mdsc,
-					       u64 ino);
 extern void ceph_get_snap_realm(struct ceph_mds_client *mdsc,
 				struct ceph_snap_realm *realm);
 extern void ceph_put_snap_realm(struct ceph_mds_client *mdsc,
 				struct ceph_snap_realm *realm);
+struct ceph_snap_realm *ceph_create_snap_realm(struct ceph_mds_client *mdsc, u64 ino);
+struct ceph_snap_realm *ceph_lookup_snap_realm(struct ceph_mds_client *mdsc, u64 ino);
 extern int ceph_update_snap_trace(struct ceph_mds_client *m,
 				  void *p, void *e, bool deletion,
 				  struct ceph_snap_realm **realm_ret);
