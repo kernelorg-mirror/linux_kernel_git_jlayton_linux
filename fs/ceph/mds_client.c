@@ -4627,21 +4627,12 @@ int ceph_mdsc_init(struct ceph_fs_client *fsc)
 	init_completion(&mdsc->safe_umount_waiters);
 	init_waitqueue_head(&mdsc->session_close_wq);
 	INIT_LIST_HEAD(&mdsc->waiting_for_map);
-	mdsc->sessions = NULL;
-	atomic_set(&mdsc->num_sessions, 0);
-	mdsc->max_sessions = 0;
-	mdsc->stopping = 0;
-	atomic64_set(&mdsc->quotarealms_count, 0);
 	mdsc->quotarealms_inodes = RB_ROOT;
 	mutex_init(&mdsc->quotarealms_inodes_mutex);
-	mdsc->last_snap_seq = 0;
 	init_rwsem(&mdsc->snap_rwsem);
 	mdsc->snap_realms = RB_ROOT;
 	INIT_LIST_HEAD(&mdsc->snap_empty);
-	mdsc->num_snap_realms = 0;
 	spin_lock_init(&mdsc->snap_empty_lock);
-	mdsc->last_tid = 0;
-	mdsc->oldest_tid = 0;
 	mdsc->request_tree = RB_ROOT;
 	INIT_DELAYED_WORK(&mdsc->delayed_work, delayed_work);
 	mdsc->last_renew_caps = jiffies;
@@ -4653,11 +4644,9 @@ int ceph_mdsc_init(struct ceph_fs_client *fsc)
 	mdsc->last_cap_flush_tid = 1;
 	INIT_LIST_HEAD(&mdsc->cap_flush_list);
 	INIT_LIST_HEAD(&mdsc->cap_dirty_migrating);
-	mdsc->num_cap_flushing = 0;
 	spin_lock_init(&mdsc->cap_dirty_lock);
 	init_waitqueue_head(&mdsc->cap_flushing_wq);
 	INIT_WORK(&mdsc->cap_reclaim_work, ceph_cap_reclaim_work);
-	atomic_set(&mdsc->cap_reclaim_pending, 0);
 	err = ceph_metric_init(&mdsc->metric);
 	if (err)
 		goto err_mdsmap;
