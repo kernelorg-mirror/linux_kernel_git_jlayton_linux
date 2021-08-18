@@ -51,6 +51,8 @@ static struct netfs_read_request *netfs_alloc_read_request(struct address_space 
 		INIT_WORK(&rreq->work, netfs_rreq_work);
 		refcount_set(&rreq->usage, 1);
 		__set_bit(NETFS_RREQ_IN_PROGRESS, &rreq->flags);
+		if (test_bit(NETFS_ICTX_ENCRYPTED, &ctx->flags))
+			__set_bit(NETFS_RREQ_DECRYPT, &rreq->flags);
 		ctx->ops->init_rreq(rreq, file);
 		netfs_stat(&netfs_n_rh_rreq);
 	}
@@ -434,6 +436,8 @@ again:
 		return;
 	}
 
+	if (test_bit(NETFS_RREQ_DECRYPT, &rreq->flags))
+		netfs_rreq_decrypt(rreq);
 	netfs_rreq_unlock(rreq);
 
 	clear_bit_unlock(NETFS_RREQ_IN_PROGRESS, &rreq->flags);
@@ -459,7 +463,8 @@ static void netfs_rreq_work(struct work_struct *work)
 static void netfs_rreq_terminated(struct netfs_read_request *rreq,
 				  bool was_async)
 {
-	if (test_bit(NETFS_RREQ_INCOMPLETE_IO, &rreq->flags) &&
+	if ((test_bit(NETFS_RREQ_INCOMPLETE_IO, &rreq->flags) ||
+	     test_bit(NETFS_RREQ_DECRYPT, &rreq->flags)) &&
 	    was_async) {
 		if (!queue_work(system_unbound_wq, &rreq->work))
 			BUG();

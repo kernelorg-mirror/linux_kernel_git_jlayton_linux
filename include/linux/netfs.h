@@ -207,6 +207,7 @@ struct netfs_read_request {
 #define NETFS_RREQ_DONT_UNLOCK_FOLIOS	3	/* Don't unlock the folios on completion */
 #define NETFS_RREQ_FAILED		4	/* The request failed */
 #define NETFS_RREQ_IN_PROGRESS		5	/* Unlocked when the request completes */
+#define NETFS_RREQ_DECRYPT		6	/* Decrypted when the request completes */
 	const struct netfs_request_ops *netfs_ops;
 };
 
@@ -391,6 +392,9 @@ struct netfs_request_ops {
 	bool (*encrypt_block)(struct netfs_write_request *wreq, loff_t pos, size_t len,
 			      struct scatterlist *source_sg, unsigned int n_source,
 			      struct scatterlist *dest_sg, unsigned int n_dest);
+	int (*decrypt_block)(struct netfs_read_request *rreq, loff_t pos, size_t len,
+			     struct scatterlist *source_sg, unsigned int n_source,
+			     struct scatterlist *dest_sg, unsigned int n_dest);
 };
 
 /*
