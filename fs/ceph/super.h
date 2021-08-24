@@ -450,6 +450,7 @@ struct ceph_inode_info {
 	errseq_t i_meta_err;
 
 	struct inode vfs_inode; /* at end */
+	struct netfs_i_context netfs_ctx;
 };
 
 static inline struct ceph_inode_info *
@@ -1221,6 +1222,7 @@ extern void __ceph_touch_fmode(struct ceph_inode_info *ci,
 
 /* addr.c */
 extern const struct address_space_operations ceph_aops;
+extern const struct netfs_request_ops ceph_netfs_ops;
 extern int ceph_mmap(struct file *file, struct vm_area_struct *vma);
 extern int ceph_uninline_data(struct file *filp, struct page *locked_page);
 extern int ceph_pool_perm_check(struct inode *inode, int need);

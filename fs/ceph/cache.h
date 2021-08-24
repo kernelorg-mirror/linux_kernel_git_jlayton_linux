@@ -41,15 +41,6 @@ static inline void ceph_fscache_invalidate(struct inode *inode)
 	fscache_invalidate(ceph_inode(inode)->fscache);
 }
 
-static inline bool ceph_is_cache_enabled(struct inode *inode)
-{
-	struct fscache_cookie *cookie = ceph_fscache_cookie(ceph_inode(inode));
-
-	if (!cookie)
-		return false;
-	return fscache_cookie_enabled(cookie);
-}
-
 static inline int ceph_begin_cache_operation(struct netfs_read_request *rreq)
 {
 	struct fscache_cookie *cookie = ceph_fscache_cookie(ceph_inode(rreq->inode));
@@ -101,11 +92,6 @@ static inline void ceph_fscache_file_set_cookie(struct inode *inode,
 
 static inline void ceph_fscache_invalidate(struct inode *inode)
 {
-}
-
-static inline bool ceph_is_cache_enabled(struct inode *inode)
-{
-	return false;
 }
 
 static inline int ceph_begin_cache_operation(struct netfs_read_request *rreq)

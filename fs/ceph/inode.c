@@ -625,6 +625,7 @@ struct inode *ceph_alloc_inode(struct super_block *sb)
 	ci->fscrypt_auth = NULL;
 	ci->fscrypt_auth_len = 0;
 #endif
+	netfs_i_context_init(&ci->vfs_inode, &ceph_netfs_ops);
 
 	return &ci->vfs_inode;
 }
