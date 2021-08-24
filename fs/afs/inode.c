@@ -54,6 +54,25 @@ static noinline void dump_vnode(struct afs_vnode *vnode, struct afs_vnode *paren
 }
 
 /*
+ * Set parameters for the netfs library
+ */
+static void afs_set_netfs_context(struct afs_vnode *vnode)
+{
+	struct netfs_i_context *ctx = netfs_i_context(&vnode->vfs_inode);
+	struct afs_super_info *as = AFS_FS_S(vnode->vfs_inode.i_sb);
+
+	netfs_i_context_init(&vnode->vfs_inode, &afs_req_ops);
+	ctx->wsize = 16*1024*1024; // 0x33333;
+	//ctx->min_bshift = ilog2(0x10000);
+	//ctx->obj_bshift = ilog2(0x40000);
+	if (vnode->status.type == AFS_FTYPE_FILE && as->fscrypt) {
+		ctx->crypto_bshift = ilog2(4096);
+		ctx->min_bshift = ctx->crypto_bshift;
+		__set_bit(NETFS_ICTX_ENCRYPTED, &ctx->flags);
+	}
+}
+
+/*
  * Set the file size and block count.  Estimate the number of 512 bytes blocks
  * used, rounded up to nearest 1K for consistency with other AFS clients.
  */
@@ -105,7 +124,7 @@ static int afs_inode_init_from_status(struct afs_operation *op,
 		inode->i_mode	= S_IFREG | (status->mode & S_IALLUGO);
 		inode->i_op	= &afs_file_inode_operations;
 		inode->i_fop	= &afs_file_operations;
-		inode->i_mapping->a_ops	= &afs_fs_aops;
+		inode->i_mapping->a_ops	= &afs_file_aops;
 		break;
 	case AFS_FTYPE_DIR:
 		inode->i_mode	= S_IFDIR |  (status->mode & S_IALLUGO);
@@ -123,11 +142,11 @@ static int afs_inode_init_from_status(struct afs_operation *op,
 			inode->i_mode	= S_IFDIR | 0555;
 			inode->i_op	= &afs_mntpt_inode_operations;
 			inode->i_fop	= &afs_mntpt_file_operations;
-			inode->i_mapping->a_ops	= &afs_fs_aops;
+			inode->i_mapping->a_ops	= &afs_symlink_aops;
 		} else {
 			inode->i_mode	= S_IFLNK | status->mode;
 			inode->i_op	= &afs_symlink_inode_operations;
-			inode->i_mapping->a_ops	= &afs_fs_aops;
+			inode->i_mapping->a_ops	= &afs_symlink_aops;
 		}
 		inode_nohighmem(inode);
 		break;
@@ -138,6 +157,7 @@ static int afs_inode_init_from_status(struct afs_operation *op,
 	}
 
 	afs_set_i_size(vnode, status->size);
+	afs_set_netfs_context(vnode);
 
 	vnode->invalid_before	= status->data_version;
 	inode_set_iversion_raw(&vnode->vfs_inode, status->data_version);
@@ -249,6 +269,7 @@ static void afs_apply_status(struct afs_operation *op,
 		 */
 		if (change_size) {
 			afs_set_i_size(vnode, status->size);
+			vnode->netfs_ctx.zero_point = status->size;
 			inode->i_ctime = t;
 			inode->i_atime = t;
 		}
@@ -430,7 +451,7 @@ static void afs_get_inode_cache(struct afs_vnode *vnode)
 	struct afs_vnode_cache_aux aux;
 
 	if (vnode->status.type != AFS_FTYPE_FILE) {
-		vnode->cache = NULL;
+		vnode->netfs_ctx.cache = NULL;
 		return;
 	}
 
@@ -440,11 +461,13 @@ static void afs_get_inode_cache(struct afs_vnode *vnode)
 	key.vnode_id_ext[1]	= vnode->fid.vnode_hi;
 	aux.data_version	= vnode->status.data_version;
 
-	vnode->cache = fscache_acquire_cookie(vnode->volume->cache,
-					      &afs_vnode_cache_index_def,
-					      &key, sizeof(key),
-					      &aux, sizeof(aux),
-					      vnode, vnode->status.size, true);
+	afs_vnode_set_cache(vnode,
+			    fscache_acquire_cookie(
+				    vnode->volume->cache,
+				    &afs_vnode_cache_index_def,
+				    &key, sizeof(key),
+				    &aux, sizeof(aux),
+				    vnode, vnode->status.size, true));
 #endif
 }
 
@@ -537,6 +560,7 @@ struct inode *afs_root_iget(struct super_block *sb, struct key *key)
 
 	vnode = AFS_FS_I(inode);
 	vnode->cb_v_break = as->volume->cb_v_break,
+	afs_set_netfs_context(vnode);
 
 	op = afs_alloc_operation(key, as->volume);
 	if (IS_ERR(op)) {
@@ -573,9 +597,7 @@ static void afs_zap_data(struct afs_vnode *vnode)
 {
 	_enter("{%llx:%llu}", vnode->fid.vid, vnode->fid.vnode);
 
-#ifdef CONFIG_AFS_FSCACHE
-	fscache_invalidate(vnode->cache);
-#endif
+	fscache_invalidate(afs_vnode_cache(vnode));
 
 	/* nuke all the non-dirty pages that aren't locked, mapped or being
 	 * written back in a regular file and completely discard the pages in a
@@ -797,16 +819,14 @@ void afs_evict_inode(struct inode *inode)
 		afs_put_wb_key(wbk);
 	}
 
-#ifdef CONFIG_AFS_FSCACHE
 	{
 		struct afs_vnode_cache_aux aux;
 
 		aux.data_version = vnode->status.data_version;
-		fscache_relinquish_cookie(vnode->cache, &aux,
+		fscache_relinquish_cookie(afs_vnode_cache(vnode), &aux,
 					  test_bit(AFS_VNODE_DELETED, &vnode->flags));
-		vnode->cache = NULL;
+		afs_vnode_set_cache(vnode, NULL);
 	}
-#endif
 
 	afs_prune_wb_keys(vnode);
 	afs_put_permits(rcu_access_pointer(vnode->permit_cache));
@@ -843,8 +863,10 @@ static void afs_setattr_edit_file(struct afs_operation *op)
 		loff_t size = op->setattr.attr->ia_size;
 		loff_t i_size = op->setattr.old_i_size;
 
-		if (size < i_size)
+		if (size < i_size) {
 			truncate_pagecache(inode, size);
+			netfs_resize_file(inode, size);
+		}
 	}
 }
 

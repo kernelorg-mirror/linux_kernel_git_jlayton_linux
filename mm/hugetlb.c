@@ -1717,6 +1717,7 @@ int PageHeadHuge(struct page *page_head)
 
 	return page_head[1].compound_dtor == HUGETLB_PAGE_DTOR;
 }
+EXPORT_SYMBOL(PageHeadHuge);
 
 /*
  * Find and lock address space (mapping) in write mode.
@@ -5207,7 +5208,7 @@ int hugetlb_mcopy_atomic_pte(struct mm_struct *dst_mm,
 			*pagep = NULL;
 			goto out;
 		}
-		copy_huge_page(page, *pagep);
+		folio_copy(page_folio(page), page_folio(*pagep));
 		put_page(*pagep);
 		*pagep = NULL;
 	}

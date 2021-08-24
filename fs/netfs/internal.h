@@ -5,6 +5,10 @@
  * Written by David Howells (dhowells@redhat.com)
  */
 
+#include <linux/netfs.h>
+#include <linux/fscache.h>
+#include <trace/events/netfs.h>
+
 #ifdef pr_fmt
 #undef pr_fmt
 #endif
@@ -12,9 +16,128 @@
 #define pr_fmt(fmt) "netfs: " fmt
 
 /*
+ * crypto.c
+ */
+bool netfs_wreq_encrypt(struct netfs_write_request *wreq);
+void netfs_rreq_decrypt(struct netfs_read_request *rreq);
+
+/*
+ * dio_helper.c
+ */
+ssize_t netfs_file_direct_write(struct netfs_dirty_region *region,
+				struct kiocb *iocb, struct iov_iter *from);
+
+/*
+ * main.c
+ */
+extern struct list_head netfs_regions;
+extern struct list_head netfs_wreqs;
+extern spinlock_t netfs_regions_lock;
+
+#ifdef CONFIG_PROC_FS
+static inline void netfs_proc_add_region(struct netfs_dirty_region *region)
+{
+	spin_lock(&netfs_regions_lock);
+	list_add_tail_rcu(&region->proc_link, &netfs_regions);
+	spin_unlock(&netfs_regions_lock);
+}
+static inline void netfs_proc_del_region(struct netfs_dirty_region *region)
+{
+	spin_lock(&netfs_regions_lock);
+	list_del_rcu(&region->proc_link);
+	spin_unlock(&netfs_regions_lock);
+}
+static inline void netfs_proc_add_wreq(struct netfs_write_request *wreq)
+{
+	spin_lock(&netfs_regions_lock);
+	list_add_tail_rcu(&wreq->proc_link, &netfs_wreqs);
+	spin_unlock(&netfs_regions_lock);
+}
+static inline void netfs_proc_del_wreq(struct netfs_write_request *wreq)
+{
+	if (!list_empty(&wreq->proc_link)) {
+		spin_lock(&netfs_regions_lock);
+		list_del_rcu(&wreq->proc_link);
+		spin_unlock(&netfs_regions_lock);
+	}
+}
+#else
+static inline void netfs_proc_add_region(struct netfs_dirty_region *region) {}
+static inline void netfs_proc_del_region(struct netfs_dirty_region *region) {}
+static inline void netfs_proc_add_wreq(struct netfs_write_request *wreq) {}
+static inline void netfs_proc_del_wreq(struct netfs_write_request *wreq) {}
+#endif
+
+int netfs_sanity_check_ictx(struct address_space *mapping);
+
+/*
+ * objects.c
+ */
+void netfs_deduct_write_credit(struct netfs_dirty_region *region, size_t credits);
+int netfs_wait_for_credit(struct writeback_control *wbc);
+struct netfs_flush_group *netfs_get_flush_group(struct netfs_flush_group *group);
+void netfs_put_flush_group(struct netfs_i_context *ctx, struct netfs_flush_group *group);
+struct netfs_dirty_region *netfs_alloc_dirty_region(void);
+struct netfs_dirty_region *netfs_get_dirty_region(struct netfs_i_context *ctx,
+						  struct netfs_dirty_region *region,
+						  enum netfs_region_trace what);
+void netfs_free_dirty_region(struct netfs_i_context *ctx, struct netfs_dirty_region *region);
+void netfs_put_dirty_region(struct netfs_i_context *ctx,
+			    struct netfs_dirty_region *region,
+			    enum netfs_region_trace what);
+struct netfs_write_request *netfs_alloc_write_request(struct address_space *mapping,
+						      bool is_dio);
+void netfs_get_write_request(struct netfs_write_request *wreq,
+			     enum netfs_wreq_trace what);
+void netfs_free_write_request(struct work_struct *work);
+void netfs_put_write_request(struct netfs_write_request *wreq,
+			     bool was_async, enum netfs_wreq_trace what);
+
+static inline void netfs_see_write_request(struct netfs_write_request *wreq,
+					   enum netfs_wreq_trace what)
+{
+	trace_netfs_ref_wreq(wreq->debug_id, refcount_read(&wreq->usage), what);
+}
+
+/*
  * read_helper.c
  */
 extern unsigned int netfs_debug;
+
+void __netfs_put_subrequest(struct netfs_read_subrequest *subreq, bool was_async);
+void netfs_put_read_request(struct netfs_read_request *rreq, bool was_async);
+void netfs_rreq_completed(struct netfs_read_request *rreq, bool was_async);
+int netfs_prefetch_for_write(struct file *file, struct folio *folio,
+			     loff_t pos, size_t len);
+
+static inline void netfs_put_subrequest(struct netfs_read_subrequest *subreq,
+					bool was_async)
+{
+	if (refcount_dec_and_test(&subreq->usage))
+		__netfs_put_subrequest(subreq, was_async);
+}
+
+/*
+ * write_helper.c
+ */
+extern atomic_t netfs_region_debug_ids;
+extern atomic_long_t netfs_write_credit;
+
+void netfs_writeback_worker(struct work_struct *work);
+void netfs_flush_region(struct netfs_i_context *ctx,
+			struct netfs_dirty_region *region,
+			enum netfs_dirty_trace why);
+void netfs_rreq_do_write_to_cache(struct netfs_read_request *rreq);
+
+/*
+ * xa_iterator.c
+ */
+void netfs_unlock_folios(struct address_space *mapping, pgoff_t start, pgoff_t end);
+int netfs_lock_folios(struct netfs_write_request *wreq, bool may_wait);
+void netfs_mark_folios_for_writeback(struct netfs_write_request *wreq,
+				     pgoff_t first, pgoff_t last);
+void netfs_end_writeback(struct netfs_write_request *wreq);
+void netfs_redirty_folios(struct netfs_write_request *wreq);
 
 /*
  * stats.c
@@ -33,11 +156,17 @@ extern atomic_t netfs_n_rh_read_done;
 extern atomic_t netfs_n_rh_read_failed;
 extern atomic_t netfs_n_rh_zero;
 extern atomic_t netfs_n_rh_short_read;
-extern atomic_t netfs_n_rh_write;
 extern atomic_t netfs_n_rh_write_begin;
-extern atomic_t netfs_n_rh_write_done;
-extern atomic_t netfs_n_rh_write_failed;
 extern atomic_t netfs_n_rh_write_zskip;
+extern atomic_t netfs_n_wh_region;
+extern atomic_t netfs_n_wh_flush_group;
+extern atomic_t netfs_n_wh_upload;
+extern atomic_t netfs_n_wh_upload_done;
+extern atomic_t netfs_n_wh_upload_failed;
+extern atomic_t netfs_n_wh_wreq;
+extern atomic_t netfs_n_wh_write;
+extern atomic_t netfs_n_wh_write_done;
+extern atomic_t netfs_n_wh_write_failed;
 
 
 static inline void netfs_stat(atomic_t *stat)
@@ -48,6 +177,17 @@ static inline void netfs_stat(atomic_t *stat)
 static inline void netfs_stat_d(atomic_t *stat)
 {
 	atomic_dec(stat);
+}
+
+static inline bool netfs_is_cache_enabled(struct netfs_i_context *ctx)
+{
+#ifdef CONFIG_FSCACHE
+	struct fscache_cookie *cookie = ctx->cache;
+
+	return fscache_cookie_valid(cookie) && fscache_cookie_enabled(cookie);
+#else
+	return false;
+#endif
 }
 
 #else

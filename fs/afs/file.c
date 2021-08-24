@@ -18,19 +18,14 @@
 #include "internal.h"
 
 static int afs_file_mmap(struct file *file, struct vm_area_struct *vma);
-static int afs_readpage(struct file *file, struct page *page);
-static void afs_invalidatepage(struct page *page, unsigned int offset,
-			       unsigned int length);
-static int afs_releasepage(struct page *page, gfp_t gfp_flags);
-
-static void afs_readahead(struct readahead_control *ractl);
+static int afs_symlink_readpage(struct file *file, struct page *page);
 
 const struct file_operations afs_file_operations = {
 	.open		= afs_open,
 	.release	= afs_release,
 	.llseek		= generic_file_llseek,
 	.read_iter	= generic_file_read_iter,
-	.write_iter	= afs_file_write,
+	.write_iter	= netfs_file_write_iter,
 	.mmap		= afs_file_mmap,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
@@ -45,17 +40,21 @@ const struct inode_operations afs_file_inode_operations = {
 	.permission	= afs_permission,
 };
 
-const struct address_space_operations afs_fs_aops = {
-	.readpage	= afs_readpage,
-	.readahead	= afs_readahead,
+const struct address_space_operations afs_file_aops = {
+	.readpage	= netfs_readpage,
+	.readahead	= netfs_readahead,
 	.set_page_dirty	= afs_set_page_dirty,
 	.launder_page	= afs_launder_page,
-	.releasepage	= afs_releasepage,
-	.invalidatepage	= afs_invalidatepage,
-	.write_begin	= afs_write_begin,
-	.write_end	= afs_write_end,
+	.releasepage	= netfs_releasepage,
+	.invalidatepage	= netfs_invalidatepage,
 	.writepage	= afs_writepage,
-	.writepages	= afs_writepages,
+	.writepages	= netfs_writepages,
+};
+
+const struct address_space_operations afs_symlink_aops = {
+	.readpage	= afs_symlink_readpage,
+	.releasepage	= netfs_releasepage,
+	.invalidatepage	= netfs_invalidatepage,
 };
 
 static const struct vm_operations_struct afs_vm_ops = {
@@ -144,8 +143,9 @@ int afs_open(struct inode *inode, struct file *file)
 	}
 
 	if (file->f_flags & O_TRUNC)
-		set_bit(AFS_VNODE_NEW_CONTENT, &vnode->flags);
-	
+		set_bit(NETFS_ICTX_NEW_CONTENT,
+			&netfs_i_context(&vnode->vfs_inode)->flags);
+
 	file->private_data = af;
 	_leave(" = 0");
 	return 0;
@@ -297,47 +297,37 @@ static void afs_req_issue_op(struct netfs_read_subrequest *subreq)
 	fsreq->len	= subreq->len   - subreq->transferred;
 	fsreq->key	= subreq->rreq->netfs_priv;
 	fsreq->vnode	= vnode;
-	fsreq->iter	= &fsreq->def_iter;
-
-	iov_iter_xarray(&fsreq->def_iter, READ,
-			&fsreq->vnode->vfs_inode.i_mapping->i_pages,
-			fsreq->pos, fsreq->len);
+	fsreq->iter	= &subreq->iter;
 
 	afs_fetch_data(fsreq->vnode, fsreq);
 }
 
-static int afs_symlink_readpage(struct page *page)
+static int afs_symlink_readpage(struct file *file, struct page *page)
 {
-	struct afs_vnode *vnode = AFS_FS_I(page->mapping->host);
+	struct afs_vnode *vnode = AFS_FS_I(page_mapping(page)->host);
 	struct afs_read *fsreq;
+	struct folio *folio = page_folio(page);
 	int ret;
 
 	fsreq = afs_alloc_read(GFP_NOFS);
 	if (!fsreq)
 		return -ENOMEM;
 
-	fsreq->pos	= page->index * PAGE_SIZE;
-	fsreq->len	= PAGE_SIZE;
+	fsreq->pos	= folio_file_pos(folio);
+	fsreq->len	= folio_size(folio);
 	fsreq->vnode	= vnode;
 	fsreq->iter	= &fsreq->def_iter;
 	iov_iter_xarray(&fsreq->def_iter, READ, &page->mapping->i_pages,
 			fsreq->pos, fsreq->len);
 
 	ret = afs_fetch_data(fsreq->vnode, fsreq);
-	page_endio(page, false, ret);
+	page_endio(&folio->page, false, ret);
 	return ret;
 }
 
 static void afs_init_rreq(struct netfs_read_request *rreq, struct file *file)
 {
 	rreq->netfs_priv = key_get(afs_file_key(file));
-}
-
-static bool afs_is_cache_enabled(struct inode *inode)
-{
-	struct fscache_cookie *cookie = afs_vnode_cache(AFS_FS_I(inode));
-
-	return fscache_cookie_enabled(cookie) && !hlist_empty(&cookie->backing_objects);
 }
 
 static int afs_begin_cache_operation(struct netfs_read_request *rreq)
@@ -348,7 +338,7 @@ static int afs_begin_cache_operation(struct netfs_read_request *rreq)
 }
 
 static int afs_check_write_begin(struct file *file, loff_t pos, unsigned len,
-				 struct page *page, void **_fsdata)
+				 struct folio *folio, void **_fsdata)
 {
 	struct afs_vnode *vnode = AFS_FS_I(file_inode(file));
 
@@ -360,135 +350,54 @@ static void afs_priv_cleanup(struct address_space *mapping, void *netfs_priv)
 	key_put(netfs_priv);
 }
 
-const struct netfs_read_request_ops afs_req_ops = {
+static void afs_init_dirty_region(struct netfs_dirty_region *region, struct file *file)
+{
+	region->netfs_priv = key_get(afs_file_key(file));
+}
+
+static void afs_split_dirty_region(struct netfs_dirty_region *region)
+{
+	key_get(region->netfs_priv);
+}
+
+static void afs_free_dirty_region(struct netfs_dirty_region *region)
+{
+	key_put(region->netfs_priv);
+}
+
+static void afs_init_wreq(struct netfs_write_request *wreq)
+{
+	//wreq->netfs_priv = key_get(afs_file_key(file));
+}
+
+static void afs_update_i_size(struct file *file, loff_t new_i_size)
+{
+	struct afs_vnode *vnode = AFS_FS_I(file_inode(file));
+	loff_t i_size;
+
+	write_seqlock(&vnode->cb_lock);
+	i_size = i_size_read(&vnode->vfs_inode);
+	if (new_i_size > i_size)
+		i_size_write(&vnode->vfs_inode, new_i_size);
+	write_sequnlock(&vnode->cb_lock);
+	fscache_update_cookie(afs_vnode_cache(vnode), NULL);
+}
+
+const struct netfs_request_ops afs_req_ops = {
 	.init_rreq		= afs_init_rreq,
-	.is_cache_enabled	= afs_is_cache_enabled,
 	.begin_cache_operation	= afs_begin_cache_operation,
 	.check_write_begin	= afs_check_write_begin,
 	.issue_op		= afs_req_issue_op,
 	.cleanup		= afs_priv_cleanup,
+	.init_dirty_region	= afs_init_dirty_region,
+	.split_dirty_region	= afs_split_dirty_region,
+	.free_dirty_region	= afs_free_dirty_region,
+	.update_i_size		= afs_update_i_size,
+	.init_wreq		= afs_init_wreq,
+	.create_write_operations = afs_create_write_operations,
+	.encrypt_block		= afs_encrypt_block,
+	.decrypt_block		= afs_decrypt_block,
 };
-
-static int afs_readpage(struct file *file, struct page *page)
-{
-	if (!file)
-		return afs_symlink_readpage(page);
-
-	return netfs_readpage(file, page, &afs_req_ops, NULL);
-}
-
-static void afs_readahead(struct readahead_control *ractl)
-{
-	netfs_readahead(ractl, &afs_req_ops, NULL);
-}
-
-/*
- * Adjust the dirty region of the page on truncation or full invalidation,
- * getting rid of the markers altogether if the region is entirely invalidated.
- */
-static void afs_invalidate_dirty(struct page *page, unsigned int offset,
-				 unsigned int length)
-{
-	struct afs_vnode *vnode = AFS_FS_I(page->mapping->host);
-	unsigned long priv;
-	unsigned int f, t, end = offset + length;
-
-	priv = page_private(page);
-
-	/* we clean up only if the entire page is being invalidated */
-	if (offset == 0 && length == thp_size(page))
-		goto full_invalidate;
-
-	 /* If the page was dirtied by page_mkwrite(), the PTE stays writable
-	  * and we don't get another notification to tell us to expand it
-	  * again.
-	  */
-	if (afs_is_page_dirty_mmapped(priv))
-		return;
-
-	/* We may need to shorten the dirty region */
-	f = afs_page_dirty_from(page, priv);
-	t = afs_page_dirty_to(page, priv);
-
-	if (t <= offset || f >= end)
-		return; /* Doesn't overlap */
-
-	if (f < offset && t > end)
-		return; /* Splits the dirty region - just absorb it */
-
-	if (f >= offset && t <= end)
-		goto undirty;
-
-	if (f < offset)
-		t = offset;
-	else
-		f = end;
-	if (f == t)
-		goto undirty;
-
-	priv = afs_page_dirty(page, f, t);
-	set_page_private(page, priv);
-	trace_afs_page_dirty(vnode, tracepoint_string("trunc"), page);
-	return;
-
-undirty:
-	trace_afs_page_dirty(vnode, tracepoint_string("undirty"), page);
-	clear_page_dirty_for_io(page);
-full_invalidate:
-	trace_afs_page_dirty(vnode, tracepoint_string("inval"), page);
-	detach_page_private(page);
-}
-
-/*
- * invalidate part or all of a page
- * - release a page and clean up its private data if offset is 0 (indicating
- *   the entire page)
- */
-static void afs_invalidatepage(struct page *page, unsigned int offset,
-			       unsigned int length)
-{
-	_enter("{%lu},%u,%u", page->index, offset, length);
-
-	BUG_ON(!PageLocked(page));
-
-	if (PagePrivate(page))
-		afs_invalidate_dirty(page, offset, length);
-
-	wait_on_page_fscache(page);
-	_leave("");
-}
-
-/*
- * release a page and clean up its private state if it's not busy
- * - return true if the page can now be released, false if not
- */
-static int afs_releasepage(struct page *page, gfp_t gfp_flags)
-{
-	struct afs_vnode *vnode = AFS_FS_I(page->mapping->host);
-
-	_enter("{{%llx:%llu}[%lu],%lx},%x",
-	       vnode->fid.vid, vnode->fid.vnode, page->index, page->flags,
-	       gfp_flags);
-
-	/* deny if page is being written to the cache and the caller hasn't
-	 * elected to wait */
-#ifdef CONFIG_AFS_FSCACHE
-	if (PageFsCache(page)) {
-		if (!(gfp_flags & __GFP_DIRECT_RECLAIM) || !(gfp_flags & __GFP_FS))
-			return false;
-		wait_on_page_fscache(page);
-	}
-#endif
-
-	if (PagePrivate(page)) {
-		trace_afs_page_dirty(vnode, tracepoint_string("rel"), page);
-		detach_page_private(page);
-	}
-
-	/* indicate that the page can be released */
-	_leave(" = T");
-	return 1;
-}
 
 /*
  * Handle setting up a memory mapping on an AFS file.
