@@ -32,7 +32,8 @@ static void netfs_rreq_work(struct work_struct *);
 static void netfs_rreq_clear_buffer(struct netfs_read_request *);
 
 static struct netfs_read_request *netfs_alloc_read_request(struct address_space *mapping,
-							   struct file *file)
+							   struct file *file, loff_t start,
+							   size_t len, bool readahead)
 {
 	static atomic_t debug_ids;
 	struct inode *inode = file ? file_inode(file) : mapping->host;
@@ -41,6 +42,8 @@ static struct netfs_read_request *netfs_alloc_read_request(struct address_space 
 
 	rreq = kzalloc(sizeof(struct netfs_read_request), GFP_KERNEL);
 	if (rreq) {
+		rreq->start = start;
+		rreq->len = len;
 		rreq->mapping	= mapping;
 		rreq->inode	= inode;
 		rreq->netfs_ops	= ctx->ops;
@@ -50,6 +53,8 @@ static struct netfs_read_request *netfs_alloc_read_request(struct address_space 
 		INIT_LIST_HEAD(&rreq->subrequests);
 		INIT_WORK(&rreq->work, netfs_rreq_work);
 		refcount_set(&rreq->usage, 1);
+		if (readahead)
+			__set_bit(NETFS_RREQ_READAHEAD, &rreq->flags);
 		__set_bit(NETFS_RREQ_IN_PROGRESS, &rreq->flags);
 		if (test_bit(NETFS_ICTX_ENCRYPTED, &ctx->flags))
 			__set_bit(NETFS_RREQ_DECRYPT, &rreq->flags);
@@ -916,11 +921,10 @@ void netfs_readahead(struct readahead_control *ractl)
 	if (readahead_count(ractl) == 0)
 		return;
 
-	rreq = netfs_alloc_read_request(ractl->mapping, ractl->file);
+	rreq = netfs_alloc_read_request(ractl->mapping, ractl->file, readahead_pos(ractl),
+					readahead_length(ractl), true);
 	if (!rreq)
 		return;
-	rreq->start	= readahead_pos(ractl);
-	rreq->len	= readahead_length(ractl);
 
 	ret = netfs_begin_cache_operation(rreq, ctx);
 	if (ret == -ENOMEM || ret == -EINTR || ret == -ERESTARTSYS)
@@ -981,11 +985,10 @@ int netfs_readpage(struct file *file, struct page *subpage)
 
 	_enter("%lx", folio_index(folio));
 
-	rreq = netfs_alloc_read_request(mapping, file);
+	rreq = netfs_alloc_read_request(mapping, file, folio_file_pos(folio),
+					folio_size(folio), false);
 	if (!rreq)
 		goto nomem;
-	rreq->start	= folio_file_pos(folio);
-	rreq->len	= folio_size(folio);
 
 	ret = netfs_begin_cache_operation(rreq, ctx);
 	if (ret == -ENOMEM || ret == -EINTR || ret == -ERESTARTSYS) {
@@ -1172,7 +1175,7 @@ retry:
 	}
 
 	ret = -ENOMEM;
-	rreq = netfs_alloc_read_request(mapping, file);
+	rreq = netfs_alloc_read_request(mapping, file, folio_file_pos(folio), folio_size(folio), false);
 	if (!rreq)
 		goto error;
 	rreq->start		= folio_file_pos(folio);
@@ -1263,16 +1266,13 @@ int netfs_prefetch_for_write(struct file *file, struct folio *folio,
 	struct netfs_i_context *ctx = netfs_i_context(mapping->host);
 	unsigned long long i_size, end;
 	unsigned int debug_index = 0;
+	loff_t rstart;
+	size_t rlen;
 	int ret;
 
 	DEFINE_READAHEAD(ractl, file, NULL, mapping, folio_index(folio));
 
 	ret = -ENOMEM;
-	rreq = netfs_alloc_read_request(mapping, file);
-	if (!rreq)
-		goto error;
-	rreq->no_unlock_folio	= folio_index(folio);
-	__set_bit(NETFS_RREQ_NO_UNLOCK_FOLIO, &rreq->flags);
 
 	i_size = i_size_read(mapping->host);
 	end = round_up((unsigned long long)pos + len, 1U << ctx->min_bshift);
@@ -1280,9 +1280,15 @@ int netfs_prefetch_for_write(struct file *file, struct folio *folio,
 		unsigned long long limit = round_up(pos + len, PAGE_SIZE);
 		end = max(limit, round_up(i_size, PAGE_SIZE));
 	}
-	rreq->start = round_down((unsigned long long)pos, 1U << ctx->min_bshift);
-	rreq->len   = end - rreq->start;
+	rstart = round_down((unsigned long long)pos, 1U << ctx->min_bshift);
+	rlen   = end - rstart;
 
+	rreq = netfs_alloc_read_request(mapping, file, rstart, rlen, false);
+	if (!rreq)
+		goto error;
+
+	rreq->no_unlock_folio	= folio_index(folio);
+	__set_bit(NETFS_RREQ_NO_UNLOCK_FOLIO, &rreq->flags);
 	ret = netfs_begin_cache_operation(rreq, ctx);
 	if (ret == -ENOMEM || ret == -EINTR || ret == -ERESTARTSYS)
 		goto error_put;
