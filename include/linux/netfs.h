@@ -209,6 +209,7 @@ struct netfs_read_request {
 #define NETFS_RREQ_IN_PROGRESS		5	/* Unlocked when the request completes */
 #define NETFS_RREQ_DECRYPT		6	/* Decrypted when the request completes */
 #define NETFS_RREQ_READAHEAD		7	/* This is a readahead op */
+#define NETFS_RREQ_DENY_READAHEAD	8	/* Abort the readahead */
 	const struct netfs_request_ops *netfs_ops;
 };
 

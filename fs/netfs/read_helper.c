@@ -925,6 +925,8 @@ void netfs_readahead(struct readahead_control *ractl)
 					readahead_length(ractl), true);
 	if (!rreq)
 		return;
+	if (test_bit(NETFS_RREQ_DENY_READAHEAD, &rreq->flags))
+		goto cleanup_free;
 
 	ret = netfs_begin_cache_operation(rreq, ctx);
 	if (ret == -ENOMEM || ret == -EINTR || ret == -ERESTARTSYS)
@@ -989,6 +991,7 @@ int netfs_readpage(struct file *file, struct page *subpage)
 					folio_size(folio), false);
 	if (!rreq)
 		goto nomem;
+	WARN_ON_ONCE(test_bit(NETFS_RREQ_DENY_READAHEAD, &rreq->flags));
 
 	ret = netfs_begin_cache_operation(rreq, ctx);
 	if (ret == -ENOMEM || ret == -EINTR || ret == -ERESTARTSYS) {
@@ -1178,6 +1181,7 @@ retry:
 	rreq = netfs_alloc_read_request(mapping, file, folio_file_pos(folio), folio_size(folio), false);
 	if (!rreq)
 		goto error;
+	WARN_ON_ONCE(test_bit(NETFS_RREQ_DENY_READAHEAD, &rreq->flags));
 	rreq->start		= folio_file_pos(folio);
 	rreq->len		= folio_size(folio);
 	rreq->no_unlock_folio	= folio_index(folio);
@@ -1287,6 +1291,7 @@ int netfs_prefetch_for_write(struct file *file, struct folio *folio,
 	if (!rreq)
 		goto error;
 
+	WARN_ON_ONCE(test_bit(NETFS_RREQ_DENY_READAHEAD, &rreq->flags));
 	rreq->no_unlock_folio	= folio_index(folio);
 	__set_bit(NETFS_RREQ_NO_UNLOCK_FOLIO, &rreq->flags);
 	ret = netfs_begin_cache_operation(rreq, ctx);
