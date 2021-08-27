@@ -337,6 +337,7 @@ bool fscrypt_match_name(const struct fscrypt_name *fname,
 			const u8 *de_name, u32 de_name_len);
 u64 fscrypt_fname_siphash(const struct inode *dir, const struct qstr *name);
 int fscrypt_d_revalidate(struct dentry *dentry, unsigned int flags);
+int fscrypt_require_key(struct inode *inode);
 
 /* bio.c */
 void fscrypt_decrypt_bio(struct bio *bio);
