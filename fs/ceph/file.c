@@ -526,6 +526,7 @@ static void ceph_async_create_cb(struct ceph_mds_client *mdsc,
 
 	if (result) {
 		struct dentry *dentry = req->r_dentry;
+		struct inode *inode = d_inode(dentry);
 		int pathlen = 0;
 		u64 base = 0;
 		char *path = ceph_mdsc_build_path(req->r_dentry, &pathlen,
@@ -535,7 +536,8 @@ static void ceph_async_create_cb(struct ceph_mds_client *mdsc,
 		if (!d_unhashed(dentry))
 			d_drop(dentry);
 
-		/* FIXME: start returning I/O errors on all accesses? */
+		ceph_inode_shutdown(inode);
+
 		pr_warn("ceph: async create failure path=(%llx)%s result=%d!\n",
 			base, IS_ERR(path) ? "<<bad>>" : path, result);
 		ceph_mdsc_free_path(path, pathlen);
@@ -1527,6 +1529,9 @@ again:
 	dout("aio_read %p %llx.%llx %llu~%u trying to get caps on %p\n",
 	     inode, ceph_vinop(inode), iocb->ki_pos, (unsigned)len, inode);
 
+	if (ceph_inode_is_shutdown(inode))
+		return -ESTALE;
+
 	if (direct_lock)
 		ceph_start_io_direct(inode);
 	else
@@ -1678,6 +1683,9 @@ static ssize_t ceph_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	u64 pool_flags;
 	loff_t pos;
 	loff_t limit = max(i_size_read(inode), fsc->max_file_size);
+
+	if (ceph_inode_is_shutdown(inode))
+		return -ESTALE;
 
 	if (ceph_snap(inode) != CEPH_NOSNAP)
 		return -EROFS;
