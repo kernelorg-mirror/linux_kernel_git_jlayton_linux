@@ -30,6 +30,7 @@ int __fscache_begin_operation(struct netfs_cache_resources *cres,
 			      struct fscache_cookie *cookie,
 			      bool for_write)
 {
+#if 0
 	struct fscache_operation *op;
 	struct fscache_object *object;
 	bool wake_cookie = false;
@@ -143,6 +144,7 @@ nobufs:
 		fscache_stat(&fscache_n_stores_nobufs);
 	else
 		fscache_stat(&fscache_n_retrievals_nobufs);
+#endif
 	_leave(" = -ENOBUFS");
 	return -ENOBUFS;
 }
