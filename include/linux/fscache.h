@@ -199,7 +199,7 @@ struct fscache_volume *fscache_acquire_volume(const char *volume_key,
 					      u64 coherency_data)
 {
 	if (!fscache_available())
-		return 0;
+		return NULL;
 	return __fscache_acquire_volume(volume_key, cache_name, coherency_data);
 }
 
