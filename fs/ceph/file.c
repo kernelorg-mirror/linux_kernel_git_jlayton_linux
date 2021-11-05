@@ -883,7 +883,8 @@ enum {
  * only return a short read to the caller if we hit EOF.
  */
 ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
-			 struct iov_iter *to, int *retry_op)
+			 struct iov_iter *to, int *retry_op,
+			 struct ceph_object_vers *objvers)
 {
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
@@ -892,6 +893,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 	u64 off = *ki_pos;
 	u64 len = iov_iter_count(to);
 	u64 i_size = i_size_read(inode);
+	u32 object_count = 8;
 
 	dout("sync_read on inode %p %llu~%u\n", inode, *ki_pos, (unsigned)len);
 
@@ -907,6 +909,15 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 					   off, off + len - 1);
 	if (ret < 0)
 		return ret;
+
+	if (objvers) {
+		objvers->count = 0;
+		objvers->objvers = kcalloc(object_count,
+					   sizeof(struct ceph_object_ver),
+					   GFP_KERNEL);
+		if (!objvers->objvers)
+			return -ENOMEM;
+	}
 
 	ret = 0;
 	while ((len = iov_iter_count(to)) > 0) {
@@ -950,6 +961,30 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 					 req->r_end_latency,
 					 len, ret);
 
+		if (objvers) {
+			u32 ind = objvers->count;
+
+			if (objvers->count >= object_count) {
+				int ov_size;
+
+				object_count *= 2;
+				ov_size = sizeof(struct ceph_object_ver);
+				objvers->objvers = krealloc_array(objvers,
+								  object_count,
+								  ov_size,
+								  GFP_KERNEL);
+				if (!objvers->objvers) {
+					objvers->count = 0;
+					ret = -ENOMEM;
+					break;
+				}
+			}
+
+			objvers->objvers[ind].offset = off;
+			objvers->objvers[ind].length = len;
+			objvers->objvers[ind].objver = req->r_version;
+			objvers->count++;
+		}
 		ceph_osdc_put_request(req);
 
 		i_size = i_size_read(inode);
@@ -1007,6 +1042,11 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 	}
 
 	dout("sync_read result %zd retry_op %d\n", ret, *retry_op);
+	if (ret < 0 && objvers) {
+		objvers->count = 0;
+		kfree(objvers->objvers);
+		objvers->objvers = NULL;
+	}
 	return ret;
 }
 
@@ -1020,7 +1060,7 @@ static ssize_t ceph_sync_read(struct kiocb *iocb, struct iov_iter *to,
 	     (unsigned)iov_iter_count(to),
 	     (file->f_flags & O_DIRECT) ? "O_DIRECT" : "");
 
-	return __ceph_sync_read(inode, &iocb->ki_pos, to, retry_op);
+	return __ceph_sync_read(inode, &iocb->ki_pos, to, retry_op, NULL);
 }
 
 struct ceph_aio_request {

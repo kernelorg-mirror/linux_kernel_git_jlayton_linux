@@ -452,6 +452,21 @@ struct ceph_inode_info {
 	struct inode vfs_inode; /* at end */
 };
 
+/*
+ * The version of an object which contains the
+ * file range of [offset, offset + length).
+ */
+struct ceph_object_ver {
+	u64 offset;
+	u64 length;
+	u64 objver;
+};
+
+struct ceph_object_vers {
+	u32 count;
+	struct ceph_object_ver *objvers;
+};
+
 static inline struct ceph_inode_info *
 ceph_inode(const struct inode *inode)
 {
@@ -1259,7 +1274,8 @@ extern int ceph_open(struct inode *inode, struct file *file);
 extern int ceph_atomic_open(struct inode *dir, struct dentry *dentry,
 			    struct file *file, unsigned flags, umode_t mode);
 extern ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
-				struct iov_iter *to, int *retry_op);
+				struct iov_iter *to, int *retry_op,
+				struct ceph_object_vers *objvers);
 extern int ceph_release(struct inode *inode, struct file *filp);
 extern void ceph_fill_inline_data(struct inode *inode, struct page *locked_page,
 				  char *data, size_t len);
