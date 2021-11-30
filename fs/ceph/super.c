@@ -163,6 +163,7 @@ enum {
 	Opt_copyfrom,
 	Opt_wsync,
 	Opt_test_dummy_encryption,
+	Opt_pagecache,
 };
 
 enum ceph_recover_session_mode {
@@ -206,6 +207,7 @@ static const struct fs_parameter_spec ceph_mount_parameters[] = {
 	fsparam_string	("test_dummy_encryption",	Opt_test_dummy_encryption),
 	fsparam_u32	("wsize",			Opt_wsize),
 	fsparam_flag_no	("wsync",			Opt_wsync),
+	fsparam_flag_no	("pagecache",			Opt_pagecache),
 	{}
 };
 
@@ -581,6 +583,12 @@ static int ceph_parse_mount_param(struct fs_context *fc,
 #else
 		warnfc(fc, "FS encryption not supported: test_dummy_encryption mount option ignored");
 #endif
+		break;
+	case Opt_pagecache:
+		if (result.negated)
+			fsopt->flags |= CEPH_MOUNT_OPT_NOPAGECACHE;
+		else
+			fsopt->flags &= ~CEPH_MOUNT_OPT_NOPAGECACHE;
 		break;
 	default:
 		BUG();

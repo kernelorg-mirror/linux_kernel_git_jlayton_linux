@@ -204,6 +204,8 @@ static int ceph_init_file_info(struct inode *inode, struct file *file,
 					int fmode, bool isdir)
 {
 	struct ceph_inode_info *ci = ceph_inode(inode);
+	struct ceph_mount_options *opt =
+		ceph_inode_to_client(&ci->vfs_inode)->mount_options;
 	struct ceph_file_info *fi;
 
 	dout("%s %p %p 0%o (%s)\n", __func__, inode, file,
@@ -224,6 +226,9 @@ static int ceph_init_file_info(struct inode *inode, struct file *file,
 		fi = kmem_cache_zalloc(ceph_file_cachep, GFP_KERNEL);
 		if (!fi)
 			return -ENOMEM;
+
+		if (opt->flags & CEPH_MOUNT_OPT_NOPAGECACHE)
+			fi->flags |= CEPH_F_SYNC;
 
 		file->private_data = fi;
 	}
