@@ -907,9 +907,46 @@ static void fscrypt_adjust_off_and_len(struct inode *inode, u64 *off, u64 *len)
 	}
 }
 
+static int ceph_fscrypt_decrypt_block_inplace(const struct inode *inode,
+				  struct page *page, unsigned int len,
+				  unsigned int offs, u64 lblk_num)
+{
+	struct ceph_mount_options *opt = ceph_inode_to_client(inode)->mount_options;
+
+	if (opt->flags & CEPH_MOUNT_OPT_DUMMY_ENC_CLEAR)
+		return 0;
+
+	return fscrypt_decrypt_block_inplace(inode, page, len, offs, lblk_num);
+}
+
+static int ceph_fscrypt_encrypt_block_inplace(const struct inode *inode,
+				  struct page *page, unsigned int len,
+				  unsigned int offs, u64 lblk_num, gfp_t gfp_flags)
+{
+	struct ceph_mount_options *opt = ceph_inode_to_client(inode)->mount_options;
+
+	if (opt->flags & CEPH_MOUNT_OPT_DUMMY_ENC_CLEAR)
+		return 0;
+
+	return fscrypt_encrypt_block_inplace(inode, page, len, offs, lblk_num, gfp_flags);
+}
 #else
 static inline void fscrypt_adjust_off_and_len(struct inode *inode, u64 *off, u64 *len)
 {
+}
+
+static inline int ceph_fscrypt_decrypt_block_inplace(const struct inode *inode,
+					  struct page *page, unsigned int len,
+					  unsigned int offs, u64 lblk_num)
+{
+	return 0;
+}
+
+static inline int ceph_fscrypt_encrypt_block_inplace(const struct inode *inode,
+				  struct page *page, unsigned int len,
+				  unsigned int offs, u64 lblk_num, gfp_t gfp_flags)
+{
+	return 0;
 }
 #endif
 
@@ -1027,9 +1064,9 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 				unsigned int pgoffs = offset_in_page(blkoff);
 				int fret;
 
-				fret = fscrypt_decrypt_block_inplace(inode, pages[pgidx],
-						CEPH_FSCRYPT_BLOCK_SIZE, pgoffs,
-						baseblk + i);
+				fret = ceph_fscrypt_decrypt_block_inplace(inode,
+						pages[pgidx], CEPH_FSCRYPT_BLOCK_SIZE,
+						pgoffs, baseblk + i);
 				if (fret < 0) {
 					ret = fret;
 					ceph_release_page_vector(pages, num_pages);
@@ -1703,7 +1740,7 @@ ceph_sync_write(struct kiocb *iocb, struct iov_iter *from, loff_t pos,
 				}
 
 				if (first) {
-					ret = fscrypt_decrypt_block_inplace(inode,
+					ret = ceph_fscrypt_decrypt_block_inplace(inode,
 							pages[0],
 							CEPH_FSCRYPT_BLOCK_SIZE,
 							first_pos & ~PAGE_MASK,
@@ -1712,7 +1749,7 @@ ceph_sync_write(struct kiocb *iocb, struct iov_iter *from, loff_t pos,
 						break;
 				}
 				if (last) {
-					ret = fscrypt_decrypt_block_inplace(inode,
+					ret = ceph_fscrypt_decrypt_block_inplace(inode,
 							pages[num_pages - 1],
 							CEPH_FSCRYPT_BLOCK_SIZE,
 							last_pos & ~PAGE_MASK,
@@ -1743,7 +1780,7 @@ ceph_sync_write(struct kiocb *iocb, struct iov_iter *from, loff_t pos,
 
 				/* Only complete blocks! */
 				while (len) {
-					fret = fscrypt_encrypt_block_inplace(inode, pages[n],
+					fret = ceph_fscrypt_encrypt_block_inplace(inode, pages[n],
 								    CEPH_FSCRYPT_BLOCK_SIZE,
 								    write_off, block,
 								    GFP_KERNEL);
