@@ -1665,14 +1665,7 @@ again:
 		     ceph_cap_string(got));
 
 		if (ci->i_inline_version == CEPH_INLINE_NONE) {
-			if (!retry_op && (iocb->ki_flags & IOCB_DIRECT)) {
-				ret = ceph_direct_read_write(iocb, to,
-							     NULL, NULL);
-				if (ret >= 0 && ret < len)
-					retry_op = CHECK_EOF;
-			} else {
-				ret = ceph_sync_read(iocb, to, &retry_op);
-			}
+			ret = ceph_sync_read(iocb, to, &retry_op);
 		} else {
 			retry_op = READ_INLINE;
 		}
@@ -1897,11 +1890,7 @@ retry_snap:
 
 		/* we might need to revert back to that point */
 		data = *from;
-		if (iocb->ki_flags & IOCB_DIRECT)
-			written = ceph_direct_read_write(iocb, &data, snapc,
-							 &prealloc_cf);
-		else
-			written = ceph_sync_write(iocb, &data, pos, snapc);
+		written = ceph_sync_write(iocb, &data, pos, snapc);
 		if (direct_lock)
 			ceph_end_io_direct(inode);
 		else
