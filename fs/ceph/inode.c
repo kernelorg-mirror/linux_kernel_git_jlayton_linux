@@ -2256,9 +2256,7 @@ static int fill_fscrypt_truncate(struct inode *inode,
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	int boff = attr->ia_size % CEPH_FSCRYPT_BLOCK_SIZE;
 	loff_t pos, orig_pos = round_down(attr->ia_size, CEPH_FSCRYPT_BLOCK_SIZE);
-#if 0
 	u64 block = orig_pos >> CEPH_FSCRYPT_BLOCK_SHIFT;
-#endif
 	struct ceph_pagelist *pagelist = NULL;
 	struct kvec iov;
 	struct iov_iter iter;
@@ -2348,8 +2346,6 @@ static int fill_fscrypt_truncate(struct inode *inode,
 		/* truncate and zero out the extra contents for the last block */
 		memset(iov.iov_base + boff, 0, PAGE_SIZE - boff);
 
-#if 0 // Uncomment this when the fscrypt is enabled globally in kceph
-
 		/* encrypt the last block */
 		ret = fscrypt_encrypt_block_inplace(inode, page,
 						    CEPH_FSCRYPT_BLOCK_SIZE,
@@ -2357,7 +2353,6 @@ static int fill_fscrypt_truncate(struct inode *inode,
 						    GFP_KERNEL);
 		if (ret)
 			goto out;
-#endif
 	}
 
 	/* Insert the header */
