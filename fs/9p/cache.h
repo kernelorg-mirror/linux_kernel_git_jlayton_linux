@@ -12,7 +12,7 @@
 
 #ifdef CONFIG_9P_FSCACHE
 
-extern void v9fs_cache_session_get_cookie(struct v9fs_session_info *v9ses,
+extern int v9fs_cache_session_get_cookie(struct v9fs_session_info *v9ses,
 					  const char *dev_name);
 
 extern void v9fs_cache_inode_get_cookie(struct inode *inode);

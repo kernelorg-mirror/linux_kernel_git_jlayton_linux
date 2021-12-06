@@ -268,18 +268,30 @@ void afs_put_volume(struct afs_net *net, struct afs_volume *volume,
 /*
  * Activate a volume.
  */
-void afs_activate_volume(struct afs_volume *volume)
+int afs_activate_volume(struct afs_volume *volume)
 {
 #ifdef CONFIG_AFS_FSCACHE
+	struct fscache_volume *vcookie;
 	char *name;
 
 	name = kasprintf(GFP_KERNEL, "afs,%s,%llx",
 			 volume->cell->name, volume->vid);
-	if (name) {
-		volume->cache = fscache_acquire_volume(name, NULL, 0);
-		kfree(name);
+	if (!name)
+		return -ENOMEM;
+
+	vcookie = fscache_acquire_volume(name, NULL, 0);
+	if (IS_ERR(vcookie)) {
+		if (vcookie != ERR_PTR(-EBUSY)) {
+			kfree(name);
+			return PTR_ERR(vcookie);
+		}
+		pr_err("AFS: Cache volume key already in use (%s)\n", name);
+		vcookie = NULL;
 	}
+	volume->cache = vcookie;
+	kfree(name);
 #endif
+	return 0;
 }
 
 /*

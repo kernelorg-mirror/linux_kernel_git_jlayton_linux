@@ -181,6 +181,10 @@ extern void __fscache_clear_page_bits(struct address_space *, loff_t, size_t);
  * caller must provide an identifier for the volume and may also indicate which
  * cache it should be in.  If a preexisting volume entry is found in the cache,
  * the coherency data must match otherwise the entry will be invalidated.
+ *
+ * Returns a cookie pointer on success, -ENOMEM if out of memory or -EBUSY if a
+ * cache volume of that name is already acquired.  Note that "NULL" is a valid
+ * cookie pointer and can be returned if caching is refused.
  */
 static inline
 struct fscache_volume *fscache_acquire_volume(const char *volume_key,

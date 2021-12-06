@@ -83,8 +83,9 @@ static bool nfs_fscache_get_client_key(struct nfs_client *clp,
  * either by the 'fsc=xxx' option to mount, or by inheriting it from the parent
  * superblock across an automount point of some nature.
  */
-void nfs_fscache_get_super_cookie(struct super_block *sb, const char *uniq, int ulen)
+int nfs_fscache_get_super_cookie(struct super_block *sb, const char *uniq, int ulen)
 {
+	struct fscache_volume *vcookie;
 	struct nfs_server *nfss = NFS_SB(sb);
 	unsigned int len = 3;
 	char *key;
@@ -92,12 +93,12 @@ void nfs_fscache_get_super_cookie(struct super_block *sb, const char *uniq, int 
 	if (uniq) {
 		nfss->fscache_uniq = kmemdup_nul(uniq, ulen, GFP_KERNEL);
 		if (!nfss->fscache_uniq)
-			return;
+			return -ENOMEM;
 	}
 
 	key = kmalloc(NFS_MAX_KEY_LEN + 24, GFP_KERNEL);
 	if (!key)
-		return;
+		return -ENOMEM;
 
 	memcpy(key, "nfs", 3);
 	if (!nfs_fscache_get_client_key(nfss->nfs_client, key, &len) ||
@@ -124,14 +125,24 @@ void nfs_fscache_get_super_cookie(struct super_block *sb, const char *uniq, int 
 	key[len] = 0;
 
 	/* create a cache index for looking up filehandles */
-	nfss->fscache = fscache_acquire_volume(key,
-					       NULL, /* preferred_cache */
-					       0 /* coherency_data */);
+	vcookie = fscache_acquire_volume(key,
+					 NULL, /* preferred_cache */
+					 0 /* coherency_data */);
 	dfprintk(FSCACHE, "NFS: get superblock cookie (0x%p/0x%p)\n",
-		 nfss, nfss->fscache);
+		 nfss, vcookie);
+	if (IS_ERR(vcookie)) {
+		if (vcookie != ERR_PTR(-EBUSY)) {
+			kfree(key);
+			return PTR_ERR(vcookie);
+		}
+		pr_err("NFS: Cache volume key already in use (%s)\n", key);
+		vcookie = NULL;
+	}
+	nfss->fscache = vcookie;
 
 out:
 	kfree(key);
+	return 0;
 }
 
 /*

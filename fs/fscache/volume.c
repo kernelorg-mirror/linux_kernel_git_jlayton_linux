@@ -158,7 +158,7 @@ static void fscache_wait_on_volume_collision(struct fscache_volume *candidate,
  * wait for the old volume to complete if it's being relinquished and an error
  * otherwise.
  */
-static struct fscache_volume *fscache_hash_volume(struct fscache_volume *candidate)
+static bool fscache_hash_volume(struct fscache_volume *candidate)
 {
 	struct fscache_volume *cursor;
 	struct hlist_bl_head *h;
@@ -186,13 +186,12 @@ static struct fscache_volume *fscache_hash_volume(struct fscache_volume *candida
 
 	if (test_bit(FSCACHE_VOLUME_ACQUIRE_PENDING, &candidate->flags))
 		fscache_wait_on_volume_collision(candidate, collidee_debug_id);
-	return candidate;
+	return true;
 
 collision:
 	fscache_see_volume(cursor, fscache_volume_collision);
-	pr_err("Cache volume already in use\n");
 	hlist_bl_unlock(h);
-	return NULL;
+	return false;
 }
 
 /*
@@ -318,11 +317,11 @@ struct fscache_volume *__fscache_acquire_volume(const char *volume_key,
 
 	volume = fscache_alloc_volume(volume_key, cache_name, coherency_data);
 	if (!volume)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	if (!fscache_hash_volume(volume)) {
 		fscache_put_volume(volume, fscache_volume_put_hash_collision);
-		return NULL;
+		return ERR_PTR(-EBUSY);
 	}
 
 	fscache_create_volume(volume, false);

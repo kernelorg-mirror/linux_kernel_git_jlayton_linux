@@ -36,7 +36,7 @@ struct nfs_fscache_inode_auxdata {
 /*
  * fscache.c
  */
-extern void nfs_fscache_get_super_cookie(struct super_block *, const char *, int);
+extern int nfs_fscache_get_super_cookie(struct super_block *, const char *, int);
 extern void nfs_fscache_release_super_cookie(struct super_block *);
 
 extern void nfs_fscache_init_inode(struct inode *);

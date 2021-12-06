@@ -115,10 +115,11 @@ it will use the first cache that comes to hand and set the name to that.
 The specified coherency data is stored in the cookie and will be matched
 against coherency data stored on disk.
 
-This function never returns an error, though it may return a NULL volume cookie
-on allocation failure or if fscache is not enabled.  It is safe to pass such a
-NULL value to any function that takes a volume cookie.  This will cause the
-function to do nothing.
+This function can return errors such as EBUSY if the volume key is already in
+use by an acquired volume or ENOMEM if an allocation failure occured.  It may
+also return a NULL volume cookie if fscache is not enabled.  It is safe to
+pass a NULL cookie to any function that takes a volume cookie.  This will
+cause that function to do nothing.
 
 
 When the network filesystem has finished with a volume, it should relinquish it

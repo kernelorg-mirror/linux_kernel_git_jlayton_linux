@@ -37,7 +37,7 @@ struct cifs_fscache_inode_auxdata {
 /*
  * fscache.c
  */
-extern void cifs_fscache_get_super_cookie(struct cifs_tcon *);
+extern int cifs_fscache_get_super_cookie(struct cifs_tcon *);
 extern void cifs_fscache_release_super_cookie(struct cifs_tcon *);
 
 extern void cifs_fscache_get_inode_cookie(struct inode *);
@@ -105,7 +105,7 @@ void cifs_fscache_fill_auxdata(struct inode *inode,
 {
 }
 
-static inline void cifs_fscache_get_super_cookie(struct cifs_tcon *tcon) {}
+static inline int cifs_fscache_get_super_cookie(struct cifs_tcon *tcon) { return 0; }
 static inline void cifs_fscache_release_super_cookie(struct cifs_tcon *tcon) {}
 
 static inline void cifs_fscache_get_inode_cookie(struct inode *inode) {}

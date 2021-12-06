@@ -12,14 +12,16 @@
 #include "cifs_fs_sb.h"
 #include "cifsproto.h"
 
-void cifs_fscache_get_super_cookie(struct cifs_tcon *tcon)
+int cifs_fscache_get_super_cookie(struct cifs_tcon *tcon)
 {
 	struct cifs_fscache_super_auxdata auxdata;
 	struct TCP_Server_Info *server = tcon->ses->server;
+	struct fscache_volume *vcookie;
 	const struct sockaddr *sa = (struct sockaddr *)&server->dstaddr;
 	size_t slen, i;
 	char *sharename;
 	char *key;
+	int ret = -ENOMEM;
 
 	tcon->fscache = NULL;
 	switch (sa->sa_family) {
@@ -28,7 +30,7 @@ void cifs_fscache_get_super_cookie(struct cifs_tcon *tcon)
 		break;
 	default:
 		cifs_dbg(VFS, "Unknown network family '%d'\n", sa->sa_family);
-		return;
+		return -EINVAL;
 	}
 
 	memset(&key, 0, sizeof(key));
@@ -36,7 +38,7 @@ void cifs_fscache_get_super_cookie(struct cifs_tcon *tcon)
 	sharename = extract_sharename(tcon->treeName);
 	if (IS_ERR(sharename)) {
 		cifs_dbg(FYI, "%s: couldn't extract sharename\n", __func__);
-		return;
+		return -EINVAL;
 	}
 
 	slen = strlen(sharename);
@@ -54,14 +56,26 @@ void cifs_fscache_get_super_cookie(struct cifs_tcon *tcon)
 	auxdata.vol_serial_number = tcon->vol_serial_number;
 	// TODO: Do something with the volume coherency data
 
-	tcon->fscache = fscache_acquire_volume(key,
-					       NULL, /* preferred_cache */
-					       0 /* coherency_data */);
-	cifs_dbg(FYI, "%s: (%s/0x%p)\n", __func__, key, tcon->fscache);
+	vcookie = fscache_acquire_volume(key,
+					 NULL, /* preferred_cache */
+					 0 /* coherency_data */);
+	cifs_dbg(FYI, "%s: (%s/0x%p)\n", __func__, key, vcookie);
+	if (IS_ERR(vcookie)) {
+		if (vcookie != ERR_PTR(-EBUSY)) {
+			ret = PTR_ERR(vcookie);
+			goto out_2;
+		}
+		pr_err("Cache volume key already in use (%s)\n", key);
+		vcookie = NULL;
+	}
 
+	tcon->fscache = vcookie;
+	ret = 0;
+out_2:
 	kfree(key);
 out:
 	kfree(sharename);
+	return ret;
 }
 
 void cifs_fscache_release_super_cookie(struct cifs_tcon *tcon)

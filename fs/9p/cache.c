@@ -16,24 +16,35 @@
 #include "v9fs.h"
 #include "cache.h"
 
-void v9fs_cache_session_get_cookie(struct v9fs_session_info *v9ses,
-				   const char *dev_name)
+int v9fs_cache_session_get_cookie(struct v9fs_session_info *v9ses,
+				  const char *dev_name)
 {
+	struct fscache_volume *vcookie;
 	char *name, *p;
 
 	name = kasprintf(GFP_KERNEL, "9p,%s,%s",
 			 dev_name, v9ses->cachetag ?: v9ses->aname);
 	if (!name)
-		return;
+		return -ENOMEM;
 
 	for (p = name; *p; p++)
 		if (*p == '/')
 			*p = ';';
 
-	v9ses->fscache = fscache_acquire_volume(name, NULL, 0);
+	vcookie = fscache_acquire_volume(name, NULL, 0);
 	p9_debug(P9_DEBUG_FSC, "session %p get volume %p (%s)\n",
-		 v9ses, v9ses->fscache, name);
+		 v9ses, vcookie, name);
+	if (IS_ERR(vcookie)) {
+		if (vcookie != ERR_PTR(-EBUSY)) {
+			kfree(name);
+			return PTR_ERR(vcookie);
+		}
+		pr_err("Cache volume key already in use (%s)\n", name);
+		vcookie = NULL;
+	}
+	v9ses->fscache = vcookie;
 	kfree(name);
+	return 0;
 }
 
 void v9fs_cache_inode_get_cookie(struct inode *inode)
