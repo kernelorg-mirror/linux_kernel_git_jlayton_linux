@@ -1010,9 +1010,10 @@ void __fscache_invalidate(struct fscache_cookie *cookie,
 		return;
 
 	case FSCACHE_COOKIE_STATE_ACTIVE:
-		__fscache_set_cookie_state(cookie, FSCACHE_COOKIE_STATE_INVALIDATING);
 		is_caching = fscache_begin_cookie_access(
 			cookie, fscache_access_invalidate_cookie);
+		if (is_caching)
+			__fscache_set_cookie_state(cookie, FSCACHE_COOKIE_STATE_INVALIDATING);
 		spin_unlock(&cookie->lock);
 		wake_up_cookie_state(cookie);
 
