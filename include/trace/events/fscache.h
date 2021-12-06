@@ -413,15 +413,17 @@ TRACE_EVENT(fscache_acquire,
 			     ),
 
 	    TP_fast_assign(
+		    __entry->cookie_p		= cookie;
 		    __entry->cookie		= cookie->debug_id;
 		    __entry->volume		= cookie->volume->debug_id;
 		    __entry->v_ref		= refcount_read(&cookie->volume->ref);
 		    __entry->v_n_cookies	= atomic_read(&cookie->volume->n_cookies);
 			   ),
 
-	    TP_printk("c=%08x V=%08x vr=%d vc=%d",
+	    TP_printk("c=%08x V=%08x vr=%d vc=%d p=%px",
 		      __entry->cookie,
-		      __entry->volume, __entry->v_ref, __entry->v_n_cookies)
+		      __entry->volume, __entry->v_ref, __entry->v_n_cookies,
+		      __entry->cookie_p)
 	    );
 
 TRACE_EVENT(fscache_relinquish,

@@ -87,18 +87,19 @@ static void fscache_queue_cookie(struct fscache_cookie *cookie,
 }
 
 /*
- * Initialise the access gate on a cookie by keeping its n_accesses counter
- * raised by 1.  This will prevent end-access from transitioning it to 0 until
- * we decrement when we withdraw caching services from the cookie.
+ * Initialise the access gate on a cookie by setting a flag to prevent the
+ * state machine from being queued when the access counter transitions to 0.
+ * We're only interested in this when we withdraw caching services from the
+ * cookie.
  */
 static void fscache_init_access_gate(struct fscache_cookie *cookie)
 {
 	int n_accesses;
 
-	n_accesses = atomic_inc_return(&cookie->n_accesses);
+	n_accesses = atomic_read(&cookie->n_accesses);
 	trace_fscache_access(cookie->debug_id, refcount_read(&cookie->ref),
 			     n_accesses, fscache_access_cache_pin);
-	set_bit(FSCACHE_COOKIE_NACC_ELEVATED, &cookie->flags);
+	set_bit(FSCACHE_COOKIE_NO_ACCESS_WAKE, &cookie->flags);
 }
 
 /**
@@ -120,7 +121,8 @@ void fscache_end_cookie_access(struct fscache_cookie *cookie,
 	n_accesses = atomic_dec_return(&cookie->n_accesses);
 	trace_fscache_access(cookie->debug_id, refcount_read(&cookie->ref),
 			     n_accesses, why);
-	if (n_accesses == 0)
+	if (n_accesses == 0 &&
+	    !test_bit(FSCACHE_COOKIE_NO_ACCESS_WAKE, &cookie->flags))
 		fscache_queue_cookie(cookie, fscache_cookie_get_end_access);
 }
 EXPORT_SYMBOL(fscache_end_cookie_access);
@@ -710,6 +712,12 @@ again_locked:
 			fscache_prepare_to_write(cookie);
 			spin_lock(&cookie->lock);
 		}
+		if (test_bit(FSCACHE_COOKIE_DO_LRU_DISCARD, &cookie->flags)) {
+			__fscache_set_cookie_state(cookie,
+						   FSCACHE_COOKIE_STATE_LRU_DISCARDING);
+			wake = true;
+			goto again_locked;
+		}
 		fallthrough;
 
 	case FSCACHE_COOKIE_STATE_FAILED:
@@ -797,9 +805,17 @@ static void fscache_cookie_worker(struct work_struct *work)
  */
 static void __fscache_withdraw_cookie(struct fscache_cookie *cookie)
 {
-	if (test_and_clear_bit(FSCACHE_COOKIE_NACC_ELEVATED, &cookie->flags))
-		fscache_end_cookie_access(cookie, fscache_access_cache_unpin);
-	else
+	int n_accesses;
+	bool unpinned;
+
+	unpinned = test_and_clear_bit(FSCACHE_COOKIE_NO_ACCESS_WAKE, &cookie->flags);
+
+	/* Need to read the access count after unpinning */
+	n_accesses = atomic_read(&cookie->n_accesses);
+	if (unpinned)
+		trace_fscache_access(cookie->debug_id, refcount_read(&cookie->ref),
+				     n_accesses, fscache_access_cache_unpin);
+	if (n_accesses == 0)
 		fscache_queue_cookie(cookie, fscache_cookie_get_end_access);
 }
 
@@ -1071,7 +1087,7 @@ static int fscache_cookies_seq_show(struct seq_file *m, void *v)
 		   cookie->volume->debug_id,
 		   refcount_read(&cookie->ref),
 		   atomic_read(&cookie->n_active),
-		   atomic_read(&cookie->n_accesses) - 1,
+		   atomic_read(&cookie->n_accesses),
 		   fscache_cookie_states[cookie->state],
 		   cookie->flags);
 
