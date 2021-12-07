@@ -126,7 +126,7 @@ static int ceph_set_page_dirty(struct page *page)
 	BUG_ON(PagePrivate(page));
 	attach_page_private(page, snapc);
 
-	return ceph_fscache_set_page_dirty(page);
+	return __set_page_dirty_nobuffers(page);
 }
 
 /*
@@ -141,6 +141,8 @@ static void ceph_invalidatepage(struct page *page, unsigned int offset,
 	struct ceph_inode_info *ci;
 	struct ceph_snap_context *snapc;
 
+	wait_on_page_fscache(page);
+
 	inode = page->mapping->host;
 	ci = ceph_inode(inode);
 
@@ -151,36 +153,28 @@ static void ceph_invalidatepage(struct page *page, unsigned int offset,
 	}
 
 	WARN_ON(!PageLocked(page));
-	if (PagePrivate(page)) {
-		dout("%p invalidatepage %p idx %lu full dirty page\n",
-		     inode, page, page->index);
+	if (!PagePrivate(page))
+		return;
 
-		snapc = detach_page_private(page);
-		ceph_put_wrbuffer_cap_refs(ci, 1, snapc);
-		ceph_put_snap_context(snapc);
-	}
+	dout("%p invalidatepage %p idx %lu full dirty page\n",
+	     inode, page, page->index);
 
-	wait_on_page_fscache(page);
+	snapc = detach_page_private(page);
+	ceph_put_wrbuffer_cap_refs(ci, 1, snapc);
+	ceph_put_snap_context(snapc);
 }
 
 static int ceph_releasepage(struct page *page, gfp_t gfp)
 {
-	struct inode *inode = page->mapping->host;
-
-	dout("%llx:%llx releasepage %p idx %lu (%sdirty)\n",
-	     ceph_vinop(inode), page,
-	     page->index, PageDirty(page) ? "" : "not ");
-
-	if (PagePrivate(page))
-		return 0;
+	dout("%p releasepage %p idx %lu (%sdirty)\n", page->mapping->host,
+	     page, page->index, PageDirty(page) ? "" : "not ");
 
 	if (PageFsCache(page)) {
 		if (!(gfp & __GFP_DIRECT_RECLAIM) || !(gfp & __GFP_FS))
 			return 0;
 		wait_on_page_fscache(page);
 	}
-	ceph_fscache_note_page_release(inode);
-	return 1;
+	return !PagePrivate(page);
 }
 
 static void ceph_netfs_expand_readahead(struct netfs_read_request *rreq)

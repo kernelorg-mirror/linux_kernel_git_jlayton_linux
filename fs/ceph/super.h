@@ -135,7 +135,7 @@ struct ceph_fs_client {
 #endif
 
 #ifdef CONFIG_CEPH_FSCACHE
-	struct fscache_volume *fscache;
+	struct fscache_cookie *fscache;
 #endif
 };
 
