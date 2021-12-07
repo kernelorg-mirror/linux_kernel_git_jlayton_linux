@@ -2267,7 +2267,7 @@ static int fill_fscrypt_truncate(struct inode *inode,
 	int retry_op = 0;
 	int len = CEPH_FSCRYPT_BLOCK_SIZE;
 	loff_t i_size = i_size_read(inode);
-	struct ceph_object_vers objvers = {0, NULL};
+	u64 objvers = 0;
 	int got, ret, issued;
 
 	ret = __ceph_get_caps(inode, NULL, CEPH_CAP_FILE_RD, 0, -1, &got);
@@ -2306,8 +2306,6 @@ static int fill_fscrypt_truncate(struct inode *inode,
 	if (ret < 0)
 		goto out;
 
-	WARN_ON_ONCE(objvers.count != 1);
-
 	/* Insert the header first */
 	header.ver = 1;
 	header.compat = 1;
@@ -2328,7 +2326,7 @@ static int fill_fscrypt_truncate(struct inode *inode,
 	 *
 	 * If the Rados object doesn't exist, it will be set 0.
 	 */
-	if (!objvers.objvers[0].objver) {
+	if (!objvers) {
 		dout("%s hit hole, ppos %lld < size %lld\n", __func__,
 		     pos, i_size);
 
@@ -2344,7 +2342,7 @@ static int fill_fscrypt_truncate(struct inode *inode,
 		ret = 0;
 	} else {
 		header.data_len = cpu_to_le32(8 + 8 + 4 + CEPH_FSCRYPT_BLOCK_SIZE);
-		header.assert_ver = cpu_to_le64(objvers.objvers[0].objver);
+		header.assert_ver = cpu_to_le64(objvers);
 		header.file_offset = cpu_to_le64(orig_pos);
 
 		/* truncate and zero out the extra contents for the last block */
@@ -2383,7 +2381,6 @@ out:
 		__free_pages(page, 0);
 	if (ret && pagelist)
 		ceph_pagelist_release(pagelist);
-	kfree(objvers.objvers);
 	return ret;
 }
 

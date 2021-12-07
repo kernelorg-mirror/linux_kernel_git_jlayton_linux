@@ -884,7 +884,7 @@ enum {
  */
 ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 			 struct iov_iter *to, int *retry_op,
-			 struct ceph_object_vers *objvers)
+			 u64 *last_objvers)
 {
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
@@ -893,7 +893,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 	u64 off = *ki_pos;
 	u64 len = iov_iter_count(to);
 	u64 i_size = i_size_read(inode);
-	u32 object_count = 8;
+	u64 objvers = 0;
 
 	dout("sync_read on inode %p %llu~%u\n", inode, *ki_pos, (unsigned)len);
 
@@ -909,15 +909,6 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 					   off, off + len - 1);
 	if (ret < 0)
 		return ret;
-
-	if (objvers) {
-		objvers->count = 0;
-		objvers->objvers = kcalloc(object_count,
-					   sizeof(struct ceph_object_ver),
-					   GFP_KERNEL);
-		if (!objvers->objvers)
-			return -ENOMEM;
-	}
 
 	ret = 0;
 	while ((len = iov_iter_count(to)) > 0) {
@@ -961,30 +952,8 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 					 req->r_end_latency,
 					 len, ret);
 
-		if (objvers) {
-			u32 ind = objvers->count;
-
-			if (objvers->count >= object_count) {
-				int ov_size;
-
-				object_count *= 2;
-				ov_size = sizeof(struct ceph_object_ver);
-				objvers->objvers = krealloc_array(objvers,
-								  object_count,
-								  ov_size,
-								  GFP_KERNEL);
-				if (!objvers->objvers) {
-					objvers->count = 0;
-					ret = -ENOMEM;
-					break;
-				}
-			}
-
-			objvers->objvers[ind].offset = off;
-			objvers->objvers[ind].length = len;
-			objvers->objvers[ind].objver = req->r_version;
-			objvers->count++;
-		}
+		if (ret > 0)
+			objvers = req->r_version;
 		ceph_osdc_put_request(req);
 
 		i_size = i_size_read(inode);
@@ -1005,15 +974,15 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 		idx = 0;
 		left = ret > 0 ? ret : 0;
 		while (left > 0) {
-			size_t len, copied;
+			size_t plen, copied;
 			page_off = off & ~PAGE_MASK;
 			len = min_t(size_t, left, PAGE_SIZE - page_off);
 			SetPageUptodate(pages[idx]);
 			copied = copy_page_to_iter(pages[idx++],
-						   page_off, len, to);
+						   page_off, plen, to);
 			off += copied;
 			left -= copied;
-			if (copied < len) {
+			if (copied < plen) {
 				ret = -EFAULT;
 				break;
 			}
@@ -1041,12 +1010,10 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 		}
 	}
 
+	if (last_objvers && ret > 0)
+		*last_objvers = objvers;
+
 	dout("sync_read result %zd retry_op %d\n", ret, *retry_op);
-	if (ret < 0 && objvers) {
-		objvers->count = 0;
-		kfree(objvers->objvers);
-		objvers->objvers = NULL;
-	}
 	return ret;
 }
 
