@@ -893,6 +893,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 	u64 off = *ki_pos;
 	u64 len = iov_iter_count(to);
 	u64 i_size = i_size_read(inode);
+	u64 objver = 0;
 
 	dout("sync_read on inode %p %llu~%u\n", inode, *ki_pos, (unsigned)len);
 
@@ -951,9 +952,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 					 req->r_end_latency,
 					 len, ret);
 
-		if (last_objver)
-			*last_objver = req->r_version;
-
+		objver = req->r_version;
 		ceph_osdc_put_request(req);
 
 		i_size = i_size_read(inode);
@@ -1009,6 +1008,9 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 			*ki_pos = off;
 		}
 	}
+
+	if (ret > 0)
+		*last_objver = objver;
 
 	dout("sync_read result %zd retry_op %d\n", ret, *retry_op);
 	return ret;
