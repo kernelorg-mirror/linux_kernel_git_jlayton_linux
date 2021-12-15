@@ -2679,7 +2679,7 @@ retry:
 		 */
 		err = ceph_mdsc_do_request(mdsc, NULL, req);
 		if (err == -EAGAIN && truncate_retry--) {
-			dout("setattr %p result=%d (%s locally, %d remote), retry it!\n",
+			pr_warn("setattr %p result=%d (%s locally, %d remote), retry it!\n",
 			     inode, err, ceph_cap_string(dirtied), mask);
 			ceph_mdsc_put_request(req);
 			ceph_free_cap_flush(prealloc_cf);
