@@ -18,6 +18,7 @@
 #include "mds_client.h"
 #include "cache.h"
 #include "metric.h"
+#include "crypto.h"
 #include <linux/ceph/osd_client.h>
 #include <linux/ceph/striper.h>
 
@@ -217,7 +218,8 @@ static bool ceph_netfs_clamp_length(struct netfs_read_subrequest *subreq)
 
 static void finish_netfs_read(struct ceph_osd_request *req)
 {
-	struct ceph_fs_client *fsc = ceph_inode_to_client(req->r_inode);
+	struct inode *inode = req->r_inode;
+	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
 	struct ceph_osd_data *osd_data = osd_req_op_extent_osd_data(req, 0);
 	struct netfs_read_subrequest *subreq = req->r_priv;
 	int num_pages;
@@ -235,8 +237,13 @@ static void finish_netfs_read(struct ceph_osd_request *req)
 	else if (err == -EBLOCKLISTED)
 		fsc->blocklisted = true;
 
-	if (err >= 0 && err < subreq->len)
-		__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
+	if (err >= 0) {
+		if (err < subreq->len)
+			__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
+		if (IS_ENCRYPTED(inode))
+			if (err > subreq->len)
+				err = subreq->len;
+	}
 
 	netfs_subreq_terminated(subreq, err, true);
 
@@ -298,6 +305,18 @@ out:
 	return true;
 }
 
+int ceph_sparse_read_pp(struct inode *inode, struct page *page,
+				u64 off, u64 len)
+{
+	if ((offset_in_page(off) + len > PAGE_SIZE) ||
+	    ((off | len) & ~CEPH_FSCRYPT_BLOCK_MASK)) {
+		pr_warn("%s: bad decrypt request ino %llx:%llx off 0x%llx len 0x%llx\n",
+			__func__, ceph_vinop(inode), off, len);
+		return -EIO;
+	}
+	return ceph_fscrypt_decrypt_pages(inode, &page, off, len);
+}
+
 static void ceph_netfs_issue_op(struct netfs_read_subrequest *subreq)
 {
 	struct netfs_read_request *rreq = subreq->rreq;
@@ -311,13 +330,18 @@ static void ceph_netfs_issue_op(struct netfs_read_subrequest *subreq)
 	size_t page_off;
 	int err = 0;
 	u64 len = subreq->len;
+	u64 off = subreq->start;
+	int opcode = IS_ENCRYPTED(inode) ? CEPH_OSD_OP_SPARSE_READ :
+				CEPH_OSD_OP_READ;
 
 	if (ci->i_inline_version != CEPH_INLINE_NONE &&
 	    ceph_netfs_issue_op_inline(subreq))
 		return;
 
-	req = ceph_osdc_new_request(&fsc->client->osdc, &ci->i_layout, vino, subreq->start, &len,
-			0, 1, CEPH_OSD_OP_READ,
+	ceph_fscrypt_adjust_off_and_len(inode, &off, &len);
+
+	req = ceph_osdc_new_request(&fsc->client->osdc, &ci->i_layout, vino, off, &len,
+			0, 1, opcode,
 			CEPH_OSD_FLAG_READ | fsc->client->osdc.client->options->read_from_replica,
 			NULL, ci->i_truncate_seq, ci->i_truncate_size, false);
 	if (IS_ERR(req)) {
@@ -327,7 +351,7 @@ static void ceph_netfs_issue_op(struct netfs_read_subrequest *subreq)
 	}
 
 	dout("%s: pos=%llu orig_len=%zu len=%llu\n", __func__, subreq->start, subreq->len, len);
-	iov_iter_xarray(&iter, READ, &rreq->mapping->i_pages, subreq->start, len);
+	iov_iter_xarray(&iter, READ, &rreq->mapping->i_pages, off, len);
 	err = iov_iter_get_pages_alloc(&iter, &pages, len, &page_off);
 	if (err < 0) {
 		dout("%s: iov_ter_get_pages_alloc returned %d\n", __func__, err);
@@ -342,6 +366,8 @@ static void ceph_netfs_issue_op(struct netfs_read_subrequest *subreq)
 	req->r_callback = finish_netfs_read;
 	req->r_priv = subreq;
 	req->r_inode = inode;
+	if (IS_ENCRYPTED(inode))
+		req->r_pp = ceph_sparse_read_pp;
 	ihold(inode);
 
 	err = ceph_osdc_start_request(req->r_osdc, req, false);
