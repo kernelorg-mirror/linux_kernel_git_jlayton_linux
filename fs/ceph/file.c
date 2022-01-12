@@ -977,7 +977,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 
 		req = ceph_osdc_new_request(osdc, &ci->i_layout,
 					ci->i_vino, read_off, &read_len, 0, 1,
-					CEPH_OSD_OP_READ, CEPH_OSD_FLAG_READ,
+					CEPH_OSD_OP_SPARSE_READ, CEPH_OSD_FLAG_READ,
 					NULL, ci->i_truncate_seq,
 					ci->i_truncate_size, false);
 		if (IS_ERR(req)) {
@@ -1011,8 +1011,16 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 					 req->r_end_latency,
 					 read_len, ret);
 
-		if (ret > 0)
+		if (ret > 0) {
+			void *addr = kmap_atomic(pages[0]);
+
+			pr_info("sparse_read: we got %zd bytes total", ret);
+			print_hex_dump(KERN_INFO, "sparse_read: ",
+					DUMP_PREFIX_OFFSET, 16, 1,
+					addr, ret, true);
+			kunmap_atomic(addr);
 			objver = req->r_version;
+		}
 		ceph_osdc_put_request(req);
 		i_size = i_size_read(inode);
 		dout("sync_read %llu~%llu got %zd i_size %llu%s\n",
