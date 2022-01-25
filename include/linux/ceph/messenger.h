@@ -25,6 +25,22 @@ struct ceph_connection_operations {
 	struct ceph_connection *(*get)(struct ceph_connection *);
 	void (*put)(struct ceph_connection *);
 
+	/**
+	 * sparse_read: read sparse data
+	 * @con: connection we're reading from
+	 * @off: offset into msgr data caller should read into
+	 * @len: len of the data that msgr should read
+	 * @buf: optional buffer to read into
+	 *
+	 * This should be called more than once, each time setting up to
+	 * receive an extent into the correct portion of the buffer (and
+	 * zeroing the holes between them).
+	 *
+	 * Returns 1 if there is more data to be read, 0 if reading is
+	 * complete, or -errno if there was an error.
+	 */
+	int (*sparse_read)(struct ceph_connection *con, u64 *off, u64 *len, char **buf);
+
 	/* handle an incoming message. */
 	void (*dispatch) (struct ceph_connection *con, struct ceph_msg *m);
 
@@ -252,6 +268,7 @@ struct ceph_msg {
 	struct kref kref;
 	bool more_to_follow;
 	bool needs_out_seq;
+	bool sparse_read;
 	int front_alloc_len;
 
 	struct ceph_msgpool *pool;
@@ -463,6 +480,8 @@ struct ceph_connection {
 
 	struct page *bounce_page;
 	u32 in_front_crc, in_middle_crc, in_data_crc;  /* calculated crc */
+
+	int sparse_resid;
 
 	struct timespec64 last_keepalive_ack; /* keepalive2 ack stamp */
 
