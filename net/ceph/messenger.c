@@ -1084,7 +1084,7 @@ struct page *ceph_msg_data_next(struct ceph_msg_data_cursor *cursor,
  * Returns true if the result moves the cursor on to the next piece
  * of the data item.
  */
-void ceph_msg_data_advance(struct ceph_msg_data_cursor *cursor, size_t bytes)
+static void __ceph_msg_data_advance(struct ceph_msg_data_cursor *cursor, size_t bytes)
 {
 	bool new_piece;
 
@@ -1118,6 +1118,16 @@ void ceph_msg_data_advance(struct ceph_msg_data_cursor *cursor, size_t bytes)
 		new_piece = true;
 	}
 	cursor->need_crc = new_piece;
+}
+
+void ceph_msg_data_advance(struct ceph_msg_data_cursor *cursor, size_t bytes)
+{
+	while (bytes) {
+		size_t cur = min(bytes, PAGE_SIZE);
+
+		__ceph_msg_data_advance(cursor, cur);
+		bytes -= cur;
+	}
 }
 
 u32 ceph_crc32c_page(u32 crc, struct page *page, unsigned int page_offset,
