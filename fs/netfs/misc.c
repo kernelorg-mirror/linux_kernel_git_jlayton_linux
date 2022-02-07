@@ -232,3 +232,24 @@ int netfs_wait_for_credit(struct writeback_control *wbc)
 
 	return 0;
 }
+
+/**
+ * netfs_clear_inode - Clean up the netfs context on an inode during eviction
+ * @inode: The inode being cleared.
+ *
+ * Clean up the state in a netfs_inode struct when a network filesystem inode
+ * gets evicted.
+ */
+void netfs_clear_inode(struct inode *inode)
+{
+	struct netfs_flush_group *group;
+	struct netfs_inode *ctx = netfs_inode(inode);
+
+	while ((group = list_first_entry_or_null(&ctx->flush_groups,
+						 struct netfs_flush_group,
+						 group_link))) {
+		list_del_init(&group->group_link);
+		netfs_put_flush_group(ctx, group);
+	}
+}
+EXPORT_SYMBOL(netfs_clear_inode);

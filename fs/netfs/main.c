@@ -109,12 +109,13 @@ static int netfs_regions_seq_show(struct seq_file *m, void *v)
 
 	region = list_entry(v, struct netfs_dirty_region, proc_link);
 	seq_printf(m,
-		   "%08x %3d %02x:%02x %8x %s %04llx-%04llx\n",
+		   "%08x %3d %02x:%02x %8x %s %04lx-%04lx %04llx-%04llx\n",
 		   region->debug_id,
 		   refcount_read(&region->ref),
 		   0, 0, 0,
 		   region->type == NETFS_MODIFIED_REGION ? "WR" : "CC",
-		   region->from, region->to);
+		   region->first, region->last,
+		   region->from, region->to - 1);
 	return 0;
 }
 
