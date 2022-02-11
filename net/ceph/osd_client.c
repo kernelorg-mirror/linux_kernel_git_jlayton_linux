@@ -5482,6 +5482,7 @@ static struct ceph_msg *get_reply(struct ceph_connection *con,
 	int data_len = le32_to_cpu(hdr->data_len);
 	u64 tid = le64_to_cpu(hdr->tid);
 	u64 sroff;
+	bool sparse;
 
 	down_read(&osdc->lock);
 	if (!osd_registered(osd)) {
@@ -5514,7 +5515,9 @@ static struct ceph_msg *get_reply(struct ceph_connection *con,
 		req->r_reply = m;
 	}
 
-	if (data_len > req->r_reply->data_length) {
+	sparse = is_sparse_read(req, &sroff);
+
+	if (!sparse && (data_len > req->r_reply->data_length)) {
 		pr_warn("%s osd%d tid %llu data %d > preallocated %zu, skipping\n",
 			__func__, osd->o_osd, req->r_tid, data_len,
 			req->r_reply->data_length);
@@ -5524,9 +5527,8 @@ static struct ceph_msg *get_reply(struct ceph_connection *con,
 	}
 
 	m = ceph_msg_get(req->r_reply);
-
-	m->sparse_read = is_sparse_read(req, &sroff);
-	if (m->sparse_read)
+	m->sparse_read = sparse;
+	if (sparse)
 		ceph_init_sparse_read(&osd->o_sparse_read, sroff);
 
 	dout("get_reply tid %lld %p\n", tid, m);
