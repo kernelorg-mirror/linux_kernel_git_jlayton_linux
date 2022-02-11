@@ -1090,6 +1090,10 @@ struct ceph_osd_request *ceph_osdc_new_request(struct ceph_osd_client *osdc,
 	       opcode != CEPH_OSD_OP_CREATE && opcode != CEPH_OSD_OP_DELETE &&
 	       opcode != CEPH_OSD_OP_SPARSE_READ);
 
+	/* can't handle more than one sparse read data item at a time yet */
+	if (WARN_ON_ONCE(opcode == CEPH_OSD_OP_SPARSE_READ && num_ops > 1))
+		return ERR_PTR(-EINVAL);
+
 	req = ceph_osdc_alloc_request(osdc, snapc, num_ops, use_mempool,
 					GFP_NOFS);
 	if (!req) {
@@ -2467,6 +2471,20 @@ static void submit_request(struct ceph_osd_request *req, bool wrlocked)
 	__submit_request(req, wrlocked);
 }
 
+static void ceph_init_sparse_read(struct ceph_sparse_read *sr, u64 offset)
+{
+	if (sr->sr_extent != sr->sr_emb_ext)
+		kfree(sr->sr_extent);
+	sr->sr_state = CEPH_SPARSE_READ_COUNT;
+	sr->sr_offset = offset;
+	sr->sr_pos = 0;
+	sr->sr_count = 0;
+	sr->sr_index = 0;
+	sr->sr_extent = sr->sr_emb_ext;
+	sr->sr_extent[0].off = 0;
+	sr->sr_extent[0].len = 0;
+}
+
 static void finish_request(struct ceph_osd_request *req)
 {
 	struct ceph_osd_client *osdc = req->r_osdc;
@@ -2476,8 +2494,10 @@ static void finish_request(struct ceph_osd_request *req)
 
 	req->r_end_latency = ktime_get();
 
-	if (req->r_osd)
+	if (req->r_osd) {
+		ceph_init_sparse_read(&req->r_osd->o_sparse_read, 0);
 		unlink_request(req->r_osd, req);
+	}
 	atomic_dec(&osdc->num_requests);
 
 	/*
@@ -3772,7 +3792,13 @@ static void handle_reply(struct ceph_osd *osd, struct ceph_msg *msg)
 		     req->r_tid, i, m.rval[i], m.outdata_len[i]);
 		req->r_ops[i].rval = m.rval[i];
 		req->r_ops[i].outdata_len = m.outdata_len[i];
-		data_len += m.outdata_len[i];
+		if (req->r_ops[i]->op == CEPH_OSD_OP_SPARSE_READ) {
+			struct ceph_sparse_read *sr = &osd->o_sparse_read;
+
+			data_len += sr->sr_pos - sr->sr_offset;
+		 } else {
+			data_len += m.outdata_len[i];
+		 }
 	}
 	if (data_len != le32_to_cpu(msg->hdr.data_len)) {
 		pr_err("sum of lens %u != %u for tid %llu\n", data_len,
@@ -5423,6 +5449,22 @@ static void osd_dispatch(struct ceph_connection *con, struct ceph_msg *msg)
 	ceph_msg_put(msg);
 }
 
+static bool is_sparse_read(struct ceph_osd_request *req, u64 *off)
+{
+	int i;
+
+	if (!(req->r_flags & CEPH_OSD_FLAG_READ))
+		return false;
+
+	for (i = 0; i < req->r_num_ops; ++i) {
+		if (req->r_ops[i].op == CEPH_OSD_OP_SPARSE_READ) {
+			*off = req->r_ops[i].extent.offset;
+			return true;
+		}
+	}
+	return false;
+}
+
 /*
  * Lookup and return message for incoming reply.  Don't try to do
  * anything about a larger than preallocated data portion of the
@@ -5439,6 +5481,7 @@ static struct ceph_msg *get_reply(struct ceph_connection *con,
 	int front_len = le32_to_cpu(hdr->front_len);
 	int data_len = le32_to_cpu(hdr->data_len);
 	u64 tid = le64_to_cpu(hdr->tid);
+	u64 sroff;
 
 	down_read(&osdc->lock);
 	if (!osd_registered(osd)) {
@@ -5481,6 +5524,11 @@ static struct ceph_msg *get_reply(struct ceph_connection *con,
 	}
 
 	m = ceph_msg_get(req->r_reply);
+
+	m->sparse_read = is_sparse_read(req, &sroff);
+	if (m->sparse_read)
+		ceph_init_sparse_read(&osd->o_sparse_read, sroff);
+
 	dout("get_reply tid %lld %p\n", tid, m);
 
 out_unlock_session:
@@ -5713,9 +5761,94 @@ static int osd_check_message_signature(struct ceph_msg *msg)
 	return ceph_auth_check_message_signature(auth, msg);
 }
 
+static void zero_range(struct ceph_msg *msg, u64 off, u64 len)
+{
+	struct ceph_msg_data_cursor cursor;
+
+	ceph_msg_data_cursor_init(&cursor, msg, off + len);
+
+	while (len) {
+		struct page *page;
+		size_t poff, plen;
+		bool last = false;
+
+		page = ceph_msg_data_next(&cursor, &poff, &plen, &last);
+		if (WARN_ON_ONCE(!page))
+			break;
+		if (plen > len)
+			plen = len;
+		zero_user_segment(page, poff, plen);
+		len -= plen;
+	}
+}
+
+static int osd_sparse_read(struct ceph_connection *con, u64 *poff, u64 *plen, char **pbuf)
+{
+	struct ceph_osd *o = con->private;
+	struct ceph_sparse_read *sr = &o->o_sparse_read;
+	u32 count = __le32_to_cpu(sr->sr_count);
+	u64 eoff, elen;
+
+	switch (sr->sr_state) {
+	case CEPH_SPARSE_READ_COUNT:
+		/* number of extents */
+		*plen = sizeof(sr->sr_count);
+		*pbuf = (char *)&sr->sr_count;
+		sr->sr_state = CEPH_SPARSE_READ_EXTENTS;
+		break;
+	case CEPH_SPARSE_READ_EXTENTS:
+		/* the extent array */
+		*plen = count * sizeof(*sr->sr_extent);
+
+		dout("%s: got %u extents\n", __func__, count);
+
+		if (count > 1) {
+			/* can't use the embedded extent array */
+			sr->sr_extent = kmalloc_array(count, sizeof(*sr->sr_extent),
+						   GFP_NOIO);
+			if (!sr->sr_extent)
+				return -ENOMEM;
+		}
+		*pbuf = (char *)sr->sr_extent;
+		sr->sr_state = CEPH_SPARSE_READ_DATA;
+		break;
+	case CEPH_SPARSE_READ_DATA:
+		if (sr->sr_index >= count)
+			return 0;
+
+		eoff = le64_to_cpu(sr->sr_extent[sr->sr_index].off);
+		elen = le64_to_cpu(sr->sr_extent[sr->sr_index].len);
+
+		dout("%s: ext %d off 0x%llx len 0x%llx\n", __func__, sr->sr_index, eoff, elen);
+
+		/* on first extent, set last offset to starting pos */
+		if (sr->sr_index == 0)
+			sr->sr_pos = sr->sr_offset;
+
+		/* zero out anything from sr_pos to start of extent */
+		if (sr->sr_pos < eoff)
+			zero_range(con->in_msg,
+				   sr->sr_pos - sr->sr_offset,
+				   eoff - sr->sr_pos);
+
+		/* Pass back extent info for msgr to set up buffer */
+		*poff = eoff - sr->sr_offset;
+		*plen = elen;
+
+		/* Set position for next extent */
+		sr->sr_pos = *poff + elen;
+
+		/* Bump the array index */
+		++sr->sr_index;
+		break;
+	}
+	return 1;
+}
+
 static const struct ceph_connection_operations osd_con_ops = {
 	.get = osd_get_con,
 	.put = osd_put_con,
+	.sparse_read = osd_sparse_read,
 	.alloc_msg = osd_alloc_msg,
 	.dispatch = osd_dispatch,
 	.fault = osd_fault,
