@@ -1857,6 +1857,7 @@ static int prepare_sparse_read_cont(struct ceph_connection *con)
 						    con->v2.in_bvec.bv_len);
 	}
 
+	ceph_msg_data_advance(&con->v2.in_cursor, con->v2.in_bvec.bv_len);
 	if (con->v2.in_cursor.total_resid) {
 		get_bvec_at(&con->v2.in_cursor, &bv);
 		if (ceph_test_opt(from_msgr(con->msgr), RXBOUNCE)) {
@@ -1870,6 +1871,9 @@ static int prepare_sparse_read_cont(struct ceph_connection *con)
 
 	/* get next extent */
 	ret = con->ops->sparse_read(con, &off, &len, &buf);
+	printk("%s: ret=%d off=%llx len=%llx buf=%p\n",
+		__func__, ret, off, len, buf);
+
 	if (ret <= 0) {
 		if (ret < 0)
 			return ret;
