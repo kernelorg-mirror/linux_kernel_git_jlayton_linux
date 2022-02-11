@@ -3792,7 +3792,7 @@ static void handle_reply(struct ceph_osd *osd, struct ceph_msg *msg)
 		     req->r_tid, i, m.rval[i], m.outdata_len[i]);
 		req->r_ops[i].rval = m.rval[i];
 		req->r_ops[i].outdata_len = m.outdata_len[i];
-		if (req->r_ops[i]->op == CEPH_OSD_OP_SPARSE_READ) {
+		if (req->r_ops[i].op == CEPH_OSD_OP_SPARSE_READ) {
 			struct ceph_sparse_read *sr = &osd->o_sparse_read;
 
 			data_len += sr->sr_pos - sr->sr_offset;
@@ -3800,7 +3800,7 @@ static void handle_reply(struct ceph_osd *osd, struct ceph_msg *msg)
 			data_len += m.outdata_len[i];
 		 }
 	}
-	if (data_len != le32_to_cpu(msg->hdr.data_len)) {
+	if (!msg->sparse_read && data_len != le32_to_cpu(msg->hdr.data_len)) {
 		pr_err("sum of lens %u != %u for tid %llu\n", data_len,
 		       le32_to_cpu(msg->hdr.data_len), req->r_tid);
 		goto fail_request;
@@ -5799,10 +5799,10 @@ static int osd_sparse_read(struct ceph_connection *con, u64 *poff, u64 *plen, ch
 		sr->sr_state = CEPH_SPARSE_READ_EXTENTS;
 		break;
 	case CEPH_SPARSE_READ_EXTENTS:
-		/* the extent array */
-		*plen = count * sizeof(*sr->sr_extent);
+		printk("%s: got %u extents\n", __func__, count);
 
-		dout("%s: got %u extents\n", __func__, count);
+		if (count == 0)
+			return 0;
 
 		if (count > 1) {
 			/* can't use the embedded extent array */
@@ -5811,21 +5811,22 @@ static int osd_sparse_read(struct ceph_connection *con, u64 *poff, u64 *plen, ch
 			if (!sr->sr_extent)
 				return -ENOMEM;
 		}
+		*plen = count * sizeof(*sr->sr_extent);
 		*pbuf = (char *)sr->sr_extent;
 		sr->sr_state = CEPH_SPARSE_READ_DATA;
 		break;
 	case CEPH_SPARSE_READ_DATA:
+		/* on first extent, set last offset to starting pos */
+		if (sr->sr_index == 0)
+			sr->sr_pos = sr->sr_offset;
+
 		if (sr->sr_index >= count)
 			return 0;
 
 		eoff = le64_to_cpu(sr->sr_extent[sr->sr_index].off);
 		elen = le64_to_cpu(sr->sr_extent[sr->sr_index].len);
 
-		dout("%s: ext %d off 0x%llx len 0x%llx\n", __func__, sr->sr_index, eoff, elen);
-
-		/* on first extent, set last offset to starting pos */
-		if (sr->sr_index == 0)
-			sr->sr_pos = sr->sr_offset;
+		printk("%s: ext %d off 0x%llx len 0x%llx\n", __func__, sr->sr_index, eoff, elen);
 
 		/* zero out anything from sr_pos to start of extent */
 		if (sr->sr_pos < eoff)
