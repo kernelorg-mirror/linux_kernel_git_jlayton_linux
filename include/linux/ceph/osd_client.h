@@ -23,10 +23,13 @@ struct ceph_osd_request;
 struct ceph_osd_client;
 
 /*
- * completion callback for async writepages
+ * completion callback for async calls
  */
 typedef void (*ceph_osdc_callback_t)(struct ceph_osd_request *);
 
+/* called after receiving each page on sparse read */
+typedef int (*ceph_osdc_sparse_pp_t)(struct inode *inode, struct page *pages,
+				 u64 off, u64 len);
 #define CEPH_HOMELESS_OSD	-1
 
 enum ceph_sparse_read_state {
@@ -249,6 +252,7 @@ struct ceph_osd_request {
 	bool		  r_linger;           /* don't resend on failure */
 	struct completion r_completion;       /* private to osd_client.c */
 	ceph_osdc_callback_t r_callback;
+	ceph_osdc_sparse_pp_t r_pp;	      /* postprocessing after receive */
 
 	struct inode *r_inode;         	      /* for use by callbacks */
 	struct list_head r_private_item;      /* ditto */

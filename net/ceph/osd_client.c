@@ -5863,10 +5863,48 @@ static int osd_sparse_read(struct ceph_connection *con,
 	return 1;
 }
 
+static int osd_sparse_pp(struct ceph_connection *con,
+			 struct ceph_msg_data_cursor *cursor,
+			 struct bio_vec *bv)
+{
+	struct ceph_osd *o = con->private;
+	struct ceph_msg *msg = con->in_msg;
+	struct ceph_sparse_read *sr = &o->o_sparse_read;
+	struct ceph_osd_request *req;
+	struct ceph_sparse_extent *ext;
+	u64 off;
+	int ret;
+
+	/* Huh? */
+	if (WARN_ON_ONCE(!msg->sparse_read))
+		return -EBADR;
+
+	/* FIXME: convert to RCU? */
+	spin_lock(&o->o_requests_lock);
+	req = lookup_request(&o->o_requests, le64_to_cpu(con->in_msg->hdr.tid));
+	if (WARN_ON_ONCE(!req)) {
+		spin_unlock(&o->o_requests_lock);
+		return -EBADR;
+	}
+	ceph_osdc_get_request(req);
+	spin_unlock(&o->o_requests_lock);
+
+	/* offset into file of start of object */
+	off = req->r_data_offset - sr->sr_req_off;
+
+	/* current pos is at end of extent - residual data in cursor */
+	ext = &sr->sr_extent[sr->sr_index - 1];
+	off += le64_to_cpu(ext->off) + le64_to_cpu(ext->len) -
+			cursor->sr_resid;
+
+	ret = req->r_pp(req->r_inode, bv->bv_page, off, bv->bv_len);
+	ceph_osdc_put_request(req);
+	return ret;
+}
+
 static const struct ceph_connection_operations osd_con_ops = {
 	.get = osd_get_con,
 	.put = osd_put_con,
-	.sparse_read = osd_sparse_read,
 	.alloc_msg = osd_alloc_msg,
 	.dispatch = osd_dispatch,
 	.fault = osd_fault,
@@ -5881,4 +5919,6 @@ static const struct ceph_connection_operations osd_con_ops = {
 	.handle_auth_reply_more = osd_handle_auth_reply_more,
 	.handle_auth_done = osd_handle_auth_done,
 	.handle_auth_bad_method = osd_handle_auth_bad_method,
+	.sparse_read = osd_sparse_read,
+	.sparse_pp = osd_sparse_pp,
 };
