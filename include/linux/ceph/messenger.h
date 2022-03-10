@@ -74,7 +74,7 @@ struct ceph_connection_operations {
 
 	/**
 	 * sparse_read: read sparse data
-	 * @con: connection we're reading from
+	 * @con: connection context
 	 * @cursor: data cursor for reading extents
 	 * @len: len of the data that msgr should read
 	 * @buf: optional buffer to read into
@@ -96,6 +96,19 @@ struct ceph_connection_operations {
 			   struct ceph_msg_data_cursor *cursor,
 			   u64 *len, char **buf);
 
+	/**
+	 * sparse_pp: postprocess a page populated by sparse data
+	 * @con: connection context
+	 * @cursor: data cursor for reading extents
+	 * @bv: bio_vec representing data to be processed
+	 *
+	 * If this is set, then the messenger will call it after reading
+	 * sparse data into @bv. @cursor should still represent the
+	 * position of @bv.
+	 */
+	int (*sparse_pp)(struct ceph_connection *con,
+			 struct ceph_msg_data_cursor *cursor,
+			 struct bio_vec *bv);
 };
 
 /* use format string %s%lld */

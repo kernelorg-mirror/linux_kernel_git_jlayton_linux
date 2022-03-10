@@ -1849,6 +1849,13 @@ static int prepare_sparse_read_cont(struct ceph_connection *con)
 						    con->v2.in_bvec.bv_len);
 	}
 
+	/* postprocessing before advancing */
+	if (con->ops->sparse_pp) {
+		ret = con->ops->sparse_pp(con, cursor, &con->v2.in_bvec);
+		if (ret < 0)
+			return ret;
+	}
+
 	ceph_msg_data_advance(cursor, con->v2.in_bvec.bv_len);
 	cursor->sr_resid -= con->v2.in_bvec.bv_len;
 	dout("%s: advance by 0x%x sr_resid 0x%x\n", __func__,
