@@ -1122,8 +1122,7 @@ struct ceph_osd_request *ceph_osdc_new_request(struct ceph_osd_client *osdc,
 	req->r_flags = flags | osdc->client->options->read_from_replica;
 
 	req->r_snapid = vino.snap;
-	if (flags & CEPH_OSD_FLAG_WRITE)
-		req->r_data_offset = off;
+	req->r_data_offset = off;
 
 	if (num_ops > 1) {
 		int num_req_ops, num_rep_ops;
@@ -2134,8 +2133,8 @@ static void encode_request_partial(struct ceph_osd_request *req,
 		/* snapshots aren't writeable */
 		WARN_ON(req->r_snapid != CEPH_NOSNAP);
 	} else {
-		WARN_ON(req->r_mtime.tv_sec || req->r_mtime.tv_nsec ||
-			req->r_data_offset || req->r_snapc);
+		WARN_ON(req->r_mtime.tv_sec ||req->r_mtime.tv_nsec ||
+			req->r_snapc);
 	}
 
 	setup_request_data(req);
@@ -2193,7 +2192,8 @@ static void encode_request_partial(struct ceph_osd_request *req,
 	 * to align received data into its buffers such that there's no
 	 * need to re-copy it before writing it to disk (direct I/O).
 	 */
-	msg->hdr.data_off = cpu_to_le16(req->r_data_offset);
+	msg->hdr.data_off = (req->r_flags & CEPH_OSD_FLAG_WRITE) ?
+				cpu_to_le16(req->r_data_offset) : 0;
 
 	dout("%s req %p msg %p oid %s oid_len %d\n", __func__, req, msg,
 	     req->r_t.target_oid.name, req->r_t.target_oid.name_len);

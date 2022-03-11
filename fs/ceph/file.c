@@ -1258,7 +1258,7 @@ static void ceph_aio_retry_work(struct work_struct *work)
 	req->r_ops[0] = orig_req->r_ops[0];
 
 	req->r_mtime = aio_req->mtime;
-	req->r_data_offset = req->r_ops[0].extent.offset;
+	req->r_data_offset = orig_req->r_data_offset;
 
 	ret = ceph_osdc_alloc_messages(req, GFP_NOFS);
 	if (ret) {
