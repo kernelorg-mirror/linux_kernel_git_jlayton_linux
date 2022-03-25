@@ -57,6 +57,11 @@ static int ceph_crypt_set_context(struct inode *inode, const void *ctx, size_t l
 	return ret;
 }
 
+static const union fscrypt_policy *ceph_get_dummy_policy(struct super_block *sb)
+{
+	return ceph_sb_to_client(sb)->dummy_enc_policy.policy;
+}
+
 static bool ceph_crypt_empty_dir(struct inode *inode)
 {
 	struct ceph_inode_info *ci = ceph_inode(inode);
@@ -64,11 +69,17 @@ static bool ceph_crypt_empty_dir(struct inode *inode)
 	return ci->i_rsubdirs + ci->i_rfiles == 1;
 }
 
+static bool ceph_crypt_has_stable_inodes(struct super_block *sb)
+{
+	return true;
+}
+
 static struct fscrypt_operations ceph_fscrypt_ops = {
 	.key_prefix		= "ceph:",
 	.get_context		= ceph_crypt_get_context,
 	.set_context		= ceph_crypt_set_context,
 	.empty_dir		= ceph_crypt_empty_dir,
+	.has_stable_inodes	= ceph_crypt_has_stable_inodes,
 };
 
 void ceph_fscrypt_set_ops(struct super_block *sb)
