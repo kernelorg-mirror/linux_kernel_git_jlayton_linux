@@ -65,6 +65,7 @@ static bool ceph_crypt_empty_dir(struct inode *inode)
 }
 
 static struct fscrypt_operations ceph_fscrypt_ops = {
+	.key_prefix		= "ceph:",
 	.get_context		= ceph_crypt_get_context,
 	.set_context		= ceph_crypt_set_context,
 	.empty_dir		= ceph_crypt_empty_dir,
