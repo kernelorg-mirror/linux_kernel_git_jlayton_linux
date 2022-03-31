@@ -1088,20 +1088,19 @@ static int process_v2_sparse_read(struct ceph_connection *con, struct page **pag
 	int ret;
 
 	for (;;) {
-		u64 elen;
 		char *buf = NULL;
 
-		ret = con->ops->sparse_read(con, cursor, &elen, &buf);
+		ret = con->ops->sparse_read(con, cursor, &buf);
 		if (ret <= 0)
 			return ret;
 
-		dout("%s: sparse_read return elen %llx buf %p\n", __func__, elen, buf);
+		dout("%s: sparse_read return %x buf %p\n", __func__, ret, buf);
 
 		do {
 			int idx = spos >> PAGE_SHIFT;
 			int soff = offset_in_page(spos);
 			struct page *spage = con->v2.in_enc_pages[idx];
-			int len = min_t(int, elen, PAGE_SIZE - soff);
+			int len = min_t(int, ret, PAGE_SIZE - soff);
 
 			if (buf) {
 				memcpy_from_page(buf, spage, soff, len);
@@ -1116,8 +1115,8 @@ static int process_v2_sparse_read(struct ceph_connection *con, struct page **pag
 				ceph_msg_data_advance(cursor, len);
 			}
 			spos += len;
-			elen -= len;
-		} while (elen);
+			ret -= len;
+		} while (ret);
 	}
 }
 
@@ -1927,7 +1926,6 @@ static int prepare_sparse_read_cont(struct ceph_connection *con)
 	struct bio_vec bv;
 	char *buf = NULL;
 	struct ceph_msg_data_cursor *cursor = &con->v2.in_cursor;
-	u64 len = 0;
 
 	WARN_ON(con->v2.in_state != IN_S_PREPARE_SPARSE_DATA_CONT);
 
@@ -1977,7 +1975,7 @@ static int prepare_sparse_read_cont(struct ceph_connection *con)
 	}
 
 	/* get next extent */
-	ret = con->ops->sparse_read(con, cursor, &len, &buf);
+	ret = con->ops->sparse_read(con, cursor, &buf);
 	if (ret <= 0) {
 		if (ret < 0)
 			return ret;
@@ -1991,14 +1989,14 @@ static int prepare_sparse_read_cont(struct ceph_connection *con)
 	if (buf) {
 		/* receive into buffer */
 		reset_in_kvecs(con);
-		add_in_kvec(con, buf, len);
-		con->v2.data_len_remain -= len;
+		add_in_kvec(con, buf, ret);
+		con->v2.data_len_remain -= ret;
 		return 0;
 	}
 
-	if (len > cursor->total_resid) {
-		pr_warn("%s: len 0x%llx total_resid 0x%zx resid 0x%zx last %d\n",
-			__func__, len, cursor->total_resid, cursor->resid,
+	if (ret > cursor->total_resid) {
+		pr_warn("%s: ret 0x%x total_resid 0x%zx resid 0x%zx last %d\n",
+			__func__, ret, cursor->total_resid, cursor->resid,
 			cursor->last_piece);
 		return -EIO;
 	}
@@ -2018,7 +2016,7 @@ static int prepare_sparse_read_cont(struct ceph_connection *con)
 		bv.bv_offset = 0;
 	}
 	set_in_bvec(con, &bv);
-	con->v2.data_len_remain -= len;
+	con->v2.data_len_remain -= ret;
 	return ret;
 }
 

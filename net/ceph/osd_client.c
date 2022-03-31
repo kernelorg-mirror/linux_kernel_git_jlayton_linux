@@ -5881,7 +5881,7 @@ static inline void convert_extent_map(struct ceph_sparse_read *sr)
 
 static int osd_sparse_read(struct ceph_connection *con,
 			   struct ceph_msg_data_cursor *cursor,
-			   u64 *plen, char **pbuf)
+			   char **pbuf)
 {
 	struct ceph_osd *o = con->private;
 	struct ceph_sparse_read *sr = &o->o_sparse_read;
@@ -5897,7 +5897,7 @@ next_op:
 			return ret;
 
 		/* number of extents */
-		*plen = sizeof(sr->sr_count);
+		ret = sizeof(sr->sr_count);
 		*pbuf = (char *)&sr->sr_count;
 		sr->sr_state = CEPH_SPARSE_READ_EXTENTS;
 		break;
@@ -5913,8 +5913,11 @@ next_op:
 				 * Apply a hard cap to the number of extents.
 				 * If we have more, assume something is wrong.
 				 */
-				if (count > MAX_EXTENTS)
-					return -EIO;
+				if (count > MAX_EXTENTS) {
+					dout("%s: OSD returned 0x%x extents in a single reply!\n",
+						  __func__, count);
+					return -EREMOTEIO;
+				}
 
 				/* no extent array provided, or too short */
 				kfree(sr->sr_extent);
@@ -5925,7 +5928,7 @@ next_op:
 					return -ENOMEM;
 				sr->sr_ext_len = count;
 			}
-			*plen = count * sizeof(*sr->sr_extent);
+			ret = count * sizeof(*sr->sr_extent);
 			*pbuf = (char *)sr->sr_extent;
 			sr->sr_state = CEPH_SPARSE_READ_DATA_LEN;
 			break;
@@ -5934,7 +5937,7 @@ next_op:
 		fallthrough;
 	case CEPH_SPARSE_READ_DATA_LEN:
 		convert_extent_map(sr);
-		*plen = sizeof(sr->sr_datalen);
+		ret = sizeof(sr->sr_datalen);
 		*pbuf = (char *)&sr->sr_datalen;
 		sr->sr_state = CEPH_SPARSE_READ_DATA;
 		break;
@@ -5950,6 +5953,11 @@ next_op:
 		dout("[%d] ext %d off 0x%llx len 0x%llx\n",
 		     o->o_osd, sr->sr_index, eoff, elen);
 
+		if (elen > INT_MAX) {
+			dout("Sparse read extent length too long (0x%llx)\n", elen);
+			return -EREMOTEIO;
+		}
+
 		/* zero out anything from sr_pos to start of extent */
 		if (sr->sr_pos < eoff)
 			advance_cursor(cursor, eoff - sr->sr_pos, true);
@@ -5959,14 +5967,14 @@ next_op:
 
 		/* send back the new length and nullify the ptr */
 		cursor->sr_resid = elen;
-		*plen = elen;
+		ret = elen;
 		*pbuf = NULL;
 
 		/* Bump the array index */
 		++sr->sr_index;
 		break;
 	}
-	return 1;
+	return ret;
 }
 
 static const struct ceph_connection_operations osd_con_ops = {

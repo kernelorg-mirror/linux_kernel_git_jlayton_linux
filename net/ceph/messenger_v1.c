@@ -1059,9 +1059,9 @@ static int read_sparse_msg_data(struct ceph_connection *con)
 		}
 
 		memset(&con->v1.in_sr_kvec, 0, sizeof(con->v1.in_sr_kvec));
-		con->v1.in_sr_len = 0;
-		ret = con->ops->sparse_read(con, cursor, &con->v1.in_sr_len,
-					(char **)&con->v1.in_sr_kvec.iov_base);
+		ret = con->ops->sparse_read(con, cursor,
+				(char **)&con->v1.in_sr_kvec.iov_base);
+		con->v1.in_sr_len = ret;
 	} while (ret > 0);
 
 	if (do_datacrc)
