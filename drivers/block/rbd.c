@@ -791,6 +791,7 @@ enum {
 	Opt_lock_on_read,
 	Opt_exclusive,
 	Opt_notrim,
+	Opt_sparseread,
 };
 
 enum {
@@ -820,6 +821,7 @@ static const struct fs_parameter_spec rbd_parameters[] = {
 	fsparam_flag	("read_write",			Opt_read_write),
 	fsparam_flag	("ro",				Opt_read_only),
 	fsparam_flag	("rw",				Opt_read_write),
+	fsparam_flag	("sparseread",			Opt_sparseread),
 	{}
 };
 
@@ -831,6 +833,7 @@ struct rbd_options {
 	bool	lock_on_read;
 	bool	exclusive;
 	bool	trim;
+	bool	sparseread;
 
 	u32 alloc_hint_flags;  /* CEPH_OSD_OP_ALLOC_HINT_FLAG_* */
 };
@@ -842,6 +845,7 @@ struct rbd_options {
 #define RBD_LOCK_ON_READ_DEFAULT false
 #define RBD_EXCLUSIVE_DEFAULT	false
 #define RBD_TRIM_DEFAULT	true
+#define RBD_SPARSEREAD_DEFAULT	false
 
 struct rbd_parse_opts_ctx {
 	struct rbd_spec		*spec;
@@ -1379,6 +1383,8 @@ static void rbd_osd_req_callback(struct ceph_osd_request *osd_req)
 	 */
 	if (osd_req->r_result > 0 && rbd_img_is_write(obj_req->img_request))
 		result = 0;
+	else if (osd_req->r_result > 0 && osd_req->r_reply->sparse_read)
+		result = ceph_sparse_ext_map_end(&osd_req->r_ops[0]);
 	else
 		result = osd_req->r_result;
 
@@ -2753,14 +2759,23 @@ static bool rbd_obj_may_exist(struct rbd_obj_request *obj_req)
 static int rbd_obj_read_object(struct rbd_obj_request *obj_req)
 {
 	struct ceph_osd_request *osd_req;
+	bool sparse = obj_req->img_request->rbd_dev->opts->sparseread;
 	int ret;
 
 	osd_req = __rbd_obj_add_osd_request(obj_req, NULL, 1);
 	if (IS_ERR(osd_req))
 		return PTR_ERR(osd_req);
 
-	osd_req_op_extent_init(osd_req, 0, CEPH_OSD_OP_READ,
+	osd_req_op_extent_init(osd_req, 0,
+			       sparse ? CEPH_OSD_OP_SPARSE_READ : CEPH_OSD_OP_READ,
 			       obj_req->ex.oe_off, obj_req->ex.oe_len, 0, 0);
+
+	if (sparse) {
+		ret = ceph_alloc_sparse_ext_map(&osd_req->r_ops[0]);
+		if (ret)
+			return ret;
+	}
+
 	rbd_osd_setup_data(osd_req, 0);
 	rbd_osd_format_read(osd_req);
 
@@ -4743,6 +4758,7 @@ static int rbd_obj_read_sync(struct rbd_device *rbd_dev,
 	struct ceph_osd_client *osdc = &rbd_dev->rbd_client->client->osdc;
 	struct ceph_osd_request *req;
 	struct page **pages;
+	bool sparse = rbd_dev->opts->sparseread;
 	int num_pages = calc_pages_for(0, buf_len);
 	int ret;
 
@@ -4760,9 +4776,17 @@ static int rbd_obj_read_sync(struct rbd_device *rbd_dev,
 		goto out_req;
 	}
 
-	osd_req_op_extent_init(req, 0, CEPH_OSD_OP_READ, 0, buf_len, 0, 0);
+	osd_req_op_extent_init(req, 0,
+			       sparse ? CEPH_OSD_OP_SPARSE_READ : CEPH_OSD_OP_READ,
+			       0, buf_len, 0, 0);
 	osd_req_op_extent_osd_data_pages(req, 0, pages, buf_len, 0, false,
 					 true);
+
+	if (sparse) {
+		ret = ceph_alloc_sparse_ext_map(&req->r_ops[0]);
+		if (ret)
+			goto out_req;
+	}
 
 	ret = ceph_osdc_alloc_messages(req, GFP_KERNEL);
 	if (ret)
@@ -6312,6 +6336,9 @@ static int rbd_parse_param(struct fs_parameter *param,
 	case Opt_notrim:
 		opt->trim = false;
 		break;
+	case Opt_sparseread:
+		opt->sparseread = false;
+		break;
 	default:
 		BUG();
 	}
@@ -6493,6 +6520,7 @@ static int rbd_add_parse_args(const char *buf,
 	pctx.opts->lock_on_read = RBD_LOCK_ON_READ_DEFAULT;
 	pctx.opts->exclusive = RBD_EXCLUSIVE_DEFAULT;
 	pctx.opts->trim = RBD_TRIM_DEFAULT;
+	pctx.opts->sparseread = RBD_SPARSEREAD_DEFAULT;
 
 	ret = ceph_parse_mon_ips(mon_addrs, mon_addrs_size, pctx.copts, NULL,
 				 ',');
