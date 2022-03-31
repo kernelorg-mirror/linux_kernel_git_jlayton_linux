@@ -81,13 +81,6 @@
 #define CEPH_CAPS_WANTED_DELAY_MIN_DEFAULT      5  /* cap release delay */
 #define CEPH_CAPS_WANTED_DELAY_MAX_DEFAULT     60  /* cap release delay */
 
-/*
- * How big an extent array should we preallocate for a sparse read? This is
- * just a starting value.  If we get more than this back from the OSD, the
- * receiver will reallocate.
- */
-#define CEPH_SPARSE_EXT_ARRAY_INITIAL	16
-
 struct ceph_mount_options {
 	unsigned int flags;
 

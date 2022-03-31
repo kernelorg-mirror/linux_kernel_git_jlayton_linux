@@ -346,8 +346,7 @@ static void ceph_netfs_issue_op(struct netfs_read_subrequest *subreq)
 	}
 
 	if (sparse) {
-		err = ceph_alloc_sparse_ext_map(&req->r_ops[0],
-					CEPH_SPARSE_EXT_ARRAY_INITIAL);
+		err = ceph_alloc_sparse_ext_map(&req->r_ops[0]);
 		if (err) {
 			ceph_osdc_put_request(req);
 			goto out;

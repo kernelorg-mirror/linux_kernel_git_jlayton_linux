@@ -1165,7 +1165,7 @@ fail:
 }
 EXPORT_SYMBOL(ceph_osdc_new_request);
 
-int ceph_alloc_sparse_ext_map(struct ceph_osd_req_op *op, int cnt)
+int __ceph_alloc_sparse_ext_map(struct ceph_osd_req_op *op, int cnt)
 {
 	op->extent.sparse_ext_cnt = cnt;
 	op->extent.sparse_ext = kmalloc_array(cnt,
@@ -1175,7 +1175,7 @@ int ceph_alloc_sparse_ext_map(struct ceph_osd_req_op *op, int cnt)
 		return -ENOMEM;
 	return 0;
 }
-EXPORT_SYMBOL(ceph_alloc_sparse_ext_map);
+EXPORT_SYMBOL(__ceph_alloc_sparse_ext_map);
 
 /*
  * We keep osd requests in an rbtree, sorted by ->r_tid.

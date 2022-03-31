@@ -1009,7 +1009,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 
 		op = &req->r_ops[0];
 		if (sparse) {
-			ret = ceph_alloc_sparse_ext_map(op, CEPH_SPARSE_EXT_ARRAY_INITIAL);
+			ret = ceph_alloc_sparse_ext_map(op);
 			if (ret) {
 				ceph_osdc_put_request(req);
 				break;
@@ -1462,7 +1462,7 @@ ceph_direct_read_write(struct kiocb *iocb, struct iov_iter *iter,
 		osd_req_op_extent_osd_data_bvecs(req, 0, bvecs, num_pages, len);
 		op = &req->r_ops[0];
 		if (sparse) {
-			ret = ceph_alloc_sparse_ext_map(op, CEPH_SPARSE_EXT_ARRAY_INITIAL);
+			ret = ceph_alloc_sparse_ext_map(op);
 			if (ret) {
 				ceph_osdc_put_request(req);
 				break;
@@ -1708,7 +1708,7 @@ ceph_sync_write(struct kiocb *iocb, struct iov_iter *from, loff_t pos,
 							 offset_in_page(first_pos),
 							 false, false);
 				/* We only expect a single extent here */
-				ret = ceph_alloc_sparse_ext_map(op, 1);
+				ret = __ceph_alloc_sparse_ext_map(op, 1);
 				if (ret) {
 					ceph_osdc_put_request(req);
 					ceph_release_page_vector(pages, num_pages);
@@ -1727,7 +1727,7 @@ ceph_sync_write(struct kiocb *iocb, struct iov_iter *from, loff_t pos,
 							ci->i_truncate_seq);
 				}
 
-				ret = ceph_alloc_sparse_ext_map(op, 1);
+				ret = __ceph_alloc_sparse_ext_map(op, 1);
 				if (ret) {
 					ceph_osdc_put_request(req);
 					ceph_release_page_vector(pages, num_pages);
