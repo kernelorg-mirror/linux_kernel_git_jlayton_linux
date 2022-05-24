@@ -159,27 +159,7 @@ static void ceph_invalidate_folio(struct folio *folio, size_t offset,
 		ceph_put_snap_context(snapc);
 	}
 
-	folio_wait_fscache(folio);
-}
-
-static int ceph_releasepage(struct page *page, gfp_t gfp)
-{
-	struct inode *inode = page->mapping->host;
-
-	dout("%llx:%llx releasepage %p idx %lu (%sdirty)\n",
-	     ceph_vinop(inode), page,
-	     page->index, PageDirty(page) ? "" : "not ");
-
-	if (PagePrivate(page))
-		return 0;
-
-	if (PageFsCache(page)) {
-		if (current_is_kswapd() || !(gfp & __GFP_FS))
-			return 0;
-		wait_on_page_fscache(page);
-	}
-	ceph_fscache_note_page_release(inode);
-	return 1;
+	netfs_invalidate_folio(folio, offset, length);
 }
 
 static void ceph_netfs_expand_readahead(struct netfs_io_request *rreq)
@@ -210,6 +190,8 @@ static bool ceph_netfs_clamp_length(struct netfs_io_subrequest *subreq)
 	/* Truncate the extent at the end of the current block */
 	ceph_calc_file_object_mapping(&ci->i_layout, subreq->start, subreq->len,
 				      &objno, &objoff, &xlen);
+	dout("%s: subreq->len=0x%zx xlen=0x%x rsize=0x%x",
+		__func__, subreq->len, xlen, fsc->mount_options->rsize);
 	subreq->len = min(xlen, fsc->mount_options->rsize);
 	return true;
 }
@@ -219,7 +201,6 @@ static void finish_netfs_read(struct ceph_osd_request *req)
 	struct ceph_fs_client *fsc = ceph_inode_to_client(req->r_inode);
 	struct ceph_osd_data *osd_data = osd_req_op_extent_osd_data(req, 0);
 	struct netfs_io_subrequest *subreq = req->r_priv;
-	int num_pages;
 	int err = req->r_result;
 
 	ceph_update_read_metrics(&fsc->mdsc->metric, req->r_start_latency,
@@ -234,13 +215,18 @@ static void finish_netfs_read(struct ceph_osd_request *req)
 	else if (err == -EBLOCKLISTED)
 		fsc->blocklisted = true;
 
-	if (err >= 0 && err < subreq->len)
-		__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
+	if (err >= 0) {
+		if (err < subreq->len)
+			__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
+		iov_iter_advance(&subreq->iter, err);
+	}
+	if (!iov_iter_is_bvec(&subreq->iter))
+		ceph_put_page_vector(osd_data->pages,
+				     calc_pages_for(osd_data->alignment,
+				     osd_data->length),
+				     false);
 
 	netfs_subreq_terminated(subreq, err, true);
-
-	num_pages = calc_pages_for(osd_data->alignment, osd_data->length);
-	ceph_put_page_vector(osd_data->pages, num_pages, false);
 	iput(req->r_inode);
 }
 
@@ -253,7 +239,6 @@ static bool ceph_netfs_issue_op_inline(struct netfs_io_subrequest *subreq)
 	struct ceph_mds_request *req;
 	struct ceph_mds_client *mdsc = ceph_sb_to_mdsc(inode->i_sb);
 	struct ceph_inode_info *ci = ceph_inode(inode);
-	struct iov_iter iter;
 	ssize_t err = 0;
 	size_t len;
 	int mode;
@@ -288,8 +273,7 @@ static bool ceph_netfs_issue_op_inline(struct netfs_io_subrequest *subreq)
 	}
 
 	len = min_t(size_t, iinfo->inline_len - subreq->start, subreq->len);
-	iov_iter_xarray(&iter, READ, &rreq->mapping->i_pages, subreq->start, len);
-	err = copy_to_iter(iinfo->inline_data + subreq->start, len, &iter);
+	err = copy_to_iter(iinfo->inline_data + subreq->start, len, &subreq->iter);
 	if (err == 0)
 		err = -EFAULT;
 
@@ -307,7 +291,7 @@ static void ceph_netfs_issue_read(struct netfs_io_subrequest *subreq)
 	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
 	struct ceph_osd_request *req;
 	struct ceph_vino vino = ceph_vino(inode);
-	struct iov_iter iter;
+	struct iov_iter *iter = &subreq->iter;
 	struct page **pages;
 	size_t page_off;
 	int err = 0;
@@ -327,19 +311,32 @@ static void ceph_netfs_issue_read(struct netfs_io_subrequest *subreq)
 		goto out;
 	}
 
-	dout("%s: pos=%llu orig_len=%zu len=%llu\n", __func__, subreq->start, subreq->len, len);
-	iov_iter_xarray(&iter, READ, &rreq->mapping->i_pages, subreq->start, len);
-	err = iov_iter_get_pages_alloc(&iter, &pages, len, &page_off);
-	if (err < 0) {
-		dout("%s: iov_ter_get_pages_alloc returned %d\n", __func__, err);
-		goto out;
+	dout("%s: pos=%llu orig_len=%zu len=%llu debug_id=%x debug_idx=%hx iter->count=%zx\n",
+		__func__, subreq->start, subreq->len, len, rreq->debug_id,
+		subreq->debug_index, iov_iter_count(&subreq->iter));
+
+	if (iov_iter_is_bvec(iter)) {
+		/*
+		 * FIXME: remove force cast, ideally by plumbing an IOV_ITER osd_data
+		 * 	  variant.
+		 */
+		osd_req_op_extent_osd_data_bvecs(req, 0, (__force struct bio_vec *)iter->bvec,
+				iter->nr_segs, len);
+		goto submit;
 	}
 
-	/* should always give us a page-aligned read */
-	WARN_ON_ONCE(page_off);
-	len = err;
+	err = iov_iter_get_pages_alloc(&subreq->iter, &pages, len, &page_off);
+	if (err < len) {
+		if (err < 0) {
+			dout("%s: iov_ter_get_pages_alloc returned %d\n", __func__, err);
+			goto out;
+		}
+		len = err;
+		req->r_ops[0].extent.length = err;
+	}
 
 	osd_req_op_extent_osd_data_pages(req, 0, pages, len, 0, false, false);
+submit:
 	req->r_callback = finish_netfs_read;
 	req->r_priv = subreq;
 	req->r_inode = inode;
@@ -360,6 +357,8 @@ static int ceph_init_request(struct netfs_io_request *rreq, struct file *file)
 	struct inode *inode = rreq->inode;
 	int got = 0, want = CEPH_CAP_FILE_CACHE;
 	int ret = 0;
+
+	rreq->rsize = 1024 * 1024;
 
 	if (rreq->origin != NETFS_READAHEAD)
 		return 0;
@@ -394,11 +393,10 @@ static int ceph_init_request(struct netfs_io_request *rreq, struct file *file)
 	return 0;
 }
 
-static void ceph_readahead_cleanup(struct address_space *mapping, void *priv)
+static void ceph_netfs_free_request(struct netfs_io_request *rreq)
 {
-	struct inode *inode = mapping->host;
-	struct ceph_inode_info *ci = ceph_inode(inode);
-	int got = (uintptr_t)priv;
+	struct ceph_inode_info *ci = ceph_inode(rreq->inode);
+	int got = (uintptr_t)rreq->netfs_priv;
 
 	if (got)
 		ceph_put_cap_refs(ci, got);
@@ -406,12 +404,12 @@ static void ceph_readahead_cleanup(struct address_space *mapping, void *priv)
 
 const struct netfs_request_ops ceph_netfs_ops = {
 	.init_request		= ceph_init_request,
+	.free_request		= ceph_netfs_free_request,
 	.begin_cache_operation	= ceph_begin_cache_operation,
 	.issue_read		= ceph_netfs_issue_read,
 	.expand_readahead	= ceph_netfs_expand_readahead,
 	.clamp_length		= ceph_netfs_clamp_length,
 	.check_write_begin	= ceph_netfs_check_write_begin,
-	.cleanup		= ceph_readahead_cleanup,
 };
 
 #ifdef CONFIG_CEPH_FSCACHE
@@ -1387,7 +1385,7 @@ const struct address_space_operations ceph_aops = {
 	.write_end = ceph_write_end,
 	.dirty_folio = ceph_dirty_folio,
 	.invalidate_folio = ceph_invalidate_folio,
-	.releasepage = ceph_releasepage,
+	.releasepage = netfs_releasepage,
 	.direct_IO = noop_direct_IO,
 };
 
