@@ -1756,13 +1756,20 @@ static int prepare_read_control_remainder(struct ceph_connection *con)
 static int prepare_read_data(struct ceph_connection *con)
 {
 	struct bio_vec bv;
+	bool rxbounce = ceph_test_opt(from_msgr(con->msgr), RXBOUNCE);
 
 	con->in_data_crc = -1;
 	ceph_msg_data_cursor_init(&con->v2.in_cursor, con->in_msg,
 				  data_len(con->in_msg));
 
+	if (!rxbounce && con->v2.in_cursor.data->type == CEPH_MSG_DATA_ITER) {
+		con->v2.in_iter = con->v2.in_cursor.iov_iter;
+		con->v2.in_state = IN_S_PREPARE_READ_DATA_CONT;
+		return 0;
+	}
+
 	get_bvec_at(&con->v2.in_cursor, &bv);
-	if (ceph_test_opt(from_msgr(con->msgr), RXBOUNCE)) {
+	if (rxbounce) {
 		if (unlikely(!con->bounce_page)) {
 			con->bounce_page = alloc_page(GFP_NOIO);
 			if (!con->bounce_page) {
@@ -1779,19 +1786,35 @@ static int prepare_read_data(struct ceph_connection *con)
 	return 0;
 }
 
+static ssize_t ceph_crc_scan(struct iov_iter *i, const void *p,
+			     size_t len, size_t off, void *_priv)
+{
+	u32 *crc = _priv;
+
+	*crc = crc32c(*crc, p, len);
+	return len;
+}
+
 static void prepare_read_data_cont(struct ceph_connection *con)
 {
 	struct bio_vec bv;
+	bool rxbounce = ceph_test_opt(from_msgr(con->msgr), RXBOUNCE);
+	struct ceph_msg_data_cursor *cursor = &con->v2.in_cursor;
+	struct ceph_msg_data *data = cursor->data;
+	bool iter_data = data->type == CEPH_MSG_DATA_ITER;
 
-	if (ceph_test_opt(from_msgr(con->msgr), RXBOUNCE)) {
+	if (rxbounce) {
 		con->in_data_crc = crc32c(con->in_data_crc,
 					  page_address(con->bounce_page),
 					  con->v2.in_bvec.bv_len);
 
-		get_bvec_at(&con->v2.in_cursor, &bv);
+		get_bvec_at(cursor, &bv);
 		memcpy_to_page(bv.bv_page, bv.bv_offset,
 			       page_address(con->bounce_page),
 			       con->v2.in_bvec.bv_len);
+	} else if (iter_data) {
+		iov_iter_scan(&cursor->iov_iter, cursor->resid,
+			      ceph_crc_scan, &con->in_data_crc);
 	} else {
 		con->in_data_crc = ceph_crc32c_page(con->in_data_crc,
 						    con->v2.in_bvec.bv_page,
@@ -1799,14 +1822,20 @@ static void prepare_read_data_cont(struct ceph_connection *con)
 						    con->v2.in_bvec.bv_len);
 	}
 
-	ceph_msg_data_advance(&con->v2.in_cursor, con->v2.in_bvec.bv_len);
-	if (con->v2.in_cursor.total_resid) {
-		get_bvec_at(&con->v2.in_cursor, &bv);
-		if (ceph_test_opt(from_msgr(con->msgr), RXBOUNCE)) {
-			bv.bv_page = con->bounce_page;
-			bv.bv_offset = 0;
+	ceph_msg_data_advance(cursor, iter_data ? cursor->resid :
+				con->v2.in_bvec.bv_len);
+
+	if (cursor->total_resid) {
+		if (iter_data) {
+			con->v2.in_iter = cursor->iov_iter;
+		} else {
+			get_bvec_at(cursor, &bv);
+			if (ceph_test_opt(from_msgr(con->msgr), RXBOUNCE)) {
+				bv.bv_page = con->bounce_page;
+				bv.bv_offset = 0;
+			}
+			set_in_bvec(con, &bv);
 		}
-		set_in_bvec(con, &bv);
 		WARN_ON(con->v2.in_state != IN_S_PREPARE_READ_DATA_CONT);
 		return;
 	}
