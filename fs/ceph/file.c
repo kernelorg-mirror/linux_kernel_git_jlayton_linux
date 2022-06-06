@@ -1241,18 +1241,7 @@ static void ceph_aio_retry_work(struct work_struct *work)
 	struct ceph_osd_request *req;
 	int ret;
 
-	spin_lock(&ci->i_ceph_lock);
-	if (__ceph_have_pending_cap_snap(ci)) {
-		struct ceph_cap_snap *capsnap =
-			list_last_entry(&ci->i_cap_snaps,
-					struct ceph_cap_snap,
-					ci_item);
-		snapc = ceph_get_snap_context(capsnap->context);
-	} else {
-		BUG_ON(!ci->i_head_snapc);
-		snapc = ceph_get_snap_context(ci->i_head_snapc);
-	}
-	spin_unlock(&ci->i_ceph_lock);
+	snapc = ceph_get_latest_snapc(ci);
 
 	req = ceph_osdc_alloc_request(orig_req->r_osdc, snapc, 1,
 			false, GFP_NOFS);
@@ -1907,18 +1896,7 @@ retry_snap:
 		struct ceph_snap_context *snapc;
 		struct iov_iter data;
 
-		spin_lock(&ci->i_ceph_lock);
-		if (__ceph_have_pending_cap_snap(ci)) {
-			struct ceph_cap_snap *capsnap =
-					list_last_entry(&ci->i_cap_snaps,
-							struct ceph_cap_snap,
-							ci_item);
-			snapc = ceph_get_snap_context(capsnap->context);
-		} else {
-			BUG_ON(!ci->i_head_snapc);
-			snapc = ceph_get_snap_context(ci->i_head_snapc);
-		}
-		spin_unlock(&ci->i_ceph_lock);
+		snapc = ceph_get_latest_snapc(ci);
 
 		/* we might need to revert back to that point */
 		data = *from;

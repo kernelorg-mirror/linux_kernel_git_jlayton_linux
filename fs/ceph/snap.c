@@ -1269,3 +1269,22 @@ void ceph_cleanup_snapid_map(struct ceph_mds_client *mdsc)
 		kfree(sm);
 	}
 }
+
+struct ceph_snap_context *ceph_get_latest_snapc(struct ceph_inode_info *ci)
+{
+	struct ceph_snap_context *ctx;
+
+	spin_lock(&ci->i_ceph_lock);
+	if (__ceph_have_pending_cap_snap(ci)) {
+		struct ceph_cap_snap *capsnap =
+			list_last_entry(&ci->i_cap_snaps,
+					struct ceph_cap_snap,
+					ci_item);
+		ctx = ceph_get_snap_context(capsnap->context);
+	} else {
+		BUG_ON(!ci->i_head_snapc);
+		ctx = ceph_get_snap_context(ci->i_head_snapc);
+	}
+	spin_unlock(&ci->i_ceph_lock);
+	return ctx;
+}
