@@ -656,7 +656,7 @@ static enum netfs_handle_nonuptodate netfs_handle_nonuptodate_folio(struct netfs
 	    test_bit(NETFS_ICTX_DO_RMW, &ctx->flags))
 		return NETFS_JUST_PREFETCH;
 
-	if (netfs_i_cookie(file_inode(file)) ||
+	if (netfs_i_cookie(netfs_inode(file_inode(file))) ||
 	    min_bsize > 0)
 		return NETFS_JUST_PREFETCH;
 

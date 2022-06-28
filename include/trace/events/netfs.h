@@ -410,7 +410,7 @@ TRACE_EVENT(netfs_wback,
 			     ),
 
 	    TP_fast_assign(
-		    struct fscache_cookie *__cookie = netfs_i_cookie(wreq->inode);
+		    struct fscache_cookie *__cookie = netfs_i_cookie(netfs_inode(wreq->inode));
 		    struct netfs_dirty_region *__region =
 		    list_first_entry_or_null((struct list_head *)&wreq->regions,
 					     struct netfs_dirty_region, dirty_link);

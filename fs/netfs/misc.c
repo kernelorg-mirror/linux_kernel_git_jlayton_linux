@@ -189,7 +189,7 @@ bool netfs_release_folio(struct folio *folio, gfp_t gfp)
 		folio_wait_fscache(folio);
 	}
 
-	fscache_note_page_release(netfs_i_cookie(folio_inode(folio)));
+	fscache_note_page_release(netfs_i_cookie(netfs_inode(folio_inode(folio))));
 	return true;
 }
 EXPORT_SYMBOL(netfs_release_folio);

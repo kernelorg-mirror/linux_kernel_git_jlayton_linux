@@ -284,7 +284,7 @@ static void netfs_set_up_write_to_cache(struct netfs_io_request *wreq)
 {
 	struct netfs_cache_resources *cres;
 	struct netfs_io_subrequest *subreq;
-	struct fscache_cookie *cookie = netfs_i_cookie(wreq->inode);
+	struct fscache_cookie *cookie = netfs_i_cookie(netfs_inode(wreq->inode));
 	loff_t start = wreq->first * PAGE_SIZE;
 	size_t len = (wreq->last - wreq->first + 1) * PAGE_SIZE;
 	int ret;

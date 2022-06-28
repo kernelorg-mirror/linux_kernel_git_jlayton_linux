@@ -184,12 +184,12 @@ int fscache_begin_cache_operation(struct netfs_io_request *rreq)
 	case NETFS_READPAGE:
 	case NETFS_READ_FOR_WRITE:
 		return fscache_begin_operation(&rreq->cache_resources,
-					       netfs_i_cookie(rreq->inode),
+					       netfs_i_cookie(netfs_inode(rreq->inode)),
 					       FSCACHE_WANT_PARAMS,
 					       fscache_access_io_read);
 	case NETFS_WRITEBACK:
 		return fscache_begin_operation(&rreq->cache_resources,
-					       netfs_i_cookie(rreq->inode),
+					       netfs_i_cookie(netfs_inode(rreq->inode)),
 					       FSCACHE_WANT_PARAMS,
 					       fscache_access_io_write);
 	case NETFS_DIO_READ:
