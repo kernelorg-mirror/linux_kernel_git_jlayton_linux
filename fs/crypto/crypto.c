@@ -98,15 +98,14 @@ void fscrypt_generate_iv(union fscrypt_iv *iv, u64 lblk_num,
 }
 
 /* Encrypt or decrypt a single filesystem block of file contents */
-int fscrypt_crypt_block(const struct inode *inode, fscrypt_direction_t rw,
-			u64 lblk_num, struct page *src_page,
-			struct page *dest_page, unsigned int len,
-			unsigned int offs, gfp_t gfp_flags)
+static int fscrypt_crypt_sglist(const struct inode *inode, fscrypt_direction_t rw,
+				u64 lblk_num, struct scatterlist *src,
+				struct scatterlist *dst, unsigned int len,
+				gfp_t gfp_flags)
 {
 	union fscrypt_iv iv;
 	struct skcipher_request *req = NULL;
 	DECLARE_CRYPTO_WAIT(wait);
-	struct scatterlist dst, src;
 	struct fscrypt_info *ci = inode->i_crypt_info;
 	struct crypto_skcipher *tfm = ci->ci_enc_key.tfm;
 	int res = 0;
@@ -126,11 +125,7 @@ int fscrypt_crypt_block(const struct inode *inode, fscrypt_direction_t rw,
 		req, CRYPTO_TFM_REQ_MAY_BACKLOG | CRYPTO_TFM_REQ_MAY_SLEEP,
 		crypto_req_done, &wait);
 
-	sg_init_table(&dst, 1);
-	sg_set_page(&dst, dest_page, len, offs);
-	sg_init_table(&src, 1);
-	sg_set_page(&src, src_page, len, offs);
-	skcipher_request_set_crypt(req, &src, &dst, len, &iv);
+	skcipher_request_set_crypt(req, src, dst, len, &iv);
 	if (rw == FS_DECRYPT)
 		res = crypto_wait_req(crypto_skcipher_decrypt(req), &wait);
 	else
@@ -142,6 +137,40 @@ int fscrypt_crypt_block(const struct inode *inode, fscrypt_direction_t rw,
 		return res;
 	}
 	return 0;
+}
+
+int fscrypt_encrypt_sglist(struct inode *inode, u64 lblk_num, unsigned int len,
+			   struct scatterlist *src, struct scatterlist *dst,
+			   gfp_t gfp_flags)
+{
+	return fscrypt_crypt_sglist(inode, FS_ENCRYPT, lblk_num,
+				    src, dst, len, gfp_flags);
+}
+EXPORT_SYMBOL(fscrypt_encrypt_sglist);
+
+int fscrypt_decrypt_sglist(struct inode *inode, u64 lblk_num, unsigned int len,
+			   struct scatterlist *src, struct scatterlist *dst)
+{
+	return fscrypt_crypt_sglist(inode, FS_DECRYPT, lblk_num,
+				    src, dst, len, GFP_NOFS);
+}
+EXPORT_SYMBOL(fscrypt_decrypt_sglist);
+
+/* Encrypt or decrypt a single filesystem block of file contents */
+int fscrypt_crypt_block(const struct inode *inode, fscrypt_direction_t rw,
+			u64 lblk_num, struct page *src_page,
+			struct page *dest_page, unsigned int len,
+			unsigned int offs, gfp_t gfp_flags)
+{
+	struct scatterlist dst, src;
+
+	sg_init_table(&dst, 1);
+	sg_set_page(&dst, dest_page, len, offs);
+	sg_init_table(&src, 1);
+	sg_set_page(&src, src_page, len, offs);
+
+	return fscrypt_crypt_sglist(inode, rw, lblk_num, &src, &dst,
+				    len, gfp_flags);
 }
 
 /**

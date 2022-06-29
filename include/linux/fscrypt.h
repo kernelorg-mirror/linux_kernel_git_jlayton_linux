@@ -250,8 +250,14 @@ static inline bool fscrypt_is_nokey_name(const struct dentry *dentry)
 }
 
 /* crypto.c */
-void fscrypt_enqueue_decrypt_work(struct work_struct *);
+struct scatterlist;
 
+void fscrypt_enqueue_decrypt_work(struct work_struct *);
+int fscrypt_encrypt_sglist(struct inode *inode, u64 lblk_num, unsigned int len,
+			   struct scatterlist *src, struct scatterlist *dst,
+			   gfp_t gfp_flags);
+int fscrypt_decrypt_sglist(struct inode *inode, u64 lblk_num, unsigned int len,
+			   struct scatterlist *src, struct scatterlist *dst);
 struct page *fscrypt_encrypt_pagecache_blocks(struct page *page,
 					      unsigned int len,
 					      unsigned int offs,
