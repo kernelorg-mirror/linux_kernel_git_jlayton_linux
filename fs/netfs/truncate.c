@@ -381,6 +381,6 @@ just_trim_dirty_list:
 
 	truncate_pagecache(treq->inode, new_i_size);
 	netfs_resize_file(ctx, new_i_size);
-	fscache_resize_cookie(netfs_i_cookie(ctx), new_i_size);
+//	fscache_resize_cookie(netfs_i_cookie(ctx), new_i_size);
 }
 EXPORT_SYMBOL(netfs_truncate);
