@@ -308,6 +308,26 @@ void netfs_put_dirty_region(struct netfs_inode *ctx,
 	}
 }
 
+static struct netfs_flush_group *netfs_alloc_flush_group(void *netfs_priv)
+{
+	struct netfs_flush_group *group;
+
+	group = kzalloc(sizeof(*group), GFP_KERNEL);
+	if (group) {
+		group->netfs_priv = netfs_priv;
+		INIT_LIST_HEAD(&group->region_list);
+		INIT_LIST_HEAD(&group->group_link);
+		refcount_set(&group->ref, 1);
+		netfs_stat(&netfs_n_wh_flush_group);
+
+		/* We keep the region count elevated on the new group to
+		 * prevent wakeups whilst this is the top group.
+		 */
+		atomic_set(&group->nr_regions, 1);
+	}
+	return group;
+}
+
 /**
  * netfs_new_flush_group - Create a new write flush group
  * @ctx: The inode for which this is a flush group.
@@ -322,13 +342,8 @@ struct netfs_flush_group *netfs_new_flush_group(struct netfs_inode *ctx,
 {
 	struct netfs_flush_group *group, *prev;
 
-	group = kzalloc(sizeof(*group), GFP_KERNEL);
+	group = netfs_alloc_flush_group(netfs_priv);
 	if (group) {
-		group->netfs_priv = netfs_priv;
-		INIT_LIST_HEAD(&group->region_list);
-		refcount_set(&group->ref, 1);
-		netfs_stat(&netfs_n_wh_flush_group);
-
 		spin_lock(&ctx->dirty_lock);
 		group->flush_id = ++ctx->flush_counter;
 
@@ -342,10 +357,6 @@ struct netfs_flush_group *netfs_new_flush_group(struct netfs_inode *ctx,
 				wake_up_var(&prev->nr_regions);
 		}
 
-		/* We keep the region count elevated on the new group to
-		 * prevent wakeups whilst this is the top group.
-		 */
-		atomic_set(&group->nr_regions, 1);
 		list_add_tail(&group->group_link, &ctx->flush_groups);
 
 		spin_unlock(&ctx->dirty_lock);
@@ -369,3 +380,47 @@ void netfs_put_flush_group(struct netfs_inode *ctx, struct netfs_flush_group *gr
 		kfree(group);
 	}
 }
+
+struct netfs_flush_group *netfs_find_or_create_flush_group(struct netfs_inode *ctx,
+							   void *netfs_priv)
+{
+	struct netfs_flush_group *cur, *ret = NULL;
+
+	spin_lock(&ctx->dirty_lock);
+	list_for_each_entry(cur, &ctx->flush_groups, group_link) {
+		if (cur->netfs_priv == netfs_priv) {
+			ret = netfs_get_flush_group(cur);
+			goto out;
+		}
+	}
+	spin_unlock(&ctx->dirty_lock);
+
+	ret = netfs_alloc_flush_group(netfs_priv);
+	if (!ret)
+		return NULL;
+
+	spin_lock(&ctx->dirty_lock);
+	list_for_each_entry(cur, &ctx->flush_groups, group_link) {
+		if (cur->netfs_priv == netfs_priv) {
+			netfs_put_flush_group(ctx, ret);
+			ret = netfs_get_flush_group(cur);
+			goto out;
+		}
+	}
+
+	/* We drop the region count on the old top group so that
+	 * writeback can get rid of it.
+	 */
+	if (!list_empty(&ctx->flush_groups)) {
+		cur = list_last_entry(&ctx->flush_groups,
+				      struct netfs_flush_group, group_link);
+		if (atomic_dec_and_test(&cur->nr_regions))
+			wake_up_var(&cur->nr_regions);
+	}
+
+	list_add_tail(&ret->group_link, &ctx->flush_groups);
+out:
+	spin_unlock(&ctx->dirty_lock);
+	return ret;
+}
+EXPORT_SYMBOL(netfs_find_or_create_flush_group);

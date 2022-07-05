@@ -524,6 +524,8 @@ extern void netfs_truncate(struct netfs_io_request *treq);
 extern void netfs_clear_inode(struct netfs_inode *ctx);
 extern struct netfs_flush_group *netfs_new_flush_group(struct netfs_inode *, void *);
 extern int netfs_require_flush_group(struct netfs_write_context *write, bool force);
+extern struct netfs_flush_group *netfs_find_or_create_flush_group(struct netfs_inode *inode,
+							   void *netfs_priv);
 
 /**
  * netfs_inode - Get the netfs inode context from the inode
