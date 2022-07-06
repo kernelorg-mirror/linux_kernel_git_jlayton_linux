@@ -496,6 +496,7 @@ extern int netfs_write_begin(struct netfs_inode *,
 			     struct file *, struct address_space *,
 			     loff_t, unsigned int, struct folio **,
 			     void **);
+extern ssize_t netfs_file_write_iter_locked(struct kiocb *iocb, struct iov_iter *from);
 extern ssize_t netfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from);
 extern vm_fault_t netfs_page_mkwrite(struct vm_fault *vmf);
 extern int netfs_writepages(struct address_space *mapping, struct writeback_control *wbc);
