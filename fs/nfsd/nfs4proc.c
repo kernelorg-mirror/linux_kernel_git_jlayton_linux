@@ -414,7 +414,8 @@ out:
 }
 
 static __be32
-do_open_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate, struct nfsd4_open *open, struct svc_fh **resfh)
+do_open_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
+	       struct nfsd4_open *open, struct svc_fh **resfh)
 {
 	struct svc_fh *current_fh = &cstate->current_fh;
 	int accmode;
@@ -441,10 +442,17 @@ do_open_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate, stru
 		 * yes          | no     | GUARDED4        | GUARDED4
 		 * yes          | yes    | GUARDED4        | GUARDED4
 		 */
-
 		current->fs->umask = open->op_umask;
 		status = nfsd4_create_file(rqstp, current_fh, *resfh, open);
 		current->fs->umask = 0;
+
+		if (!status)
+			/* We really want to hold the lock from before the
+			 * create to ensure no rename happens, but that
+			 * needs more work...
+			 */
+			inode_lock_nested(current_fh->fh_dentry->d_inode,
+					  I_MUTEX_PARENT);
 
 		if (!status && open->op_label.len)
 			nfsd4_security_inode_setsecctx(*resfh, &open->op_label, open->op_bmval);
@@ -457,17 +465,25 @@ do_open_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate, stru
 		if (nfsd4_create_is_exclusive(open->op_createmode) && status == 0)
 			open->op_bmval[1] |= (FATTR4_WORD1_TIME_ACCESS |
 						FATTR4_WORD1_TIME_MODIFY);
-	} else
-		/*
-		 * Note this may exit with the parent still locked.
-		 * We will hold the lock until nfsd4_open's final
-		 * lookup, to prevent renames or unlinks until we've had
-		 * a chance to an acquire a delegation if appropriate.
+	} else {
+		/* We want to keep the directory locked until we've had a chance
+		 * to acquire a delegation if appropriate, so request that
+		 * nfsd_lookup() hold on to the lock.
 		 */
 		status = nfsd_lookup(rqstp, current_fh,
-				     open->op_fname, open->op_fnamelen, *resfh);
+				     open->op_fname, open->op_fnamelen, *resfh,
+				     true);
+		if (!status) {
+			/* NFSv4 protocol requires change attributes even though
+			 * no change happened.
+			 */
+			fh_fill_pre_attrs(current_fh);
+			fh_fill_post_attrs(current_fh);
+		}
+	}
 	if (status)
-		goto out;
+		return status;
+
 	status = nfsd_check_obj_isreg(*resfh);
 	if (status)
 		goto out;
@@ -483,6 +499,8 @@ do_open_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate, stru
 	status = do_open_permission(rqstp, *resfh, open, accmode);
 	set_change_info(&open->op_cinfo, current_fh);
 out:
+	if (status)
+		inode_unlock(current_fh->fh_dentry->d_inode);
 	return status;
 }
 
@@ -540,6 +558,7 @@ nfsd4_open(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	struct net *net = SVC_NET(rqstp);
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 	bool reclaim = false;
+	bool locked = false;
 
 	dprintk("NFSD: nfsd4_open filename %.*s op_openowner %p\n",
 		(int)open->op_fnamelen, open->op_fname,
@@ -604,6 +623,7 @@ nfsd4_open(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		status = do_open_lookup(rqstp, cstate, open, &resfh);
 		if (status)
 			goto out;
+		locked = true;
 		break;
 	case NFS4_OPEN_CLAIM_PREVIOUS:
 		status = nfs4_check_open_reclaim(cstate->clp);
@@ -639,6 +659,8 @@ out:
 		fput(open->op_filp);
 		open->op_filp = NULL;
 	}
+	if (locked)
+		inode_unlock(cstate->current_fh.fh_dentry->d_inode);
 	if (resfh && resfh != &cstate->current_fh) {
 		fh_dup2(&cstate->current_fh, resfh);
 		fh_put(resfh);
@@ -933,7 +955,7 @@ static __be32 nfsd4_do_lookupp(struct svc_rqst *rqstp, struct svc_fh *fh)
 		return nfserr_noent;
 	}
 	fh_put(&tmp_fh);
-	return nfsd_lookup(rqstp, fh, "..", 2, fh);
+	return nfsd_lookup(rqstp, fh, "..", 2, fh, false);
 }
 
 static __be32
@@ -949,7 +971,7 @@ nfsd4_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 {
 	return nfsd_lookup(rqstp, &cstate->current_fh,
 			   u->lookup.lo_name, u->lookup.lo_len,
-			   &cstate->current_fh);
+			   &cstate->current_fh, false);
 }
 
 static __be32
@@ -1089,11 +1111,10 @@ nfsd4_secinfo(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	if (err)
 		return err;
 	err = nfsd_lookup_dentry(rqstp, &cstate->current_fh,
-				    secinfo->si_name, secinfo->si_namelen,
-				    &exp, &dentry);
+				 secinfo->si_name, secinfo->si_namelen,
+				 &exp, &dentry, false);
 	if (err)
 		return err;
-	fh_unlock(&cstate->current_fh);
 	if (d_really_is_negative(dentry)) {
 		exp_put(exp);
 		err = nfserr_noent;

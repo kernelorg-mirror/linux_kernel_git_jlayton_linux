@@ -133,7 +133,7 @@ nfsd_proc_lookup(struct svc_rqst *rqstp)
 
 	fh_init(&resp->fh, NFS_FHSIZE);
 	resp->status = nfsd_lookup(rqstp, &argp->fh, argp->name, argp->len,
-				   &resp->fh);
+				   &resp->fh, false);
 	fh_put(&argp->fh);
 	if (resp->status != nfs_ok)
 		goto out;

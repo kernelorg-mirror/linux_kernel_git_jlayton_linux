@@ -172,7 +172,8 @@ int nfsd_mountpoint(struct dentry *dentry, struct svc_export *exp)
 __be32
 nfsd_lookup_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		   const char *name, unsigned int len,
-		   struct svc_export **exp_ret, struct dentry **dentry_ret)
+		   struct svc_export **exp_ret, struct dentry **dentry_ret,
+		   bool locked)
 {
 	struct svc_export	*exp;
 	struct dentry		*dparent;
@@ -199,27 +200,31 @@ nfsd_lookup_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				goto out_nfserr;
 		}
 	} else {
-		/*
-		 * In the nfsd4_open() case, this may be held across
-		 * subsequent open and delegation acquisition which may
-		 * need to take the child's i_mutex:
-		 */
-		fh_lock_nested(fhp, I_MUTEX_PARENT);
-		dentry = lookup_one_len(name, dparent, len);
+		if (locked)
+			dentry = lookup_one_len(name, dparent, len);
+		else
+			dentry = lookup_one_len_unlocked(name, dparent, len);
 		host_err = PTR_ERR(dentry);
 		if (IS_ERR(dentry))
 			goto out_nfserr;
 		if (nfsd_mountpoint(dentry, exp)) {
 			/*
-			 * We don't need the i_mutex after all.  It's
-			 * still possible we could open this (regular
-			 * files can be mountpoints too), but the
-			 * i_mutex is just there to prevent renames of
-			 * something that we might be about to delegate,
-			 * and a mountpoint won't be renamed:
+			 * nfsd_cross_mnt() may wait for an upcall
+			 * to userspace, and holding i_sem across that
+			 * invites the possibility of a deadlock.
+			 * We don't really need the lock on the parent
+			 * of a mount point was we only need it to guard
+			 * against a rename before we get a lease for a
+			 * delegation.
+			 * So just drop the i_sem and reclaim it.
 			 */
-			fh_unlock(fhp);
-			if ((host_err = nfsd_cross_mnt(rqstp, &dentry, &exp))) {
+			if (locked)
+				inode_unlock(dparent->d_inode);
+			host_err = nfsd_cross_mnt(rqstp, &dentry, &exp);
+			if (locked)
+				inode_lock_nested(dparent->d_inode,
+						  I_MUTEX_PARENT);
+			if (host_err) {
 				dput(dentry);
 				goto out_nfserr;
 			}
@@ -234,7 +239,17 @@ out_nfserr:
 	return nfserrno(host_err);
 }
 
-/*
+/**
+ * nfsd_lookup - look up a single path component for nfsd
+ *
+ * @rqstp:   the request context
+ * @ftp:     the file handle of the directory
+ * @name:    the component name, or %NULL to look up parent
+ * @len:     length of name to examine
+ * @resfh:   pointer to pre-initialised filehandle to hold result.
+ * @lock:    if true, lock directory during lookup and keep it locked
+ *           if there is no error.
+ *
  * Look up one component of a pathname.
  * N.B. After this call _both_ fhp and resfh need an fh_put
  *
@@ -244,11 +259,15 @@ out_nfserr:
  * returned. Otherwise the covered directory is returned.
  * NOTE: this mountpoint crossing is not supported properly by all
  *   clients and is explicitly disallowed for NFSv3
- *      NeilBrown <neilb@cse.unsw.edu.au>
+ *
+ * Only nfsd4_open() calls this with @lock set.  It does so to block
+ * renames/unlinks before it possibly gets a lease to provide a
+ * delegation.
  */
 __be32
 nfsd_lookup(struct svc_rqst *rqstp, struct svc_fh *fhp, const char *name,
-				unsigned int len, struct svc_fh *resfh)
+	    unsigned int len, struct svc_fh *resfh,
+	    bool lock)
 {
 	struct svc_export	*exp;
 	struct dentry		*dentry;
@@ -257,9 +276,11 @@ nfsd_lookup(struct svc_rqst *rqstp, struct svc_fh *fhp, const char *name,
 	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_EXEC);
 	if (err)
 		return err;
-	err = nfsd_lookup_dentry(rqstp, fhp, name, len, &exp, &dentry);
+	if (lock)
+		inode_lock_nested(fhp->fh_dentry->d_inode, I_MUTEX_PARENT);
+	err = nfsd_lookup_dentry(rqstp, fhp, name, len, &exp, &dentry, lock);
 	if (err)
-		return err;
+		goto out_err;
 	err = check_nfsd_access(exp, rqstp);
 	if (err)
 		goto out;
@@ -273,6 +294,9 @@ nfsd_lookup(struct svc_rqst *rqstp, struct svc_fh *fhp, const char *name,
 out:
 	dput(dentry);
 	exp_put(exp);
+out_err:
+	if (err && lock)
+		inode_unlock(fhp->fh_dentry->d_inode);
 	return err;
 }
 

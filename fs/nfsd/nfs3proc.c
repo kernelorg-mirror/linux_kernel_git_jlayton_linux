@@ -96,7 +96,7 @@ nfsd3_proc_lookup(struct svc_rqst *rqstp)
 
 	resp->status = nfsd_lookup(rqstp, &resp->dirfh,
 				   argp->name, argp->len,
-				   &resp->fh);
+				   &resp->fh, false);
 	return rpc_success;
 }
 
