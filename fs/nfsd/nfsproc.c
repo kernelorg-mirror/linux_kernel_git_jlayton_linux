@@ -493,7 +493,7 @@ nfsd_proc_symlink(struct svc_rqst *rqstp)
 
 	fh_init(&newfh, NFS_FHSIZE);
 	resp->status = nfsd_symlink(rqstp, &argp->ffh, argp->fname, argp->flen,
-				    argp->tname, &newfh);
+				    argp->tname, &newfh, NULL, NULL);
 
 	kfree(argp->tname);
 	fh_put(&argp->ffh);
@@ -522,7 +522,8 @@ nfsd_proc_mkdir(struct svc_rqst *rqstp)
 	argp->attrs.ia_valid &= ~ATTR_SIZE;
 	fh_init(&resp->fh, NFS_FHSIZE);
 	resp->status = nfsd_create(rqstp, &argp->fh, argp->name, argp->len,
-				   &argp->attrs, S_IFDIR, 0, &resp->fh);
+				   &argp->attrs, S_IFDIR, 0, &resp->fh,
+				   NULL, NULL);
 	fh_put(&argp->fh);
 	if (resp->status != nfs_ok)
 		goto out;

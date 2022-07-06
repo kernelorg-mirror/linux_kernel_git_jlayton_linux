@@ -378,8 +378,8 @@ nfsd3_proc_mkdir(struct svc_rqst *rqstp)
 	fh_copy(&resp->dirfh, &argp->fh);
 	fh_init(&resp->fh, NFS3_FHSIZE);
 	resp->status = nfsd_create(rqstp, &resp->dirfh, argp->name, argp->len,
-				   &argp->attrs, S_IFDIR, 0, &resp->fh);
-	fh_unlock(&resp->dirfh);
+				   &argp->attrs, S_IFDIR, 0, &resp->fh,
+				   NULL, NULL);
 	return rpc_success;
 }
 
@@ -414,7 +414,8 @@ nfsd3_proc_symlink(struct svc_rqst *rqstp)
 	fh_copy(&resp->dirfh, &argp->ffh);
 	fh_init(&resp->fh, NFS3_FHSIZE);
 	resp->status = nfsd_symlink(rqstp, &resp->dirfh, argp->fname,
-				    argp->flen, argp->tname, &resp->fh);
+				    argp->flen, argp->tname, &resp->fh,
+				    NULL, NULL);
 	kfree(argp->tname);
 out:
 	return rpc_success;
@@ -453,8 +454,8 @@ nfsd3_proc_mknod(struct svc_rqst *rqstp)
 
 	type = nfs3_ftypes[argp->ftype];
 	resp->status = nfsd_create(rqstp, &resp->dirfh, argp->name, argp->len,
-				   &argp->attrs, type, rdev, &resp->fh);
-	fh_unlock(&resp->dirfh);
+				   &argp->attrs, type, rdev, &resp->fh,
+				   NULL, NULL);
 out:
 	return rpc_success;
 }

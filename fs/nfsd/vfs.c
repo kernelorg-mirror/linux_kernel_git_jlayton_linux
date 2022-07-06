@@ -1366,8 +1366,10 @@ out_nfserr:
  */
 __be32
 nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
-		char *fname, int flen, struct iattr *iap,
-		int type, dev_t rdev, struct svc_fh *resfhp)
+	    char *fname, int flen, struct iattr *iap,
+	    int type, dev_t rdev, struct svc_fh *resfhp,
+	    void (*post_create)(struct svc_fh *fh, void *data),
+	    void *data)
 {
 	struct dentry	*dentry, *dchild = NULL;
 	__be32		err;
@@ -1389,8 +1391,10 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	fh_lock_nested(fhp, I_MUTEX_PARENT);
 	dchild = lookup_one_len(fname, dentry, flen);
 	host_err = PTR_ERR(dchild);
-	if (IS_ERR(dchild))
-		return nfserrno(host_err);
+	if (IS_ERR(dchild)) {
+		err = nfserrno(host_err);
+		goto out_unlock;
+	}
 	err = fh_compose(resfhp, fhp->fh_export, dchild, fhp);
 	/*
 	 * We unconditionally drop our ref to dchild as fh_compose will have
@@ -1398,9 +1402,14 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	 */
 	dput(dchild);
 	if (err)
-		return err;
-	return nfsd_create_locked(rqstp, fhp, fname, flen, iap, type,
-					rdev, resfhp);
+		goto out_unlock;
+	err = nfsd_create_locked(rqstp, fhp, fname, flen, iap, type,
+				 rdev, resfhp);
+	if (!err && post_create)
+		post_create(resfhp, data);
+out_unlock:
+	fh_unlock(fhp);
+	return err;
 }
 
 /*
@@ -1447,9 +1456,11 @@ nfsd_readlink(struct svc_rqst *rqstp, struct svc_fh *fhp, char *buf, int *lenp)
  */
 __be32
 nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
-				char *fname, int flen,
-				char *path,
-				struct svc_fh *resfhp)
+	     char *fname, int flen,
+	     char *path,
+	     struct svc_fh *resfhp,
+	     void (*post_create)(struct svc_fh *fh, void *data),
+	     void *data)
 {
 	struct dentry	*dentry, *dnew;
 	__be32		err, cerr;
@@ -1474,12 +1485,12 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	dentry = fhp->fh_dentry;
 	dnew = lookup_one_len(fname, dentry, flen);
 	host_err = PTR_ERR(dnew);
-	if (IS_ERR(dnew))
+	if (IS_ERR(dnew)) {
+		fh_unlock(fhp);
 		goto out_nfserr;
-
+	}
 	host_err = vfs_symlink(&init_user_ns, d_inode(dentry), dnew, path);
 	err = nfserrno(host_err);
-	fh_unlock(fhp);
 	if (!err)
 		err = nfserrno(commit_metadata(fhp));
 
@@ -1488,6 +1499,9 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	cerr = fh_compose(resfhp, fhp->fh_export, dnew, fhp);
 	dput(dnew);
 	if (err==0) err = cerr;
+	if (!err && post_create)
+		post_create(resfhp, data);
+	fh_unlock(fhp);
 out:
 	return err;
 

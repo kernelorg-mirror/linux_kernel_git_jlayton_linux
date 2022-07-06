@@ -780,6 +780,18 @@ nfsd4_commit(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 			     (__be32 *)commit->co_verf.data);
 }
 
+static void nfsd4_post_create(struct svc_fh *fh, void *vcreate)
+{
+	struct nfsd4_create *create = vcreate;
+
+	if (create->cr_label.len)
+		nfsd4_security_inode_setsecctx(fh, &create->cr_label,
+					       create->cr_bmval);
+
+	if (create->cr_acl != NULL)
+		do_set_nfs4_acl(fh, create->cr_acl, create->cr_bmval);
+}
+
 static __be32
 nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	     union nfsd4_op_u *u)
@@ -805,7 +817,8 @@ nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	case NF4LNK:
 		status = nfsd_symlink(rqstp, &cstate->current_fh,
 				      create->cr_name, create->cr_namelen,
-				      create->cr_data, &resfh);
+				      create->cr_data, &resfh,
+				      nfsd4_post_create, create);
 		break;
 
 	case NF4BLK:
@@ -816,7 +829,8 @@ nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 			goto out_umask;
 		status = nfsd_create(rqstp, &cstate->current_fh,
 				     create->cr_name, create->cr_namelen,
-				     &create->cr_iattr, S_IFBLK, rdev, &resfh);
+				     &create->cr_iattr, S_IFBLK, rdev, &resfh,
+				     nfsd4_post_create, create);
 		break;
 
 	case NF4CHR:
@@ -827,26 +841,30 @@ nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 			goto out_umask;
 		status = nfsd_create(rqstp, &cstate->current_fh,
 				     create->cr_name, create->cr_namelen,
-				     &create->cr_iattr, S_IFCHR, rdev, &resfh);
+				     &create->cr_iattr, S_IFCHR, rdev, &resfh,
+				     nfsd4_post_create, create);
 		break;
 
 	case NF4SOCK:
 		status = nfsd_create(rqstp, &cstate->current_fh,
 				     create->cr_name, create->cr_namelen,
-				     &create->cr_iattr, S_IFSOCK, 0, &resfh);
+				     &create->cr_iattr, S_IFSOCK, 0, &resfh,
+				     nfsd4_post_create, create);
 		break;
 
 	case NF4FIFO:
 		status = nfsd_create(rqstp, &cstate->current_fh,
 				     create->cr_name, create->cr_namelen,
-				     &create->cr_iattr, S_IFIFO, 0, &resfh);
+				     &create->cr_iattr, S_IFIFO, 0, &resfh,
+				     nfsd4_post_create, create);
 		break;
 
 	case NF4DIR:
 		create->cr_iattr.ia_valid &= ~ATTR_SIZE;
 		status = nfsd_create(rqstp, &cstate->current_fh,
 				     create->cr_name, create->cr_namelen,
-				     &create->cr_iattr, S_IFDIR, 0, &resfh);
+				     &create->cr_iattr, S_IFDIR, 0, &resfh,
+				     nfsd4_post_create, create);
 		break;
 
 	default:
@@ -856,14 +874,6 @@ nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	if (status)
 		goto out;
 
-	if (create->cr_label.len)
-		nfsd4_security_inode_setsecctx(&resfh, &create->cr_label, create->cr_bmval);
-
-	if (create->cr_acl != NULL)
-		do_set_nfs4_acl(&resfh, create->cr_acl,
-				create->cr_bmval);
-
-	fh_unlock(&cstate->current_fh);
 	set_change_info(&create->cr_cinfo, &cstate->current_fh);
 	fh_dup2(&cstate->current_fh, &resfh);
 out:
