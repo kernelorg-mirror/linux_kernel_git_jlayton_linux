@@ -781,19 +781,18 @@ nfsd4_set_nfs4_acl(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (host_error < 0)
 		goto out_nfserr;
 
-	fh_lock(fhp);
+	inode_lock(inode);
 
 	host_error = set_posix_acl(&init_user_ns, inode, ACL_TYPE_ACCESS, pacl);
 	if (host_error < 0)
 		goto out_drop_lock;
 
-	if (S_ISDIR(inode->i_mode)) {
+	if (S_ISDIR(inode->i_mode))
 		host_error = set_posix_acl(&init_user_ns, inode,
 					   ACL_TYPE_DEFAULT, dpacl);
-	}
 
 out_drop_lock:
-	fh_unlock(fhp);
+	inode_unlock(inode);
 
 	posix_acl_release(pacl);
 	posix_acl_release(dpacl);
