@@ -285,7 +285,7 @@ nfsd_proc_create(struct svc_rqst *rqstp)
 		goto done;
 	}
 
-	fh_lock_nested(dirfhp, I_MUTEX_PARENT);
+	inode_lock_nested(dirfhp->fh_dentry->d_inode, I_MUTEX_PARENT);
 	dchild = lookup_one_len(argp->name, dirfhp->fh_dentry, argp->len);
 	if (IS_ERR(dchild)) {
 		resp->status = nfserrno(PTR_ERR(dchild));
@@ -382,6 +382,7 @@ nfsd_proc_create(struct svc_rqst *rqstp)
 	}
 
 	resp->status = nfs_ok;
+	fh_fill_pre_attrs(dirfhp);
 	if (!inode) {
 		/* File doesn't exist. Create it and set attrs */
 		resp->status = nfsd_create_locked(rqstp, dirfhp, argp->name,
@@ -399,10 +400,10 @@ nfsd_proc_create(struct svc_rqst *rqstp)
 			resp->status = nfsd_setattr(rqstp, newfhp, attr, 0,
 						    (time64_t)0);
 	}
+	fh_fill_post_attrs(dirfhp);
 
 out_unlock:
-	/* We don't really need to unlock, as fh_put does it. */
-	fh_unlock(dirfhp);
+	inode_unlock(dirfhp->fh_dentry->d_inode);
 	fh_drop_write(dirfhp);
 done:
 	fh_put(dirfhp);
