@@ -310,17 +310,17 @@ void netfs_put_dirty_region(struct netfs_inode *ctx,
 
 /**
  * netfs_new_flush_group - Create a new write flush group
- * @inode: The inode for which this is a flush group.
+ * @ctx: The inode for which this is a flush group.
  * @netfs_priv: Netfs private data to include in the new group
  *
  * Create a new flush group and add it to the top of the inode's group list.
  * Flush groups are used to control the order in which dirty data is written
  * back to the server.
  */
-struct netfs_flush_group *netfs_new_flush_group(struct inode *inode, void *netfs_priv)
+struct netfs_flush_group *netfs_new_flush_group(struct netfs_inode *ctx,
+						void *netfs_priv)
 {
 	struct netfs_flush_group *group, *prev;
-	struct netfs_inode *ctx = netfs_inode(inode);
 
 	group = kzalloc(sizeof(*group), GFP_KERNEL);
 	if (group) {

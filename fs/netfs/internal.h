@@ -18,10 +18,9 @@
 /*
  * buffered_flush.c
  */
-int netfs_require_flush_group(struct inode *inode, bool force);
 void netfs_check_dirty_list(char c, const struct list_head *list,
 			    const struct netfs_dirty_region *star);
-int netfs_flush_conflicting_writes(struct netfs_inode *ctx, struct file *file,
+int netfs_flush_conflicting_writes(struct netfs_write_context *write,
 				   loff_t start, size_t len, struct folio *unlock_this);
 
 /*
@@ -34,14 +33,13 @@ int netfs_prefetch_for_write(struct file *file, struct folio *folio, size_t len)
  * buffered_write.c
  */
 void netfs_discard_regions(struct netfs_inode *ctx,
-			   struct list_head *discards,
-			   enum netfs_region_trace why);
-bool netfs_are_regions_mergeable(struct netfs_inode *ctx,
+			   struct list_head *discards);
+bool netfs_are_regions_mergeable(struct netfs_write_context *write,
 				 const struct netfs_dirty_region *a,
 				 const struct netfs_dirty_region *b);
 struct netfs_dirty_region *netfs_find_region(struct netfs_inode *ctx,
 					     pgoff_t first, pgoff_t last);
-void netfs_split_off_front(struct netfs_inode *ctx,
+void netfs_split_off_front(struct netfs_write_context *write,
 			   struct netfs_dirty_region *front,
 			   struct netfs_dirty_region *back,
 			   pgoff_t front_last,
@@ -63,7 +61,8 @@ int netfs_dio_copy_bounce_to_dest(struct netfs_io_request *rreq);
 /*
  * direct_write.c
  */
-ssize_t netfs_direct_write_iter(struct kiocb *iocb, struct iov_iter *from);
+ssize_t netfs_direct_write_iter(struct netfs_write_context *write,
+				struct kiocb *iocb, struct iov_iter *from);
 
 /*
  * io.c

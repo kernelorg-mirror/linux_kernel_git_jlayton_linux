@@ -53,14 +53,13 @@ static size_t copy_folio_from_iter_atomic(struct folio *folio,
  * Initialise a new dirty folio group.  We have to round it out to any crypto
  * alignment.
  */
-static void netfs_init_dirty_region(struct netfs_inode *ctx,
-				    struct netfs_dirty_region *region,
-				    struct file *file)
+static void netfs_init_dirty_region(struct netfs_write_context *write,
+				    struct netfs_dirty_region *region)
 {
 	region->debug_id = atomic_inc_return(&netfs_region_debug_ids);
 
-	if (file && ctx->ops->init_dirty_region)
-		ctx->ops->init_dirty_region(region, file);
+	if (write->file && write->ctx->ops->init_dirty_region)
+		write->ctx->ops->init_dirty_region(write, region);
 
 	trace_netfs_ref_region(region->debug_id, refcount_read(&region->ref),
 			       netfs_region_trace_new);
@@ -90,7 +89,7 @@ struct netfs_dirty_region *netfs_find_region(struct netfs_inode *ctx,
  * Return true if two dirty regions are compatible such that b can be merged
  * onto the end of a.
  */
-bool netfs_are_regions_mergeable(struct netfs_inode *ctx,
+bool netfs_are_regions_mergeable(struct netfs_write_context *write,
 				 const struct netfs_dirty_region *a,
 				 const struct netfs_dirty_region *b)
 {
@@ -98,49 +97,47 @@ bool netfs_are_regions_mergeable(struct netfs_inode *ctx,
 	    b->type == NETFS_COPY_TO_CACHE)
 		return false;
 	if (b->from > a->to &&
-	    b->from < ctx->zero_point)
+	    b->from < write->ctx->zero_point)
 		return false;
 	if (b->group != a->group) {
 		kdebug("different groups %px %px", b->group, a->group);
 		return false;
 	}
-	if (ctx->ops->are_regions_mergeable)
-		return ctx->ops->are_regions_mergeable(ctx, a, b);
+	if (write->ctx->ops->are_regions_mergeable)
+		return write->ctx->ops->are_regions_mergeable(write, a, b);
 	return true;
 }
 
-static bool netfs_can_merge(struct netfs_inode *ctx,
+static bool netfs_can_merge(struct netfs_write_context *write,
 			    const struct netfs_dirty_region *onto,
-			    const struct netfs_dirty_region *x,
-			    struct file *file)
+			    const struct netfs_dirty_region *x)
 {
-	return netfs_are_regions_mergeable(ctx, onto, x);
+	return netfs_are_regions_mergeable(write, onto, x);
 }
 
-static void netfs_region_absorbed(struct netfs_inode *ctx,
+static void netfs_region_absorbed(struct netfs_write_context *write,
 				  struct netfs_dirty_region *into,
 				  struct netfs_dirty_region *absorbed,
-				  struct list_head *discards,
 				  enum netfs_dirty_trace why)
 {
 	absorbed->absorbed_by =
-		netfs_get_dirty_region(ctx, into, netfs_region_trace_get_absorbed_by);
+		netfs_get_dirty_region(write->ctx, into, netfs_region_trace_get_absorbed_by);
+	absorbed->discarded_why = netfs_region_trace_put_merged;
 	list_del_init(&absorbed->flush_link);
-	list_move(&absorbed->dirty_link, discards);
-	trace_netfs_dirty(ctx, into, absorbed, why);
+	list_splice(&absorbed->dirty_link, &write->discarded_regions);
+	trace_netfs_dirty(write->ctx, into, absorbed, why);
 }
 
 /*
  * See if the extended target region bridges to the next region.  Returns true.
  */
-static bool netfs_try_bridge_next(struct netfs_inode *ctx,
-				  struct netfs_dirty_region *target,
-				  struct list_head *discards)
+static bool netfs_try_bridge_next(struct netfs_write_context *write,
+				  struct netfs_dirty_region *target)
 {
 	struct netfs_dirty_region *next;
 
 again:
-	next = netfs_next_region(ctx, target);
+	next = netfs_next_region(write->ctx, target);
 	if (!next)
 		goto out;
 
@@ -148,10 +145,10 @@ again:
 		goto out;
 
 	/* If the regions can simply be merged, do so. */
-	if (netfs_are_regions_mergeable(ctx, target, next)) {
+	if (netfs_are_regions_mergeable(write, target, next)) {
 		target->to = next->to;
 		target->last = next->last;
-		netfs_region_absorbed(ctx, target, next, discards,
+		netfs_region_absorbed(write, target, next,
 				      netfs_dirty_trace_bridged);
 		goto out;
 	}
@@ -165,7 +162,7 @@ again:
 
 	if (target->last >= next->last) {
 		/* Next entry is superseded in its entirety. */
-		netfs_region_absorbed(ctx, target, next, discards,
+		netfs_region_absorbed(write, target, next,
 				      netfs_dirty_trace_supersede_all);
 		if (target->last > next->last)
 			goto again;
@@ -174,7 +171,7 @@ again:
 
 	next->from  = target->to;
 	next->first = target->last + 1;
-	trace_netfs_dirty(ctx, target, next, netfs_dirty_trace_superseded);
+	trace_netfs_dirty(write->ctx, target, next, netfs_dirty_trace_superseded);
 out:
 	return true; /* Return true for tail-callers */
 }
@@ -183,70 +180,67 @@ out:
  * Try to continue the modification of a preceding region.  The regions must
  * overlap, touch or be bridgeable.
  */
-static bool netfs_continue_modification(struct netfs_inode *ctx,
+static bool netfs_continue_modification(struct netfs_write_context *write,
 					const struct netfs_dirty_region *proposal,
-					struct netfs_dirty_region *target,
-					struct list_head *discards)
+					struct netfs_dirty_region *target)
 {
 	if (proposal->from != target->to ||
 	    proposal->type != target->type ||
 	    proposal->group != target->group)
 		return false;
 	if (proposal->type != NETFS_COPY_TO_CACHE &&
-	    ctx->ops->are_regions_mergeable &&
-	    !ctx->ops->are_regions_mergeable(ctx, proposal, target))
+	    write->ctx->ops->are_regions_mergeable &&
+	    !write->ctx->ops->are_regions_mergeable(write, proposal, target))
 		return false;
 
 	target->to   = proposal->to;
 	target->last = proposal->last;
-	trace_netfs_dirty(ctx, target, NULL, netfs_dirty_trace_continue);
+	trace_netfs_dirty(write->ctx, target, NULL, netfs_dirty_trace_continue);
 
-	return netfs_try_bridge_next(ctx, target, discards);
+	return netfs_try_bridge_next(write, target);
 }
 
 /*
  * Try to merge the modifications with an existing target region that starts
  * at or before the proposed.
  */
-static bool netfs_merge_with_previous(struct netfs_inode *ctx,
+static bool netfs_merge_with_previous(struct netfs_write_context *write,
 				      const struct netfs_dirty_region *proposal,
-				      struct netfs_dirty_region *target,
-				      struct list_head *discards)
+				      struct netfs_dirty_region *target)
 {
 	if (netfs_bounds_dont_touch(target, proposal) ||
-	    !netfs_are_regions_mergeable(ctx, target, proposal))
+	    !netfs_are_regions_mergeable(write, target, proposal))
 		return false;
 
 	target->to   = max(target->to,   proposal->to);
 	target->last = max(target->last, proposal->last);
-	trace_netfs_dirty(ctx, target, NULL, netfs_dirty_trace_merged_prev);
+	trace_netfs_dirty(write->ctx, target, NULL, netfs_dirty_trace_merged_prev);
 
-	return netfs_try_bridge_next(ctx, target, discards);
+	return netfs_try_bridge_next(write, target);
 }
 
 /*
  * Try to merge the modifications with an existing target region that starts
  * after the proposed.
  */
-static bool netfs_merge_with_next(struct netfs_inode *ctx,
+static bool netfs_merge_with_next(struct netfs_write_context *write,
 				  const struct netfs_dirty_region *proposal,
-				  struct netfs_dirty_region *target,
-				  struct list_head *discards)
+				  struct netfs_dirty_region *target)
 {
 	if (netfs_bounds_dont_touch(proposal, target) ||
-	    !netfs_are_regions_mergeable(ctx, proposal, target))
+	    !netfs_are_regions_mergeable(write, proposal, target))
 		return false;
 
 	target->from  = min(target->from,  proposal->from);
 	target->first = min(target->first, proposal->first);
-	trace_netfs_dirty(ctx, target, NULL, netfs_dirty_trace_merged_next);
+	trace_netfs_dirty(write->ctx, target, NULL, netfs_dirty_trace_merged_next);
 	return true;
 }
 
 /*
  * Set the flush group on a dirty region.
  */
-static void netfs_set_flush_group(struct netfs_inode *ctx,
+static void netfs_set_flush_group(struct netfs_write_context *write,
 				  struct netfs_dirty_region *insertion,
 				  struct netfs_dirty_region *insert_point,
 				  enum netfs_dirty_trace how)
@@ -255,12 +249,12 @@ static void netfs_set_flush_group(struct netfs_inode *ctx,
 	struct netfs_flush_group *group;
 	struct list_head *p;
 
-	if (list_empty(&ctx->flush_groups)) {
+	if (list_empty(&write->ctx->flush_groups)) {
 		insertion->group = NULL;
 		return;
 	}
 
-	group = list_last_entry(&ctx->flush_groups,
+	group = list_last_entry(&write->ctx->flush_groups,
 				struct netfs_flush_group, group_link);
 
 	insertion->group = netfs_get_flush_group(group);
@@ -312,10 +306,9 @@ static void netfs_set_flush_group(struct netfs_inode *ctx,
  * Insert a new region at the specified point, initialising it from the
  * proposed region.
  */
-static void netfs_insert_new(struct netfs_inode *ctx,
+static void netfs_insert_new(struct netfs_write_context *write,
 			     struct netfs_dirty_region *insertion,
 			     const struct netfs_dirty_region *proposal,
-			     struct file *file,
 			     struct netfs_dirty_region *insert_point,
 			     enum netfs_dirty_trace how)
 {
@@ -324,12 +317,12 @@ static void netfs_insert_new(struct netfs_inode *ctx,
 	insertion->from  = proposal->from;
 	insertion->to    = proposal->to;
 	insertion->type  = proposal->type;
-	netfs_init_dirty_region(ctx, insertion, file);
-	netfs_set_flush_group(ctx, insertion, insert_point, how);
+	netfs_init_dirty_region(write, insertion);
+	netfs_set_flush_group(write, insertion, insert_point, how);
 
 	switch (how) {
 	case netfs_dirty_trace_insert_only:
-		list_add_tail(&insertion->dirty_link, &ctx->dirty_regions);
+		list_add_tail(&insertion->dirty_link, &write->ctx->dirty_regions);
 		break;
 	case netfs_dirty_trace_insert_before:
 	case netfs_dirty_trace_supersede_front:
@@ -342,7 +335,7 @@ static void netfs_insert_new(struct netfs_inode *ctx,
 	default:
 		BUG_ON(1);
 	}
-	trace_netfs_dirty(ctx, insertion, insert_point, how);
+	trace_netfs_dirty(write->ctx, insertion, insert_point, how);
 }
 
 /*
@@ -350,7 +343,7 @@ static void netfs_insert_new(struct netfs_inode *ctx,
  * supplied front region, where the point indicates the last page in the front
  * region.
  */
-void netfs_split_off_front(struct netfs_inode *ctx,
+void netfs_split_off_front(struct netfs_write_context *write,
 			   struct netfs_dirty_region *front,
 			   struct netfs_dirty_region *back,
 			   pgoff_t front_last,
@@ -358,7 +351,7 @@ void netfs_split_off_front(struct netfs_inode *ctx,
 {
 	if (WARN_ON(back->first > front_last) ||
 	    WARN_ON(back->last < front_last)) {
-		spin_unlock(&ctx->dirty_lock);
+		spin_unlock(&write->ctx->dirty_lock);
 		BUG();
 	}
 
@@ -373,8 +366,8 @@ void netfs_split_off_front(struct netfs_inode *ctx,
 	front->to	= back->from;
 
 	if (front->type != NETFS_COPY_TO_CACHE &&
-	    ctx->ops->split_dirty_region)
-		ctx->ops->split_dirty_region(front, back);
+	    write->ctx->ops->split_dirty_region)
+		write->ctx->ops->split_dirty_region(front, back);
 
 	list_move_tail(&front->dirty_link, &back->dirty_link);
 	list_add(&front->proc_link,  &back->proc_link);
@@ -383,7 +376,7 @@ void netfs_split_off_front(struct netfs_inode *ctx,
 		list_add_tail(&front->flush_link, &back->flush_link);
 	}
 
-	trace_netfs_dirty(ctx, front, back, why);
+	trace_netfs_dirty(write->ctx, front, back, why);
 }
 
 /*
@@ -391,14 +384,12 @@ void netfs_split_off_front(struct netfs_inode *ctx,
  * up to two splits in the region and we may need to merge with the adjacent
  * regions.
  */
-static void netfs_supersede_cache_copy(struct netfs_inode *ctx,
+static void netfs_supersede_cache_copy(struct netfs_write_context *write,
 				       const struct netfs_dirty_region *proposal,
-				       struct netfs_dirty_region *target,
-				       struct list_head *discards,
-				       struct file *file)
+				       struct netfs_dirty_region *target)
 {
-	struct netfs_dirty_region *prev = netfs_prev_region(ctx, target);
-	struct netfs_dirty_region *next = netfs_next_region(ctx, target);
+	struct netfs_dirty_region *prev = netfs_prev_region(write->ctx, target);
+	struct netfs_dirty_region *next = netfs_next_region(write->ctx, target);
 	struct netfs_dirty_region *insertion, *front;
 
 	_enter("D=%u", target->debug_id);
@@ -406,33 +397,34 @@ static void netfs_supersede_cache_copy(struct netfs_inode *ctx,
 	/* Get the case where they're the same size out of the way first. */
 	if (target->first == proposal->first &&
 	    target->last  == proposal->last)  {
-		bool merge_prev = netfs_can_merge(ctx, prev, proposal, file);
-		bool merge_next = netfs_can_merge(ctx, proposal, next, file);
+		bool merge_prev = netfs_can_merge(write, prev, proposal);
+		bool merge_next = netfs_can_merge(write, proposal, next);
 
 		if (merge_prev && !merge_next) {
 			prev->to   = proposal->from;
 			prev->last = proposal->last;
-			netfs_region_absorbed(ctx, prev, target, discards,
+			netfs_region_absorbed(write, prev, target,
 					      netfs_dirty_trace_merged_prev_super);
 		} else if (merge_next && !merge_prev) {
 			next->from  = proposal->from;
 			next->first = proposal->first;
-			netfs_region_absorbed(ctx, next, target, discards,
+			netfs_region_absorbed(write, next, target,
 					      netfs_dirty_trace_merged_next_super);
 		} else if (merge_next && merge_prev) {
 			prev->to   = next->to;
 			prev->last = next->last;
-			netfs_region_absorbed(ctx, prev, target, discards,
+			netfs_region_absorbed(write, prev, target,
 					      netfs_dirty_trace_merged_next_super);
-			netfs_region_absorbed(ctx, prev, next, discards,
+			netfs_region_absorbed(write, prev, next,
 					      netfs_dirty_trace_merged_next);
 		} else if (!merge_prev && !merge_next) {
 			target->from = proposal->from;
 			target->to   = proposal->to;
 			target->type = NETFS_MODIFIED_REGION;
-			if (ctx->ops->init_dirty_region)
-				ctx->ops->init_dirty_region(target, file);
-			trace_netfs_dirty(ctx, target, NULL, netfs_dirty_trace_superseded);
+			if (write->ctx->ops->init_dirty_region)
+				write->ctx->ops->init_dirty_region(write, target);
+			trace_netfs_dirty(write->ctx, target, NULL,
+					  netfs_dirty_trace_superseded);
 		}
 		return;
 	}
@@ -441,14 +433,14 @@ static void netfs_supersede_cache_copy(struct netfs_inode *ctx,
 	 * and shrink the copy-to-cache region.
 	 */
 	if (target->first == proposal->first) {
-		bool merge_prev = netfs_can_merge(ctx, prev, proposal, file);
+		bool merge_prev = netfs_can_merge(write, prev, proposal);
 
 		if (merge_prev) {
 			prev->to      = proposal->from;
 			prev->last    = proposal->last;
 			target->first = proposal->last + 1;
 			target->from  = target->first * PAGE_SIZE;
-			trace_netfs_dirty(ctx, prev, target,
+			trace_netfs_dirty(write->ctx, prev, target,
 					  netfs_dirty_trace_merged_prev_super);
 		} else {
 			insertion = netfs_alloc_dirty_region(GFP_ATOMIC);
@@ -456,11 +448,11 @@ static void netfs_supersede_cache_copy(struct netfs_inode *ctx,
 				pr_err("OOM");
 				BUG();
 			}
-			netfs_insert_new(ctx, insertion, proposal, file, target,
+			netfs_insert_new(write, insertion, proposal, target,
 					 netfs_dirty_trace_supersede_front);
 			target->first = insertion->last + 1;
 			target->to    = target->first * PAGE_SIZE;
-			trace_netfs_dirty(ctx, insertion, target,
+			trace_netfs_dirty(write->ctx, insertion, target,
 					  netfs_dirty_trace_superseded);
 		}
 		return;
@@ -470,14 +462,14 @@ static void netfs_supersede_cache_copy(struct netfs_inode *ctx,
 	 * cut the end of the copy-to-cache region.
 	 */
 	if (target->last == proposal->last) {
-		bool merge_next = netfs_can_merge(ctx, proposal, next, file);
+		bool merge_next = netfs_can_merge(write, proposal, next);
 
 		if (merge_next) {
 			next->from   = proposal->from;
 			next->first  = proposal->first;
 			target->last = proposal->first - 1;
 			target->to   = proposal->first * PAGE_SIZE;
-			trace_netfs_dirty(ctx, next, target,
+			trace_netfs_dirty(write->ctx, next, target,
 					  netfs_dirty_trace_merged_next_super);
 		} else {
 			insertion = netfs_alloc_dirty_region(GFP_ATOMIC);
@@ -485,11 +477,11 @@ static void netfs_supersede_cache_copy(struct netfs_inode *ctx,
 				pr_err("OOM");
 				BUG();
 			}
-			netfs_insert_new(ctx, insertion, proposal, file, target,
+			netfs_insert_new(write, insertion, proposal, target,
 					 netfs_dirty_trace_supersede_back);
 			target->first = proposal->last + 1;
 			target->from  = target->first * PAGE_SIZE;
-			trace_netfs_dirty(ctx, target, insertion,
+			trace_netfs_dirty(write->ctx, target, insertion,
 					  netfs_dirty_trace_superseded);
 		}
 		return;
@@ -509,28 +501,28 @@ static void netfs_supersede_cache_copy(struct netfs_inode *ctx,
 		BUG();
 	}
 
-	netfs_split_off_front(ctx, front, target, proposal->first - 1,
+	netfs_split_off_front(write, front, target, proposal->first - 1,
 			      netfs_dirty_trace_split_c2c);
 
-	netfs_insert_new(ctx, insertion, proposal, file, target,
+	netfs_insert_new(write, insertion, proposal, target,
 			 netfs_dirty_trace_supersede_front);
 
 	target->from  = min(target->from,  insertion->from);
 	target->first = min(target->first, insertion->first);
-	trace_netfs_dirty(ctx, target, NULL, netfs_dirty_trace_superseded);
+	trace_netfs_dirty(write->ctx, target, NULL, netfs_dirty_trace_superseded);
 	return;
 }
 
 /*
  * Commit the changes to a region.
  */
-static void netfs_commit_region(struct netfs_inode *ctx, struct file *file,
+static void netfs_commit_region(struct netfs_write_context *write,
 				struct netfs_dirty_region *proposal)
 {
 	struct netfs_dirty_region *target, *insertion, *next;
+	struct netfs_inode *ctx = write->ctx;
 	unsigned long long i_size;
 	size_t balign = 1UL << ctx->min_bshift;
-	LIST_HEAD(discards);
 
 	i_size	= i_size_read(&ctx->inode);
 	proposal->from = round_down(proposal->from, balign);
@@ -554,7 +546,7 @@ static void netfs_commit_region(struct netfs_inode *ctx, struct file *file,
 			pr_err("OOM\n");
 			BUG();
 		}
-		netfs_insert_new(ctx, insertion, proposal, file, NULL,
+		netfs_insert_new(write, insertion, proposal, NULL,
 				 netfs_dirty_trace_insert_only);
 		goto done;
 	}
@@ -563,7 +555,7 @@ static void netfs_commit_region(struct netfs_inode *ctx, struct file *file,
 	 * data is probably the most common modification operation.
 	 */
 	if (likely(proposal->from == target->to) &&
-	    netfs_continue_modification(ctx, proposal, target, &discards))
+	    netfs_continue_modification(write, proposal, target))
 		goto done;
 
 	/* We may need to supersede part of a copy-to-cache region. */
@@ -572,15 +564,14 @@ static void netfs_commit_region(struct netfs_inode *ctx, struct file *file,
 	    target->last  >= proposal->first) {
 		if (WARN_ON(proposal->type == NETFS_COPY_TO_CACHE))
 			goto just_merge; /* Re-read?! */
-		netfs_supersede_cache_copy(ctx, proposal, target, &discards,
-					   file);
+		netfs_supersede_cache_copy(write, proposal, target);
 		goto done;
 	}
 
 just_merge:
 	/* Try to merge with the preceding region. */
 	if (target->from <= proposal->from) {
-		if (netfs_merge_with_previous(ctx, proposal, target, &discards))
+		if (netfs_merge_with_previous(write, proposal, target))
 			goto done;
 		next = netfs_next_region(ctx, target);
 		if (!next) {
@@ -590,7 +581,7 @@ just_merge:
 				pr_err("OOM\n");
 				BUG();
 			}
-			netfs_insert_new(ctx, insertion, proposal, file, target,
+			netfs_insert_new(write, insertion, proposal, target,
 					 netfs_dirty_trace_insert_after);
 			goto done;
 		}
@@ -598,7 +589,7 @@ just_merge:
 	}
 
 	/* Try to merge with the next region */
-	if (netfs_merge_with_next(ctx, proposal, target, &discards))
+	if (netfs_merge_with_next(write, proposal, target))
 		goto done;
 
 	/* Insert before the next region. */
@@ -607,12 +598,11 @@ just_merge:
 		pr_err("OOM\n");
 		BUG();
 	}
-	netfs_insert_new(ctx, insertion, proposal, file, target,
+	netfs_insert_new(write, insertion, proposal, target,
 			 netfs_dirty_trace_insert_before);
 
 done:
 	spin_unlock(&ctx->dirty_lock);
-	netfs_discard_regions(ctx, &discards, netfs_region_trace_put_merged);
 }
 
 enum netfs_handle_nonuptodate {
@@ -629,13 +619,15 @@ enum netfs_handle_nonuptodate {
  * crypto, we award that priority over avoiding RMW.  If the file is open
  * readably, then we also assume that we may want to written what we wrote.
  */
-static enum netfs_handle_nonuptodate netfs_handle_nonuptodate_folio(struct netfs_inode *ctx,
-								    struct file *file,
-								    struct folio *folio,
-								    size_t offset,
-								    size_t len,
-								    bool always_fill)
+static enum netfs_handle_nonuptodate netfs_handle_nonuptodate_folio(
+	struct netfs_write_context *write,
+	struct folio *folio,
+	size_t offset,
+	size_t len,
+	bool always_fill)
 {
+	struct netfs_inode *ctx = write->ctx;
+	struct file *file = write->file;
 	size_t min_bsize = 1UL << ctx->min_bshift;
 	loff_t pos = folio_file_pos(folio);
 
@@ -688,8 +680,7 @@ static struct folio *netfs_grab_folio_for_write(struct address_space *mapping,
 				   mapping_gfp_mask(mapping));
 }
 
-void netfs_discard_regions(struct netfs_inode *ctx,
-			   struct list_head *discards, enum netfs_region_trace why)
+void netfs_discard_regions(struct netfs_inode *ctx, struct list_head *discards)
 {
 	struct netfs_dirty_region *p;
 
@@ -697,7 +688,7 @@ void netfs_discard_regions(struct netfs_inode *ctx,
 					     struct netfs_dirty_region, dirty_link))) {
 		list_del(&p->dirty_link);
 		BUG_ON(!list_empty(&p->flush_link));
-		netfs_put_dirty_region(ctx, p, why);
+		netfs_put_dirty_region(ctx, p, p->discarded_why);
 	}
 }
 
@@ -705,11 +696,10 @@ void netfs_discard_regions(struct netfs_inode *ctx,
  * Write data into a prereserved region of the pagecache attached to a netfs
  * inode.
  */
-static ssize_t netfs_perform_write(struct kiocb *iocb, struct iov_iter *iter)
+static ssize_t netfs_perform_write(struct netfs_write_context *write,
+				   struct kiocb *iocb, struct iov_iter *iter)
 {
-	struct file *file = iocb->ki_filp;
-	struct inode *inode = file_inode(file);
-	struct netfs_inode *ctx = netfs_inode(inode);
+	struct netfs_inode *ctx = write->ctx;
 	struct netfs_dirty_region proposal = { .debug_id = 0xaa55 };
 	struct folio *folio;
 	enum netfs_handle_nonuptodate nupt;
@@ -718,7 +708,7 @@ static ssize_t netfs_perform_write(struct kiocb *iocb, struct iov_iter *iter)
 	bool always_fill = false;
 	bool locked = false;
 
-	ret = ctx->ops->validate_for_write(inode, file);
+	ret = ctx->ops->validate_for_write(write);
 	if (ret < 0)
 		return ret;
 
@@ -728,7 +718,7 @@ static ssize_t netfs_perform_write(struct kiocb *iocb, struct iov_iter *iter)
 		size_t bytes;	/* Bytes to write to folio */
 		size_t copied;	/* Bytes copied from user */
 
-		folio = netfs_grab_folio_for_write(file->f_mapping,
+		folio = netfs_grab_folio_for_write(write->file->f_mapping,
 						   pos / PAGE_SIZE,
 						   iov_iter_count(iter));
 		if (!folio) {
@@ -777,12 +767,12 @@ redo_prefetch:
 		 * there's more than one writer competing for the same cache
 		 * block.
 		 */
-		nupt = netfs_handle_nonuptodate_folio(ctx, file, folio,
+		nupt = netfs_handle_nonuptodate_folio(write, folio,
 						      offset, bytes, always_fill);
 		_debug("nupt %u", nupt);
 		switch (nupt) {
 		case NETFS_JUST_PREFETCH:
-			ret = netfs_prefetch_for_write(file, folio, bytes);
+			ret = netfs_prefetch_for_write(write->file, folio, bytes);
 			if (ret < 0) {
 				_debug("prefetch = %zd", ret);
 				goto error_folio;
@@ -835,12 +825,12 @@ redo_prefetch:
 
 		/* Update the inode size if we moved the EOF marker */
 		pos += copied;
-		i_size = i_size_read(inode);
+		i_size = i_size_read(&ctx->inode);
 		if (pos > i_size) {
 			if (ctx->ops->update_i_size) {
-				ctx->ops->update_i_size(inode, pos);
+				ctx->ops->update_i_size(ctx, pos);
 			} else {
-				i_size_write(inode, pos);
+				i_size_write(&ctx->inode, pos);
 #if IS_ENABLED(CONFIG_FSCACHE)
 				fscache_update_cookie(ctx->cache, NULL, &pos);
 #endif
@@ -852,7 +842,7 @@ redo_prefetch:
 		proposal.first	= folio->index;
 		proposal.last	= folio->index + folio_nr_pages(folio) - 1;
 		proposal.type	= NETFS_MODIFIED_REGION;
-		netfs_commit_region(ctx, file, &proposal);
+		netfs_commit_region(write, &proposal);
 		netfs_check_dirty_list('D', &ctx->dirty_regions, NULL);
 
 		folio_mark_dirty(folio);
@@ -864,7 +854,7 @@ redo_prefetch:
 
 		written += copied;
 
-		balance_dirty_pages_ratelimited(file->f_mapping);
+		balance_dirty_pages_ratelimited(write->file->f_mapping);
 	} while (iov_iter_count(iter));
 
 out:
@@ -895,6 +885,33 @@ error_folio:
 	goto out;
 }
 
+static int netfs_init_write_context(struct netfs_write_context *write)
+{
+	int ret;
+
+	INIT_LIST_HEAD(&write->discarded_regions);
+	write->flush_group = NULL;
+
+	if (write->ctx->ops->init_write_context) {
+		ret = write->ctx->ops->init_write_context(write);
+		if (ret <= 0)
+			return ret;
+	}
+
+	if (!list_empty(&write->ctx->flush_groups))
+		write->flush_group =
+			list_last_entry(&write->ctx->flush_groups,
+					struct netfs_flush_group, group_link);
+	return 0;
+}
+
+static void netfs_clear_write_context(struct netfs_write_context *write)
+{
+	netfs_discard_regions(write->ctx, &write->discarded_regions);
+	if (write->ctx->ops->clear_write_context)
+		write->ctx->ops->clear_write_context(write);
+}
+
 /**
  * netfs_file_write_iter_locked - write data to a file
  * @iocb:	IO state structure
@@ -915,9 +932,18 @@ ssize_t netfs_file_write_iter_locked(struct kiocb *iocb, struct iov_iter *from)
 	struct netfs_inode *ctx = netfs_inode(inode);
 	ssize_t ret;
 
+	struct netfs_write_context write = {
+		.ctx = ctx,
+		.file = file,
+	};
+
 	_enter("%llx,%zx,%llx", iocb->ki_pos, iov_iter_count(from), i_size_read(inode));
 
 	ret = generic_write_checks(iocb, from);
+	if (ret <= 0)
+		return ret;
+
+	ret = netfs_init_write_context(&write);
 	if (ret <= 0)
 		return ret;
 
@@ -933,27 +959,20 @@ ssize_t netfs_file_write_iter_locked(struct kiocb *iocb, struct iov_iter *from)
 	if (ret)
 		goto error;
 
-	{
-#warning TRIGGER NEW FLUSH GROUP FOR TESTING
-		static atomic_t jump;
-		ret = netfs_require_flush_group(inode, (atomic_inc_return(&jump) & 3) == 3);
-		if (ret < 0)
-			goto error;
-	}
-
-	ret = netfs_flush_conflicting_writes(ctx, file, iocb->ki_pos,
+	ret = netfs_flush_conflicting_writes(&write, iocb->ki_pos,
 					     iov_iter_count(from), NULL);
 	if (ret < 0 && ret != -EAGAIN)
 		goto error;
 
 	if (iocb->ki_flags & IOCB_DIRECT)
-		ret = netfs_direct_write_iter(iocb, from);
+		ret = netfs_direct_write_iter(&write, iocb, from);
 	else
-		ret = netfs_perform_write(iocb, from);
+		ret = netfs_perform_write(&write, iocb, from);
 
 error:
 	/* TODO: Wait for DSYNC region here. */
 	current->backing_dev_info = NULL;
+	netfs_clear_write_context(&write);
 	return ret;
 }
 EXPORT_SYMBOL(netfs_file_write_iter_locked);
@@ -1007,12 +1026,23 @@ vm_fault_t netfs_page_mkwrite(struct vm_fault *vmf)
 	vm_fault_t ret = VM_FAULT_RETRY;
 	int err;
 
+	struct netfs_write_context write = {
+		.ctx = ctx,
+		.file = file,
+	};
+
 	_enter("%lx", folio->index);
 
-	if (ctx->ops->validate_for_write(inode, file) < 0)
+	if (ctx->ops->validate_for_write(&write) < 0)
 		return VM_FAULT_SIGBUS;
 
 	sb_start_pagefault(inode->i_sb);
+
+	err = netfs_init_write_context(&write);
+	if (err <= 0) {
+		ret = (err == -ENOMEM) ? VM_FAULT_OOM : VM_FAULT_SIGBUS;
+		goto out_noctx;
+	}
 
 	if (folio_wait_writeback_killable(folio))
 		goto out;
@@ -1020,7 +1050,7 @@ vm_fault_t netfs_page_mkwrite(struct vm_fault *vmf)
 	if (folio_lock_killable(folio) < 0)
 		goto out;
 
-	err = netfs_flush_conflicting_writes(ctx, file, folio_pos(folio),
+	err = netfs_flush_conflicting_writes(&write, folio_pos(folio),
 					     folio_size(folio), folio);
 	switch (err) {
 	case 0:
@@ -1040,11 +1070,13 @@ vm_fault_t netfs_page_mkwrite(struct vm_fault *vmf)
 	proposal.to	= proposal.from + folio_size(folio);
 	proposal.first	= folio->index;
 	proposal.last	= folio->index + folio_nr_pages(folio) - 1;
-	netfs_commit_region(ctx, file, &proposal);
+	netfs_commit_region(&write, &proposal);
 	file_update_time(file);
 
 	ret = VM_FAULT_LOCKED;
 out:
+	netfs_clear_write_context(&write);
+out_noctx:
 	sb_end_pagefault(inode->i_sb);
 	return ret;
 }
@@ -1054,18 +1086,17 @@ EXPORT_SYMBOL(netfs_page_mkwrite);
  * Try to note in the dirty region list that a range of pages needs writing to
  * the cache.  These are then written back by writepages.
  */
-static void netfs_copy_to_cache(struct netfs_io_request *rreq,
+static void netfs_copy_to_cache(struct netfs_write_context *write,
 				loff_t start, size_t len)
 {
 	struct netfs_dirty_region proposal;
-	struct netfs_inode *ctx = netfs_inode(rreq->inode);
 
 	proposal.from	= start;
 	proposal.to	= start + len;
 	proposal.first	= start / PAGE_SIZE;
 	proposal.last	= (start + len - 1) / PAGE_SIZE;
 	proposal.type	= NETFS_COPY_TO_CACHE;
-	netfs_commit_region(ctx, NULL, &proposal);
+	netfs_commit_region(write, &proposal);
 }
 
 /*
@@ -1079,6 +1110,11 @@ void netfs_rreq_do_write_to_cache(struct netfs_io_request *rreq)
 {
 	struct netfs_io_subrequest *subreq, *next, *p;
 	struct netfs_io_chain *chain = &rreq->chain[0];
+
+	struct netfs_write_context write = {
+		.ctx = netfs_inode(rreq->inode),
+		.discarded_regions = LIST_HEAD_INIT(write.discarded_regions),
+	};
 
 	trace_netfs_rreq(rreq, netfs_rreq_trace_copy_mark);
 
@@ -1105,8 +1141,9 @@ void netfs_rreq_do_write_to_cache(struct netfs_io_request *rreq)
 					     netfs_sreq_trace_put_merged);
 		}
 
-		netfs_copy_to_cache(rreq, start, len);
+		netfs_copy_to_cache(&write, start, len);
 	}
 
 	netfs_rreq_completed(rreq, false);
+	netfs_clear_write_context(&write);
 }

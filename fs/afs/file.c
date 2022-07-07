@@ -371,9 +371,17 @@ static void afs_free_request(struct netfs_io_request *rreq)
 	key_put(rreq->netfs_priv);
 }
 
-static void afs_init_dirty_region(struct netfs_dirty_region *region, struct file *file)
+static int afs_init_write_context(struct netfs_write_context *write)
 {
-	region->netfs_priv = key_get(afs_file_key(file));
+#warning TRIGGER NEW FLUSH GROUP FOR TESTING
+	static atomic_t jump;
+	return netfs_require_flush_group(write, (atomic_inc_return(&jump) & 3) == 3);
+}
+
+static void afs_init_dirty_region(struct netfs_write_context *write,
+				  struct netfs_dirty_region *region)
+{
+	region->netfs_priv = key_get(afs_file_key(write->file));
 }
 
 static void afs_split_dirty_region(struct netfs_dirty_region *front,
@@ -387,9 +395,9 @@ static void afs_free_dirty_region(struct netfs_dirty_region *region)
 	key_put(region->netfs_priv);
 }
 
-static void afs_update_i_size(struct inode *inode, loff_t new_i_size)
+static void afs_update_i_size(struct netfs_inode *ctx, loff_t new_i_size)
 {
-	struct afs_vnode *vnode = AFS_FS_I(inode);
+	struct afs_vnode *vnode = AFS_FS_I(&ctx->inode);
 	loff_t i_size;
 
 	write_seqlock(&vnode->cb_lock);
@@ -402,9 +410,9 @@ static void afs_update_i_size(struct inode *inode, loff_t new_i_size)
 	fscache_update_cookie(afs_vnode_cache(vnode), NULL, &new_i_size);
 }
 
-static int afs_validate_for_write(struct inode *inode, struct file *file)
+static int afs_validate_for_write(struct netfs_write_context *write)
 {
-	return afs_validate(AFS_FS_I(inode), afs_file_key(file));
+	return afs_validate(AFS_FS_I(&write->ctx->inode), afs_file_key(write->file));
 }
 
 static void afs_netfs_invalidate_cache(struct netfs_io_request *wreq)
@@ -420,6 +428,7 @@ const struct netfs_request_ops afs_req_ops = {
 	.begin_cache_operation	= fscache_begin_cache_operation,
 	.check_write_begin	= afs_check_write_begin,
 	.issue_read		= afs_issue_read,
+	.init_write_context	= afs_init_write_context,
 	.init_dirty_region	= afs_init_dirty_region,
 	.split_dirty_region	= afs_split_dirty_region,
 	.free_dirty_region	= afs_free_dirty_region,

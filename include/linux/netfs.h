@@ -315,6 +315,17 @@ struct netfs_io_request {
 	void (*cleanup)(struct netfs_io_request *req);
 };
 
+/*
+ * Tracking for information needed during a single write operation.
+ */
+struct netfs_write_context {
+	struct netfs_inode	*ctx;
+	struct netfs_flush_group *flush_group;
+	struct file		*file;
+	struct list_head 	discarded_regions;
+	void			*netfs_priv;
+};
+
 enum netfs_region_type {
 	NETFS_MODIFIED_REGION,
 	NETFS_COPY_TO_CACHE,
@@ -340,6 +351,7 @@ struct netfs_dirty_region {
 	unsigned long long	to;		/* File position of end of modified part */
 	unsigned int		debug_id;
 	enum netfs_region_type	type;
+	int /*enum netfs_region_trace*/ discarded_why:8;
 	refcount_t		ref;
 };
 
@@ -383,8 +395,8 @@ struct netfs_request_ops {
 	void (*done)(struct netfs_io_request *rreq);
 
 	/* Modification handling */
-	void (*update_i_size)(struct inode *inode, loff_t i_size);
-	int (*validate_for_write)(struct inode *inode, struct file *file);
+	void (*update_i_size)(struct netfs_inode *ctx, loff_t i_size);
+	int (*validate_for_write)(struct netfs_write_context *write);
 
 	/* Write request handling */
 	void (*create_write_requests)(struct netfs_io_request *wreq);
@@ -399,16 +411,20 @@ struct netfs_request_ops {
 			     struct scatterlist *source_sg, unsigned int n_source,
 			     struct scatterlist *dest_sg, unsigned int n_dest);
 
+	/* Write context handling */
+	int (*init_write_context)(struct netfs_write_context *write);
+	void (*clear_write_context)(struct netfs_write_context *write);
+
 	/* Dirty region handling */
-	void (*init_dirty_region)(struct netfs_dirty_region *region, struct file *file);
+	void (*init_dirty_region)(struct netfs_write_context *write,
+				  struct netfs_dirty_region *region);
 	void (*split_dirty_region)(struct netfs_dirty_region *front,
 				   struct netfs_dirty_region *back);
 	void (*free_dirty_region)(struct netfs_dirty_region *region);
-	bool (*are_regions_mergeable)(struct netfs_inode *ctx,
+	bool (*are_regions_mergeable)(struct netfs_write_context *write,
 				      const struct netfs_dirty_region *front,
 				      const struct netfs_dirty_region *back);
-	bool (*is_write_compatible)(struct netfs_inode *ctx,
-				    struct file *file,
+	bool (*is_write_compatible)(struct netfs_write_context *write,
 				    const struct netfs_dirty_region *front);
 
 	/* Flush group handling */
@@ -505,7 +521,8 @@ extern struct netfs_io_request *netfs_prepare_to_truncate(struct dentry *dentry,
 							  struct iattr *attr);
 extern void netfs_truncate(struct netfs_io_request *treq);
 extern void netfs_clear_inode(struct netfs_inode *ctx);
-extern struct netfs_flush_group *netfs_new_flush_group(struct inode *, void *);
+extern struct netfs_flush_group *netfs_new_flush_group(struct netfs_inode *, void *);
+extern int netfs_require_flush_group(struct netfs_write_context *write, bool force);
 
 /**
  * netfs_inode - Get the netfs inode context from the inode

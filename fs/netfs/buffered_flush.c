@@ -88,17 +88,12 @@ static void netfs_writeback_end(struct netfs_io_request *wreq)
  */
 static void netfs_clean_dirty_range(struct netfs_io_request *wreq)
 {
-	struct netfs_inode *ctx = netfs_inode(wreq->inode);
-	LIST_HEAD(discards);
-
 	_enter("");
 
 	netfs_writeback_end(wreq);
 
 	//spin_lock(&ctx->dirty_lock);
 	//spin_unlock(&ctx->dirty_lock);
-
-	netfs_discard_regions(ctx, &discards, netfs_region_trace_put_written);
 }
 
 /*
@@ -132,6 +127,10 @@ static void netfs_redirty_range(struct netfs_io_request *wreq)
 	unsigned int c;
 	bool upload_failed = false;
 	LIST_HEAD(discards);
+
+	struct netfs_write_context write = {
+		.ctx = ctx,
+	};
 
 	trace_netfs_rreq(wreq, netfs_rreq_trace_redirty);
 
@@ -203,7 +202,7 @@ static void netfs_redirty_range(struct netfs_io_request *wreq)
 		 */
 		if (d->first <= w->last) {
 			if (d->last == w->first - 1 &&
-			    !netfs_are_regions_mergeable(ctx, d, d2)) {
+			    !netfs_are_regions_mergeable(&write, d, d2)) {
 				d = netfs_next_region(ctx, d);
 				if (!d)
 					break;
@@ -218,7 +217,7 @@ static void netfs_redirty_range(struct netfs_io_request *wreq)
 
 			while ((d2 = netfs_next_region(ctx, d)) &&
 			       d->last >= d2->first - 1 &&
-			       netfs_are_regions_mergeable(ctx, d, d2)
+			       netfs_are_regions_mergeable(&write, d, d2)
 			       ) {
 				d->last = d2->last;
 				d->to   = d2->to;
@@ -233,7 +232,7 @@ static void netfs_redirty_range(struct netfs_io_request *wreq)
 
 		/* Dirty region after writeback region and touching. */
 		if (d->first == w->last + 1) {
-			if (netfs_are_regions_mergeable(ctx, d, d2)) {
+			if (netfs_are_regions_mergeable(&write, d, d2)) {
 				d->first = min(d->first, w->first);
 				d->from  = min(d->from, w->from);
 				trace_netfs_dirty(ctx, d, w, netfs_dirty_trace_redirty_merge);
@@ -280,11 +279,11 @@ static void netfs_cleanup_buffered_write(struct netfs_io_request *wreq)
  * See if there are any conflicting dirty regions in the specified range.  The
  * caller must hold the dirty_regions lock or the RCU read lock.
  */
-static bool netfs_check_for_conflicting_regions(struct netfs_inode *ctx,
-						struct file *file,
+static bool netfs_check_for_conflicting_regions(struct netfs_write_context *write,
 						loff_t start, size_t len)
 {
 	struct netfs_dirty_region *r;
+	struct netfs_inode *ctx = write->ctx;
 	unsigned long long from = start;
 	unsigned long long to = from + len;
 	size_t min_bsize = 1UL << ctx->min_bshift;
@@ -306,7 +305,7 @@ static bool netfs_check_for_conflicting_regions(struct netfs_inode *ctx,
 							 group_link))
 			goto conflict;
 		if (ctx->ops->is_write_compatible &&
-		    !ctx->ops->is_write_compatible(ctx, file, r))
+		    !ctx->ops->is_write_compatible(write, r))
 			goto conflict;
 		if (from >= ctx->zero_point || r->from >= ctx->zero_point)
 			continue;
@@ -320,15 +319,15 @@ conflict:
 	return true;
 }
 
-int netfs_flush_conflicting_writes(struct netfs_inode *ctx,
-				   struct file *file,
+int netfs_flush_conflicting_writes(struct netfs_write_context *write,
 				   loff_t start, size_t len,
 				   struct folio *unlock_this)
 {
+	struct netfs_inode *ctx = write->ctx;
 	bool check;
 
 	spin_lock(&ctx->dirty_lock);
-	check = netfs_check_for_conflicting_regions(ctx, file, start, len);
+	check = netfs_check_for_conflicting_regions(write, start, len);
 	spin_unlock(&ctx->dirty_lock);
 
 	if (check) {
@@ -346,7 +345,7 @@ int netfs_flush_conflicting_writes(struct netfs_inode *ctx,
  * front part is returned.
  */
 static struct netfs_dirty_region *netfs_alloc_split_off_front(
-	struct netfs_inode *ctx,
+	struct netfs_write_context *write,
 	struct netfs_dirty_region *back,
 	pgoff_t front_last,
 	enum netfs_dirty_trace why)
@@ -359,7 +358,7 @@ static struct netfs_dirty_region *netfs_alloc_split_off_front(
 		BUG();
 	}
 
-	netfs_split_off_front(ctx, front, back, front_last, why);
+	netfs_split_off_front(write, front, back, front_last, why);
 	return front;
 }
 
@@ -423,10 +422,11 @@ failed:
  * them to the request.
  */
 static void netfs_split_out_regions(struct netfs_io_request *wreq,
-				    struct netfs_inode *ctx,
+				    struct netfs_write_context *write,
 				    struct netfs_dirty_region *region)
 {
 	struct netfs_dirty_region *front = region, *p;
+	struct netfs_inode *ctx = write->ctx;
 
 	spin_lock(&ctx->dirty_lock);
 
@@ -438,7 +438,7 @@ static void netfs_split_out_regions(struct netfs_io_request *wreq,
 	if (wreq->first != region->first) {
 		BUG_ON(wreq->first < region->first);
 		BUG_ON(wreq->first == 0);
-		netfs_alloc_split_off_front(ctx, region, wreq->first - 1,
+		netfs_alloc_split_off_front(write, region, wreq->first - 1,
 					    netfs_dirty_trace_split_off_front);
 		netfs_check_dirty_list('F', &ctx->dirty_regions, region);
 	}
@@ -449,7 +449,7 @@ static void netfs_split_out_regions(struct netfs_io_request *wreq,
 				goto excise;
 			if (wreq->last < region->last) {
 				region = netfs_alloc_split_off_front(
-					ctx, region, wreq->last,
+					write, region, wreq->last,
 					netfs_dirty_trace_split_off_back);
 				if (region->dirty_link.next == &front->dirty_link)
 					front = region;
@@ -908,17 +908,19 @@ skip:
 /*
  * Make sure there's a flush group.
  */
-int netfs_require_flush_group(struct inode *inode, bool force)
+int netfs_require_flush_group(struct netfs_write_context *write, bool force)
 {
 	struct netfs_flush_group *group;
-	struct netfs_inode *ctx = netfs_inode(inode);
+	struct netfs_inode *ctx = write->ctx;
 
 	if (list_empty(&ctx->flush_groups) || force) {
 		kdebug("new flush group");
-		group = netfs_new_flush_group(inode, NULL);
+		group = netfs_new_flush_group(ctx, NULL);
 		if (!group)
 			return -ENOMEM;
 	}
+
+	write->flush_group = group;
 	return 0;
 }
 
@@ -989,6 +991,11 @@ static int netfs_select_dirty(struct netfs_io_request *wreq,
 	bool advance = true;
 	int ret;
 
+	struct netfs_write_context write = {
+		.ctx = ctx,
+		.discarded_regions = LIST_HEAD_INIT(write.discarded_regions),
+	};
+
 	/* Round out the range we're looking through to accommodate whole cache
 	 * blocks.  The cache may only be able to store blocks of that size, in
 	 * which case we may need to add non-dirty pages to the buffer too.
@@ -1056,7 +1063,7 @@ static int netfs_select_dirty(struct netfs_io_request *wreq,
 	if (advance)
 		*_first = wreq->last + 1;
 
-	netfs_split_out_regions(wreq, ctx, region);
+	netfs_split_out_regions(wreq, &write, region);
 
 	/* The assembled write request gets placed on the list to prevent
 	 * conflicting write requests happening simultaneously.

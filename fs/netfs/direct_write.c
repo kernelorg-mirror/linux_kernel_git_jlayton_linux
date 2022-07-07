@@ -11,17 +11,17 @@
 
 static void netfs_cleanup_dio_write(struct netfs_io_request *wreq)
 {
-	struct inode *inode = wreq->inode;
+	struct netfs_inode *ctx = netfs_inode(wreq->inode);
 	unsigned long long end = wreq->start + wreq->len;
 
 	_enter("R=%08x, %zx", wreq->debug_id, wreq->transferred);
 
 	if (!wreq->error &&
-	    i_size_read(inode) < end) {
+	    i_size_read(&ctx->inode) < end) {
 		if (wreq->netfs_ops->update_i_size)
-			wreq->netfs_ops->update_i_size(inode, end);
+			wreq->netfs_ops->update_i_size(ctx, end);
 		else
-			i_size_write(inode, end);
+			i_size_write(&ctx->inode, end);
 	}
 
 	wreq->iocb->ki_pos += wreq->transferred;
@@ -96,11 +96,12 @@ out:
 /*
  * Perform a direct I/O write.
  */
-ssize_t netfs_direct_write_iter(struct kiocb *iocb, struct iov_iter *iter)
+ssize_t netfs_direct_write_iter(struct netfs_write_context *write,
+				struct kiocb *iocb, struct iov_iter *iter)
 {
 	struct netfs_dirty_region *region;
 	struct netfs_io_request *wreq;
-	struct netfs_inode *ctx = netfs_inode(file_inode(iocb->ki_filp));
+	struct netfs_inode *ctx = write->ctx;
 	unsigned long long start, end, i_size = i_size_read(&ctx->inode);
 	ssize_t ret, n;
 	size_t min_bsize = 1UL << ctx->min_bshift;
@@ -131,7 +132,7 @@ ssize_t netfs_direct_write_iter(struct kiocb *iocb, struct iov_iter *iter)
 	region->last  = (end - 1) / PAGE_SIZE;
 
 	if (ctx->ops->init_dirty_region)
-		ctx->ops->init_dirty_region(region, iocb->ki_filp);
+		ctx->ops->init_dirty_region(write, region);
 	list_add(&region->dirty_link, &wreq->regions);
 
 	ret = netfs_wait_for_credit(NULL);
