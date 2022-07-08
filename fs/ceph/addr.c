@@ -388,11 +388,10 @@ static void ceph_netfs_free_request(struct netfs_io_request *rreq)
 		ceph_put_cap_refs(ci, got);
 }
 
-static void ceph_init_dirty_region(struct netfs_dirty_region *region, struct file *file)
+static void ceph_init_dirty_region(struct netfs_write_context *write,
+				   struct netfs_dirty_region *region)
 {
-	struct ceph_inode_info *ci = ceph_inode(file_inode(file));
-
-	region->netfs_priv = ceph_get_latest_snapc(ci);
+	region->netfs_priv = ceph_get_snap_context(write->flush_group->netfs_priv);
 }
 
 static void ceph_split_dirty_region(struct netfs_dirty_region *front,
@@ -406,7 +405,7 @@ static void ceph_free_dirty_region(struct netfs_dirty_region *region)
 	ceph_put_snap_context(region->netfs_priv);
 }
 
-static bool ceph_are_regions_mergeable(struct netfs_inode *ctx,
+static bool ceph_are_regions_mergeable(struct netfs_write_context *write,
 				       const struct netfs_dirty_region *front,
 				       const struct netfs_dirty_region *back)
 {
@@ -627,13 +626,15 @@ static void ceph_create_write_requests(struct netfs_io_request *wreq)
 	}
 }
 
-static void ceph_update_i_size(struct inode *inode, loff_t size)
+static void ceph_update_i_size(struct netfs_inode *ctx, loff_t size)
 {
+	struct inode *inode = &ctx->inode;
+
 	if (ceph_inode_set_size(inode, size))
 		ceph_queue_check_caps(inode);
 }
 
-static int ceph_validate_for_write(struct inode *inode, struct file *file)
+static int ceph_validate_for_write(struct netfs_write_context *write)
 {
 	/*
 	 * Not clear that we need this for ceph.
@@ -651,6 +652,24 @@ static void ceph_netfs_invalidate_cache(struct netfs_io_request *wreq)
 	return;
 }
 
+static int ceph_init_write_context(struct netfs_write_context *write)
+{
+	struct ceph_inode_info *ci = ceph_inode(file_inode(write->file));
+	struct ceph_snap_context *snapc = ceph_get_latest_snapc(ci);
+
+	write->flush_group = netfs_find_or_create_flush_group(write->ctx, snapc);
+	if (!write->flush_group) {
+		ceph_put_snap_context(snapc);
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+static void ceph_clear_write_context(struct netfs_write_context *write)
+{
+	ceph_put_snap_context(write->flush_group->netfs_priv);
+}
+
 const struct netfs_request_ops ceph_netfs_ops = {
 	.init_request		= ceph_init_request,
 	.free_request		= ceph_netfs_free_request,
@@ -659,6 +678,8 @@ const struct netfs_request_ops ceph_netfs_ops = {
 	.clamp_length		= ceph_netfs_clamp_length,
 	.issue_read		= ceph_netfs_issue_read,
 	.check_write_begin	= ceph_netfs_check_write_begin,
+	.init_write_context	= ceph_init_write_context,
+	.clear_write_context	= ceph_clear_write_context,
 	.init_dirty_region	= ceph_init_dirty_region,
 	.split_dirty_region	= ceph_split_dirty_region,
 	.free_dirty_region	= ceph_free_dirty_region,
