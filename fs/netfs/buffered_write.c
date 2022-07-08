@@ -894,7 +894,7 @@ static int netfs_init_write_context(struct netfs_write_context *write)
 
 	if (write->ctx->ops->init_write_context) {
 		ret = write->ctx->ops->init_write_context(write);
-		if (ret <= 0)
+		if (ret < 0)
 			return ret;
 	}
 
@@ -944,7 +944,7 @@ ssize_t netfs_file_write_iter_locked(struct kiocb *iocb, struct iov_iter *from)
 		return ret;
 
 	ret = netfs_init_write_context(&write);
-	if (ret <= 0)
+	if (ret < 0)
 		return ret;
 
 	trace_netfs_write_iter(iocb, from);
@@ -1039,7 +1039,7 @@ vm_fault_t netfs_page_mkwrite(struct vm_fault *vmf)
 	sb_start_pagefault(inode->i_sb);
 
 	err = netfs_init_write_context(&write);
-	if (err <= 0) {
+	if (err < 0) {
 		ret = (err == -ENOMEM) ? VM_FAULT_OOM : VM_FAULT_SIGBUS;
 		goto out_noctx;
 	}
