@@ -602,8 +602,8 @@ static void __check_cap_issue(struct ceph_inode_info *ci, struct ceph_cap *cap,
  * @ci: inode to be moved
  * @session: new auth caps session
  */
-static void change_auth_cap_ses(struct ceph_inode_info *ci,
-				struct ceph_mds_session *session)
+void change_auth_cap_ses(struct ceph_inode_info *ci,
+			 struct ceph_mds_session *session)
 {
 	lockdep_assert_held(&ci->i_ceph_lock);
 
@@ -1827,6 +1827,7 @@ static u64 __mark_caps_flushing(struct inode *inode,
 	swap(cf, ci->i_prealloc_cap_flush);
 	cf->caps = flushing;
 	cf->wake = wake;
+	cf->ci = ci;
 
 	spin_lock(&mdsc->cap_dirty_lock);
 	list_del_init(&ci->i_dirty_item);
@@ -1978,14 +1979,15 @@ retry:
 	}
 
 	dout("check_caps %llx.%llx file_want %s used %s dirty %s flushing %s"
-	     " issued %s revoking %s retain %s %s%s\n", ceph_vinop(inode),
+	     " issued %s revoking %s retain %s %s%s%s\n", ceph_vinop(inode),
 	     ceph_cap_string(file_wanted),
 	     ceph_cap_string(used), ceph_cap_string(ci->i_dirty_caps),
 	     ceph_cap_string(ci->i_flushing_caps),
 	     ceph_cap_string(issued), ceph_cap_string(revoking),
 	     ceph_cap_string(retain),
 	     (flags & CHECK_CAPS_AUTHONLY) ? " AUTHONLY" : "",
-	     (flags & CHECK_CAPS_FLUSH) ? " FLUSH" : "");
+	     (flags & CHECK_CAPS_FLUSH) ? " FLUSH" : "",
+	     (flags & CHECK_CAPS_NOINVAL) ? " NOINVAL" : "");
 
 	/*
 	 * If we no longer need to hold onto old our caps, and we may
@@ -3005,7 +3007,7 @@ int ceph_get_caps(struct file *filp, int need, int want, loff_t endoff, int *got
 		}
 
 		if (S_ISREG(ci->netfs.inode.i_mode) &&
-		    ci->i_inline_version != CEPH_INLINE_NONE &&
+		    ceph_has_inline_data(ci) &&
 		    (_got & (CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO)) &&
 		    i_size_read(inode) > 0) {
 			struct page *page =
@@ -3578,24 +3580,23 @@ static void handle_cap_grant(struct inode *inode,
 			fill_inline = true;
 	}
 
-	if (ci->i_auth_cap == cap &&
-	    le32_to_cpu(grant->op) == CEPH_CAP_OP_IMPORT) {
-		if (newcaps & ~extra_info->issued)
-			wake = true;
+	if (le32_to_cpu(grant->op) == CEPH_CAP_OP_IMPORT) {
+		if (ci->i_auth_cap == cap) {
+			if (newcaps & ~extra_info->issued)
+				wake = true;
 
-		if (ci->i_requested_max_size > max_size ||
-		    !(le32_to_cpu(grant->wanted) & CEPH_CAP_ANY_FILE_WR)) {
-			/* re-request max_size if necessary */
-			ci->i_requested_max_size = 0;
-			wake = true;
+			if (ci->i_requested_max_size > max_size ||
+			    !(le32_to_cpu(grant->wanted) & CEPH_CAP_ANY_FILE_WR)) {
+				/* re-request max_size if necessary */
+				ci->i_requested_max_size = 0;
+				wake = true;
+			}
+
+			ceph_kick_flushing_inode_caps(session, ci);
 		}
-
-		ceph_kick_flushing_inode_caps(session, ci);
-		spin_unlock(&ci->i_ceph_lock);
 		up_read(&session->s_mdsc->snap_rwsem);
-	} else {
-		spin_unlock(&ci->i_ceph_lock);
 	}
+	spin_unlock(&ci->i_ceph_lock);
 
 	if (fill_inline)
 		ceph_fill_inline_data(inode, NULL, extra_info->inline_data,
@@ -3646,6 +3647,10 @@ static void handle_cap_flush_ack(struct inode *inode, u64 flush_tid,
 	bool drop = false;
 	bool wake_ci = false;
 	bool wake_mdsc = false;
+
+	/* track latest cap flush ack seen for this inode */
+	if (flush_tid > ci->i_last_cap_flush_ack)
+		ci->i_last_cap_flush_ack = flush_tid;
 
 	list_for_each_entry_safe(cf, tmp_cf, &ci->i_cap_flush_list, i_list) {
 		/* Is this the one that was flushed? */
@@ -4201,7 +4206,11 @@ void ceph_handle_caps(struct ceph_mds_session *session,
 	     (unsigned)seq);
 
 	if (!inode) {
-		dout(" i don't have ino %llx\n", vino.ino);
+		if (op == CEPH_CAP_OP_FLUSH_ACK)
+			pr_info("%s: can't find ino %llx:%llx for flush_ack!\n",
+				__func__, vino.snap, vino.ino);
+		else
+			dout(" i don't have ino %llx\n", vino.ino);
 
 		if (op == CEPH_CAP_OP_IMPORT) {
 			cap = ceph_get_cap(mdsc, NULL);
@@ -4255,10 +4264,14 @@ void ceph_handle_caps(struct ceph_mds_session *session,
 	spin_lock(&ci->i_ceph_lock);
 	cap = __get_cap_for_mds(ceph_inode(inode), session->s_mds);
 	if (!cap) {
-		dout(" no cap on %p ino %llx.%llx from mds%d\n",
+		dout(" no cap on %p ino %llx:%llx from mds%d\n",
 		     inode, ceph_ino(inode), ceph_snap(inode),
 		     session->s_mds);
 		spin_unlock(&ci->i_ceph_lock);
+		if (op == CEPH_CAP_OP_FLUSH_ACK)
+			pr_info("%s: no cap on %p ino %llx:%llx from mds%d for flush_ack!\n",
+				__func__, inode, ceph_ino(inode),
+				ceph_snap(inode), session->s_mds);
 		goto flush_cap_releases;
 	}
 
@@ -4377,6 +4390,7 @@ static void flush_dirty_session_caps(struct ceph_mds_session *s)
 		ihold(inode);
 		dout("flush_dirty_caps %llx.%llx\n", ceph_vinop(inode));
 		spin_unlock(&mdsc->cap_dirty_lock);
+		ceph_wait_on_async_create(inode);
 		ceph_check_caps(ci, CHECK_CAPS_FLUSH, NULL);
 		iput(inode);
 		spin_lock(&mdsc->cap_dirty_lock);

@@ -456,7 +456,7 @@ static int ceph_parse_deleg_inos(void **p, void *end,
 				dout("added delegated inode 0x%llx\n",
 				     start - 1);
 			} else if (err == -EBUSY) {
-				pr_warn("ceph: MDS delegated inode 0x%llx more than once.\n",
+				pr_warn("MDS delegated inode 0x%llx more than once.\n",
 					start - 1);
 			} else {
 				return err;
@@ -653,6 +653,79 @@ static void destroy_reply_info(struct ceph_mds_reply_info_parsed *info)
 	if (!info->dir_entries)
 		return;
 	free_pages((unsigned long)info->dir_entries, get_order(info->dir_buf_size));
+}
+
+/*
+ * In async unlink case the kclient won't wait for the first reply
+ * from MDS and just drop all the links and unhash the dentry and then
+ * succeeds immediately.
+ *
+ * For any new create/link/rename,etc requests followed by using the
+ * same file names we must wait for the first reply of the inflight
+ * unlink request, or the MDS possibly will fail these following
+ * requests with -EEXIST if the inflight async unlink request was
+ * delayed for some reasons.
+ *
+ * And the worst case is that for the none async openc request it will
+ * successfully open the file if the CDentry hasn't been unlinked yet,
+ * but later the previous delayed async unlink request will remove the
+ * CDenty. That means the just created file is possiblly deleted later
+ * by accident.
+ *
+ * We need to wait for the inflight async unlink requests to finish
+ * when creating new files/directories by using the same file names.
+ */
+int ceph_wait_on_conflict_unlink(struct dentry *dentry)
+{
+	struct ceph_fs_client *fsc = ceph_sb_to_client(dentry->d_sb);
+	struct dentry *pdentry = dentry->d_parent;
+	struct dentry *udentry, *found = NULL;
+	struct ceph_dentry_info *di;
+	struct qstr dname;
+	u32 hash = dentry->d_name.hash;
+	int err;
+
+	dname.name = dentry->d_name.name;
+	dname.len = dentry->d_name.len;
+
+	rcu_read_lock();
+	hash_for_each_possible_rcu(fsc->async_unlink_conflict, di,
+				   hnode, hash) {
+		udentry = di->dentry;
+
+		spin_lock(&udentry->d_lock);
+		if (udentry->d_name.hash != hash)
+			goto next;
+		if (unlikely(udentry->d_parent != pdentry))
+			goto next;
+		if (!hash_hashed(&di->hnode))
+			goto next;
+
+		if (!test_bit(CEPH_DENTRY_ASYNC_UNLINK_BIT, &di->flags))
+			pr_warn("%s dentry %p:%pd async unlink bit is not set\n",
+				__func__, dentry, dentry);
+
+		if (!d_same_name(udentry, pdentry, &dname))
+			goto next;
+
+		spin_unlock(&udentry->d_lock);
+		found = dget(udentry);
+		break;
+next:
+		spin_unlock(&udentry->d_lock);
+	}
+	rcu_read_unlock();
+
+	if (likely(!found))
+		return 0;
+
+	dout("%s dentry %p:%pd conflict with old %p:%pd\n", __func__,
+	     dentry, dentry, found, found);
+
+	err = wait_on_bit(&di->flags, CEPH_DENTRY_ASYNC_UNLINK_BIT,
+			  TASK_KILLABLE);
+	dput(found);
+	return err;
 }
 
 
@@ -868,6 +941,7 @@ void ceph_mdsc_release_request(struct kref *kref)
 		iput(req->r_parent);
 	}
 	iput(req->r_target_inode);
+	iput(req->r_new_inode);
 	if (req->r_dentry)
 		dput(req->r_dentry);
 	if (req->r_old_dentry)
@@ -1220,14 +1294,17 @@ static int encode_supported_features(void **p, void *end)
 	if (count > 0) {
 		size_t i;
 		size_t size = FEATURE_BYTES(count);
+		unsigned long bit;
 
 		if (WARN_ON_ONCE(*p + 4 + size > end))
 			return -ERANGE;
 
 		ceph_encode_32(p, size);
 		memset(*p, 0, size);
-		for (i = 0; i < count; i++)
-			((unsigned char*)(*p))[i / 8] |= BIT(feature_bits[i] % 8);
+		for (i = 0; i < count; i++) {
+			bit = feature_bits[i];
+			((unsigned char *)(*p))[bit / 8] |= BIT(bit % 8);
+		}
 		*p += size;
 	} else {
 		if (WARN_ON_ONCE(*p + 4 > end))
@@ -1991,6 +2068,25 @@ static int check_caps_flush(struct ceph_mds_client *mdsc,
 	return ret;
 }
 
+static void dump_cap_flushes(struct ceph_mds_client *mdsc, u64 want_tid)
+{
+	struct ceph_cap_flush *cf;
+
+	pr_info("%s: still waiting for cap flushes through %llu:\n",
+		__func__, want_tid);
+	spin_lock(&mdsc->cap_dirty_lock);
+	list_for_each_entry(cf, &mdsc->cap_flush_list, g_list) {
+		if (cf->tid > want_tid)
+			break;
+		pr_info("%llx:%llx %s %llu %llu %d%s\n",
+			ceph_vinop(&cf->ci->netfs.inode),
+			ceph_cap_string(cf->caps), cf->tid,
+			cf->ci->i_last_cap_flush_ack, cf->wake,
+			cf->is_capsnap ? " is_capsnap" : "");
+	}
+	spin_unlock(&mdsc->cap_dirty_lock);
+}
+
 /*
  * flush all dirty inode data to disk.
  *
@@ -1999,10 +2095,20 @@ static int check_caps_flush(struct ceph_mds_client *mdsc,
 static void wait_caps_flush(struct ceph_mds_client *mdsc,
 			    u64 want_flush_tid)
 {
+	int i = 0;
+	long ret;
+
 	dout("check_caps_flush want %llu\n", want_flush_tid);
 
-	wait_event(mdsc->cap_flushing_wq,
-		   check_caps_flush(mdsc, want_flush_tid));
+	do {
+		ret = wait_event_timeout(mdsc->cap_flushing_wq,
+			   check_caps_flush(mdsc, want_flush_tid), 60 * HZ);
+		if (ret == 0 && ++i < 5)
+			dump_cap_flushes(mdsc, want_flush_tid);
+		else if (ret == 1)
+			pr_info("%s: condition evaluated to true after timeout!\n",
+				  __func__);
+	} while (ret == 0);
 
 	dout("check_caps_flush ok, flushed thru %llu\n", want_flush_tid);
 }
@@ -2287,7 +2393,8 @@ static inline  u64 __get_oldest_tid(struct ceph_mds_client *mdsc)
 char *ceph_mdsc_build_path(struct dentry *dentry, int *plen, u64 *pbase,
 			   int stop_on_nosnap)
 {
-	struct dentry *temp;
+	struct dentry *cur;
+	struct inode *inode;
 	char *path;
 	int pos;
 	unsigned seq;
@@ -2304,34 +2411,35 @@ retry:
 	path[pos] = '\0';
 
 	seq = read_seqbegin(&rename_lock);
-	rcu_read_lock();
-	temp = dentry;
+	cur = dget(dentry);
 	for (;;) {
-		struct inode *inode;
+		struct dentry *temp;
 
-		spin_lock(&temp->d_lock);
-		inode = d_inode(temp);
+		spin_lock(&cur->d_lock);
+		inode = d_inode(cur);
 		if (inode && ceph_snap(inode) == CEPH_SNAPDIR) {
 			dout("build_path path+%d: %p SNAPDIR\n",
-			     pos, temp);
-		} else if (stop_on_nosnap && inode && dentry != temp &&
+			     pos, cur);
+		} else if (stop_on_nosnap && inode && dentry != cur &&
 			   ceph_snap(inode) == CEPH_NOSNAP) {
-			spin_unlock(&temp->d_lock);
+			spin_unlock(&cur->d_lock);
 			pos++; /* get rid of any prepended '/' */
 			break;
 		} else {
-			pos -= temp->d_name.len;
+			pos -= cur->d_name.len;
 			if (pos < 0) {
-				spin_unlock(&temp->d_lock);
+				spin_unlock(&cur->d_lock);
 				break;
 			}
-			memcpy(path + pos, temp->d_name.name, temp->d_name.len);
+			memcpy(path + pos, cur->d_name.name, cur->d_name.len);
 		}
+		temp = cur;
 		spin_unlock(&temp->d_lock);
-		temp = READ_ONCE(temp->d_parent);
+		cur = dget_parent(temp);
+		dput(temp);
 
 		/* Are we at the root? */
-		if (IS_ROOT(temp))
+		if (IS_ROOT(cur))
 			break;
 
 		/* Are we out of buffer? */
@@ -2340,8 +2448,9 @@ retry:
 
 		path[pos] = '/';
 	}
-	base = ceph_ino(d_inode(temp));
-	rcu_read_unlock();
+	inode = d_inode(cur);
+	base = inode ? ceph_ino(inode) : 0;
+	dput(cur);
 
 	if (read_seqretry(&rename_lock, seq))
 		goto retry;
@@ -2884,6 +2993,64 @@ static void __do_request(struct ceph_mds_client *mdsc,
 	if (req->r_request_started == 0)   /* note request start time */
 		req->r_request_started = jiffies;
 
+	/*
+	 * For async create we will choose the auth MDS of frag in parent
+	 * directory to send the request and ususally this works fine, but
+	 * if the migrated the dirtory to another MDS before it could handle
+	 * it the request will be forwarded.
+	 *
+	 * And then the auth cap will be changed.
+	 */
+	if (test_bit(CEPH_MDS_R_ASYNC, &req->r_req_flags) && req->r_num_fwd) {
+		struct ceph_dentry_info *di = ceph_dentry(req->r_dentry);
+		struct ceph_inode_info *ci;
+		struct ceph_cap *cap;
+
+		/*
+		 * The request maybe handled very fast and the new inode
+		 * hasn't been linked to the dentry yet. We need to wait
+		 * for the ceph_finish_async_create(), which shouldn't be
+		 * stuck too long or fail in thoery, to finish when forwarding
+		 * the request.
+		 */
+		if (!d_inode(req->r_dentry)) {
+			err = wait_on_bit(&di->flags, CEPH_DENTRY_ASYNC_CREATE_BIT,
+					  TASK_KILLABLE);
+			if (err) {
+				mutex_lock(&req->r_fill_mutex);
+				set_bit(CEPH_MDS_R_ABORTED, &req->r_req_flags);
+				mutex_unlock(&req->r_fill_mutex);
+				goto out_session;
+			}
+		}
+
+		ci = ceph_inode(d_inode(req->r_dentry));
+
+		spin_lock(&ci->i_ceph_lock);
+		cap = ci->i_auth_cap;
+		if (ci->i_ceph_flags & CEPH_I_ASYNC_CREATE && mds != cap->mds) {
+			dout("do_request session changed for auth cap %d -> %d\n",
+			     cap->session->s_mds, session->s_mds);
+
+			/* Remove the auth cap from old session */
+			spin_lock(&cap->session->s_cap_lock);
+			cap->session->s_nr_caps--;
+			list_del_init(&cap->session_caps);
+			spin_unlock(&cap->session->s_cap_lock);
+
+			/* Add the auth cap to the new session */
+			cap->mds = mds;
+			cap->session = session;
+			spin_lock(&session->s_cap_lock);
+			session->s_nr_caps++;
+			list_add_tail(&cap->session_caps, &session->s_caps);
+			spin_unlock(&session->s_cap_lock);
+
+			change_auth_cap_ses(ci, session);
+		}
+		spin_unlock(&ci->i_ceph_lock);
+	}
+
 	err = __send_request(session, req, false);
 
 out_session:
@@ -3180,13 +3347,21 @@ static void handle_reply(struct ceph_mds_session *session, struct ceph_msg *msg)
 
 	/* Must find target inode outside of mutexes to avoid deadlocks */
 	if ((err >= 0) && rinfo->head->is_target) {
-		struct inode *in;
+		struct inode *in = xchg(&req->r_new_inode, NULL);
 		struct ceph_vino tvino = {
 			.ino  = le64_to_cpu(rinfo->targeti.in->ino),
 			.snap = le64_to_cpu(rinfo->targeti.in->snapid)
 		};
 
-		in = ceph_get_inode(mdsc->fsc->sb, tvino);
+		/* If we ended up opening an existing inode, discard r_new_inode */
+		if (req->r_op == CEPH_MDS_OP_CREATE && !req->r_reply_info.has_create_ino) {
+			/* This should never happen on an async create */
+			WARN_ON_ONCE(req->r_deleg_ino);
+			iput(in);
+			in = NULL;
+		}
+
+		in = ceph_get_inode(mdsc->fsc->sb, tvino, in);
 		if (IS_ERR(in)) {
 			err = PTR_ERR(in);
 			mutex_lock(&session->s_mutex);
@@ -3464,11 +3639,26 @@ static void handle_session(struct ceph_mds_session *session,
 	case CEPH_SESSION_OPEN:
 		if (session->s_state == CEPH_MDS_SESSION_RECONNECTING)
 			pr_info("mds%d reconnect success\n", session->s_mds);
-		session->s_state = CEPH_MDS_SESSION_OPEN;
-		session->s_features = features;
-		renewed_caps(mdsc, session, 0);
-		if (test_bit(CEPHFS_FEATURE_METRIC_COLLECT, &session->s_features))
-			metric_schedule_delayed(&mdsc->metric);
+
+		if (session->s_state == CEPH_MDS_SESSION_OPEN) {
+			pr_notice("mds%d is already opened\n", session->s_mds);
+		} else {
+			session->s_state = CEPH_MDS_SESSION_OPEN;
+			session->s_features = features;
+			renewed_caps(mdsc, session, 0);
+			if (test_bit(CEPHFS_FEATURE_METRIC_COLLECT,
+				     &session->s_features))
+				metric_schedule_delayed(&mdsc->metric);
+		}
+
+		/*
+		 * The connection maybe broken and the session in client
+		 * side has been reinitialized, need to update the seq
+		 * anyway.
+		 */
+		if (!session->s_seq && seq)
+			session->s_seq = seq;
+
 		wake = 1;
 		if (mdsc->stopping)
 			__close_session(mdsc, session);
@@ -5152,6 +5342,8 @@ static void mds_dispatch(struct ceph_connection *con, struct ceph_msg *msg)
 
 	mutex_lock(&mdsc->mutex);
 	if (__verify_registered_session(mdsc, s) < 0) {
+		pr_info("%s: dropping tid %llu from unregistered session %d\n",
+			__func__, msg->hdr.tid, s->s_mds);
 		mutex_unlock(&mdsc->mutex);
 		goto out;
 	}

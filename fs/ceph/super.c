@@ -72,15 +72,9 @@ static int ceph_statfs(struct dentry *dentry, struct kstatfs *buf)
 	buf->f_type = CEPH_SUPER_MAGIC;  /* ?? */
 
 	/*
-	 * express utilization in terms of large blocks to avoid
+	 * Express utilization in terms of large blocks to avoid
 	 * overflow on 32-bit machines.
-	 *
-	 * NOTE: for the time being, we make bsize == frsize to humor
-	 * not-yet-ancient versions of glibc that are broken.
-	 * Someday, we will probably want to report a real block
-	 * size...  whatever that may mean for a network file system!
 	 */
-	buf->f_bsize = 1 << CEPH_BLOCK_SHIFT;
 	buf->f_frsize = 1 << CEPH_BLOCK_SHIFT;
 
 	/*
@@ -94,6 +88,14 @@ static int ceph_statfs(struct dentry *dentry, struct kstatfs *buf)
 		buf->f_bfree = le64_to_cpu(st.kb_avail) >> (CEPH_BLOCK_SHIFT-10);
 		buf->f_bavail = le64_to_cpu(st.kb_avail) >> (CEPH_BLOCK_SHIFT-10);
 	}
+
+	/*
+	 * NOTE: for the time being, we make bsize == frsize to humor
+	 * not-yet-ancient versions of glibc that are broken.
+	 * Someday, we will probably want to report a real block
+	 * size...  whatever that may mean for a network file system!
+	 */
+	buf->f_bsize = buf->f_frsize;
 
 	buf->f_files = le64_to_cpu(st.num_objects);
 	buf->f_ffree = -1;
@@ -163,6 +165,7 @@ enum {
 	Opt_copyfrom,
 	Opt_wsync,
 	Opt_pagecache,
+	Opt_sparseread,
 };
 
 enum ceph_recover_session_mode {
@@ -205,6 +208,7 @@ static const struct fs_parameter_spec ceph_mount_parameters[] = {
 	fsparam_u32	("wsize",			Opt_wsize),
 	fsparam_flag_no	("wsync",			Opt_wsync),
 	fsparam_flag_no	("pagecache",			Opt_pagecache),
+	fsparam_flag_no	("sparseread",			Opt_sparseread),
 	{}
 };
 
@@ -574,6 +578,12 @@ static int ceph_parse_mount_param(struct fs_context *fc,
 		else
 			fsopt->flags &= ~CEPH_MOUNT_OPT_NOPAGECACHE;
 		break;
+	case Opt_sparseread:
+		if (result.negated)
+			fsopt->flags &= ~CEPH_MOUNT_OPT_SPARSEREAD;
+		else
+			fsopt->flags |= CEPH_MOUNT_OPT_SPARSEREAD;
+		break;
 	default:
 		BUG();
 	}
@@ -708,9 +718,10 @@ static int ceph_show_options(struct seq_file *m, struct dentry *root)
 
 	if (!(fsopt->flags & CEPH_MOUNT_OPT_ASYNC_DIROPS))
 		seq_puts(m, ",wsync");
-
 	if (fsopt->flags & CEPH_MOUNT_OPT_NOPAGECACHE)
 		seq_puts(m, ",nopagecache");
+	if (fsopt->flags & CEPH_MOUNT_OPT_SPARSEREAD)
+		seq_puts(m, ",sparseread");
 
 	if (fsopt->wsize != CEPH_MAX_WRITE_SIZE)
 		seq_printf(m, ",wsize=%u", fsopt->wsize);
@@ -815,6 +826,9 @@ static struct ceph_fs_client *create_fs_client(struct ceph_mount_options *fsopt,
 	fsc->cap_wq = alloc_workqueue("ceph-cap", 0, 1);
 	if (!fsc->cap_wq)
 		goto fail_inode_wq;
+
+	hash_init(fsc->async_unlink_conflict);
+	spin_lock_init(&fsc->async_unlink_conflict_lock);
 
 	spin_lock(&ceph_fsc_lock);
 	list_add_tail(&fsc->metric_wakeup, &ceph_fsc_list);
@@ -1290,6 +1304,11 @@ static int ceph_reconfigure_fc(struct fs_context *fc)
 		ceph_set_mount_opt(fsc, ASYNC_DIROPS);
 	else
 		ceph_clear_mount_opt(fsc, ASYNC_DIROPS);
+
+	if (fsopt->flags & CEPH_MOUNT_OPT_SPARSEREAD)
+		ceph_set_mount_opt(fsc, SPARSEREAD);
+	else
+		ceph_clear_mount_opt(fsc, SPARSEREAD);
 
 	if (strcmp_null(fsc->mount_options->mon_addr, fsopt->mon_addr)) {
 		kfree(fsc->mount_options->mon_addr);
