@@ -243,7 +243,7 @@ out_nfserr:
  * nfsd_lookup - look up a single path component for nfsd
  *
  * @rqstp:   the request context
- * @ftp:     the file handle of the directory
+ * @fhp:     the file handle of the directory
  * @name:    the component name, or %NULL to look up parent
  * @len:     length of name to examine
  * @resfh:   pointer to pre-initialised filehandle to hold result.
