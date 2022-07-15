@@ -346,6 +346,7 @@ nfsd4_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 		switch (open->op_createmode) {
 		case NFS4_CREATE_UNCHECKED:
+			fh_fill_pre_attrs(fhp);
 			if (!d_is_reg(child))
 				break;
 
@@ -365,6 +366,7 @@ nfsd4_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			if (d_inode(child)->i_mtime.tv_sec == v_mtime &&
 			    d_inode(child)->i_atime.tv_sec == v_atime &&
 			    d_inode(child)->i_size == 0) {
+				fh_fill_pre_attrs(fhp);
 				open->op_created = true;
 				break;		/* subtle */
 			}
@@ -374,6 +376,7 @@ nfsd4_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			if (d_inode(child)->i_mtime.tv_sec == v_mtime &&
 			    d_inode(child)->i_atime.tv_sec == v_atime &&
 			    d_inode(child)->i_size == 0) {
+				fh_fill_pre_attrs(fhp);
 				open->op_created = true;
 				goto set_attr;	/* subtle */
 			}
@@ -385,12 +388,10 @@ nfsd4_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (!IS_POSIXACL(inode))
 		iap->ia_mode &= ~current_umask();
 
-	fh_fill_pre_attrs(fhp);
 	status = nfsd4_vfs_create(fhp, child, open);
 	if (status != nfs_ok)
 		goto out;
 	open->op_created = true;
-	fh_fill_post_attrs(fhp);
 
 	/* A newly created file already has a file size of zero. */
 	if ((iap->ia_valid & ATTR_SIZE) && (iap->ia_size == 0))
@@ -408,6 +409,8 @@ set_attr:
 	status = nfsd_create_setattr(rqstp, fhp, resfhp, iap);
 
 out:
+	if (status == nfs_ok)
+		fh_fill_post_attrs(fhp);
 	inode_unlock(inode);
 	if (child && !IS_ERR(child))
 		dput(child);
