@@ -1063,8 +1063,8 @@ void __fscache_invalidate(struct fscache_cookie *cookie,
 		return;
 
 	case FSCACHE_COOKIE_STATE_LOOKING_UP:
-		__fscache_begin_cookie_access(cookie, fscache_access_invalidate_cookie);
-		set_bit(FSCACHE_COOKIE_DO_INVALIDATE, &cookie->flags);
+		if (!test_and_set_bit(FSCACHE_COOKIE_DO_INVALIDATE, &cookie->flags))
+			__fscache_begin_cookie_access(cookie, fscache_access_invalidate_cookie);
 		fallthrough;
 	case FSCACHE_COOKIE_STATE_CREATING:
 		spin_unlock(&cookie->lock);
