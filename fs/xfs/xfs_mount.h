@@ -390,6 +390,7 @@ typedef struct xfs_mount {
 #define XFS_FEAT_ZONED		(1ULL << 29)	/* zoned RT device */
 
 /* Mount features */
+#define XFS_FEAT_DISCARD_SYNC	(1ULL << 46)	/* discard is sync */
 #define XFS_FEAT_NOLIFETIME	(1ULL << 47)	/* disable lifetime hints */
 #define XFS_FEAT_NOALIGN	(1ULL << 49)	/* ignore alignment */
 #define XFS_FEAT_ALLOCSIZE	(1ULL << 50)	/* user specified allocation size */
@@ -531,6 +532,7 @@ __XFS_HAS_FEAT(large_iosize, LARGE_IOSIZE)
 __XFS_HAS_FEAT(wsync, WSYNC)
 __XFS_HAS_FEAT(dirsync, DIRSYNC)
 __XFS_HAS_FEAT(discard, DISCARD)
+__XFS_HAS_FEAT(discard_sync, DISCARD_SYNC)
 __XFS_HAS_FEAT(grpid, GRPID)
 __XFS_HAS_FEAT(small_inums, SMALL_INUMS)
 __XFS_HAS_FEAT(swalloc, SWALLOC)

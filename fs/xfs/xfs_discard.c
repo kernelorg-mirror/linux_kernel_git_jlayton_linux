@@ -116,8 +116,11 @@ xfs_discard_extents(
 	struct xfs_extent_busy	*busyp;
 	struct bio		*bio = NULL;
 	struct blk_plug		plug;
+	bool			sync_discard = xfs_has_discard_sync(mp);
 
-	blk_start_plug(&plug);
+	if (!sync_discard)
+		blk_start_plug(&plug);
+
 	list_for_each_entry(busyp, &extents->extent_list, list) {
 		struct xfs_group	*xg = busyp->group;
 		struct xfs_buftarg	*btp =
@@ -125,18 +128,30 @@ xfs_discard_extents(
 
 		trace_xfs_discard_extent(xg, busyp->bno, busyp->length);
 
-		__blkdev_issue_discard(btp->bt_bdev,
-				xfs_gbno_to_daddr(xg, busyp->bno),
-				XFS_FSB_TO_BB(mp, busyp->length),
-				GFP_KERNEL, &bio);
+		if (!sync_discard) {
+			__blkdev_issue_discard(btp->bt_bdev,
+					xfs_gbno_to_daddr(xg, busyp->bno),
+					XFS_FSB_TO_BB(mp, busyp->length),
+					GFP_KERNEL, &bio);
+		} else {
+			__blkdev_issue_discard_sync(btp->bt_bdev,
+				xfs_gbno_to_daddr(busyp->group, busyp->bno),
+				XFS_FSB_TO_BB(mp, busyp->length), GFP_KERNEL,
+				&bio);
+		}
 	}
 
-	if (bio) {
+	if (sync_discard) {
+		xfs_extent_busy_clear(&extents->extent_list, false);
+		kfree(extents->owner);
+	} else if (bio) {
 		bio->bi_private = extents;
 		bio->bi_end_io = xfs_discard_endio;
 		submit_bio(bio);
+		blk_finish_plug(&plug);
 	} else {
 		xfs_discard_endio_work(&extents->endio_work);
+		blk_finish_plug(&plug);
 	}
 	blk_finish_plug(&plug);
 }
