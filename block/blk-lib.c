@@ -71,6 +71,20 @@ void __blkdev_issue_discard(struct block_device *bdev, sector_t sector,
 }
 EXPORT_SYMBOL(__blkdev_issue_discard);
 
+void __blkdev_issue_discard_sync(struct block_device *bdev, sector_t sector,
+		sector_t nr_sects, gfp_t gfp_mask, struct bio **biop)
+{
+	struct bio *bio;
+
+	while ((bio = blk_alloc_discard_bio(bdev, &sector, &nr_sects,
+			gfp_mask))) {
+		submit_bio_wait(bio);
+		bio_put(bio);
+		*biop = NULL;
+	}
+}
+EXPORT_SYMBOL(__blkdev_issue_discard_sync);
+
 /**
  * blkdev_issue_discard - queue a discard
  * @bdev:	blockdev to issue discard for
