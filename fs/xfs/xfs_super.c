@@ -1530,6 +1530,7 @@ xfs_fs_parse_param(
 		return 0;
 	case Opt_discard:
 		parsing_mp->m_features |= XFS_FEAT_DISCARD;
+		parsing_mp->m_features |= XFS_FEAT_DISCARD_SYNC;
 		return 0;
 	case Opt_discard_sync:
 		parsing_mp->m_features |= XFS_FEAT_DISCARD;
