@@ -267,6 +267,16 @@ static ssize_t ext4_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	return count;
 }
 
+static void ext4_update_iversion(struct file *file)
+{
+	int ret;
+
+	ret = file_update_iversion(file);
+	if (ret)
+		pr_warn_once("ext4: failed to update i_version after write: %d\n", ret);
+
+}
+
 static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
 					struct iov_iter *from)
 {
@@ -284,7 +294,8 @@ static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
 	current->backing_dev_info = inode_to_bdi(inode);
 	ret = generic_perform_write(iocb, from);
 	current->backing_dev_info = NULL;
-
+	if (ret > 0)
+		ext4_update_iversion(iocb->ki_filp);
 out:
 	inode_unlock(inode);
 	if (likely(ret > 0)) {
@@ -593,6 +604,8 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (extend)
 		ret = ext4_handle_inode_extension(inode, offset, ret, count);
 
+	if (ret > 0)
+		ext4_update_iversion(iocb->ki_filp);
 out:
 	if (ilock_shared)
 		inode_unlock_shared(inode);
@@ -674,6 +687,8 @@ ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	if (extend)
 		ret = ext4_handle_inode_extension(inode, offset, ret, count);
+	if (ret > 0)
+		ext4_update_iversion(iocb->ki_filp);
 out:
 	inode_unlock(inode);
 	if (ret > 0)
