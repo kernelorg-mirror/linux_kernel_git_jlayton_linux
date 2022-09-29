@@ -2090,6 +2090,26 @@ int file_update_time(struct file *file)
 EXPORT_SYMBOL(file_update_time);
 
 /**
+ * file_update_iversion - maybe update iversion for an inode
+ * @file: file accessed
+ *
+ * Attempt to update the i_version member of an inode, and mark it for writeback
+ * if it changed. This should be used in the file write path of the filesystem.
+ * The same caveats apply as file_update_time().
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+int file_update_iversion(struct file *file)
+{
+	struct inode *inode = file_inode(file);
+
+	if (inode_iversion_need_inc(inode))
+		return __file_update_time(file, NULL, S_VERSION);
+	return 0;
+}
+EXPORT_SYMBOL(file_update_iversion);
+
+/**
  * file_modified_flags - handle mandated vfs changes when modifying a file
  * @file: file that was modified
  * @flags: kiocb flags

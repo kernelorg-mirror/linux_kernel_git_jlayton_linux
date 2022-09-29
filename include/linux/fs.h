@@ -3377,6 +3377,7 @@ void setattr_copy(struct user_namespace *, struct inode *inode,
 		  const struct iattr *attr);
 
 extern int file_update_time(struct file *file);
+int file_update_iversion(struct file *file);
 
 static inline bool vma_is_dax(const struct vm_area_struct *vma)
 {
