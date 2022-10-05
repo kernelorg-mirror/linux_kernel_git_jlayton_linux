@@ -777,8 +777,6 @@ u64 nfsd4_change_attribute(struct kstat *stat, struct inode *inode)
 {
 	u64 chattr;
 
-	if (inode->i_sb->s_export_op->fetch_iversion)
-		return inode->i_sb->s_export_op->fetch_iversion(inode);
 	if (stat->result_mask & STATX_VERSION) {
 		chattr = stat->version;
 
