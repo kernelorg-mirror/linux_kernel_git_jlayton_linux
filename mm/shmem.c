@@ -2711,6 +2711,16 @@ static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	return retval ? retval : error;
 }
 
+static ssize_t shmem_file_write_iter(struct kiocb *kiocb, struct iov_iter *iter)
+{
+	ssize_t ret;
+
+	ret = generic_file_write_iter(kiocb, iter);
+	if (ret > 0)
+		file_update_iversion(kiocb->ki_filp);
+	return ret;
+}
+
 static loff_t shmem_file_llseek(struct file *file, loff_t offset, int whence)
 {
 	struct address_space *mapping = file->f_mapping;
@@ -3927,7 +3937,7 @@ static const struct file_operations shmem_file_operations = {
 #ifdef CONFIG_TMPFS
 	.llseek		= shmem_file_llseek,
 	.read_iter	= shmem_file_read_iter,
-	.write_iter	= generic_file_write_iter,
+	.write_iter	= shmem_file_write_iter,
 	.fsync		= noop_fsync,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
