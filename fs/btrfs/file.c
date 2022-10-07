@@ -1588,6 +1588,16 @@ static int btrfs_write_check(struct kiocb *iocb, struct iov_iter *from,
 	return 0;
 }
 
+static void btrfs_update_iversion(struct file *file)
+{
+	int ret;
+
+	ret = file_update_iversion(file);
+	if (ret)
+		pr_warn_once("btrfs: failed to update i_version after write: %d\n", ret);
+
+}
+
 static noinline ssize_t btrfs_buffered_write(struct kiocb *iocb,
 					       struct iov_iter *i)
 {
@@ -1824,6 +1834,7 @@ again:
 
 	extent_changeset_free(data_reserved);
 	if (num_written > 0) {
+		btrfs_update_iversion(file);
 		pagecache_isize_extended(inode, old_isize, iocb->ki_pos);
 		iocb->ki_pos += num_written;
 	}
@@ -1924,8 +1935,10 @@ again:
 	from->nofault = false;
 
 	/* No increment (+=) because iomap returns a cumulative value. */
-	if (err > 0)
+	if (err > 0) {
+		btrfs_update_iversion(file);
 		written = err;
+	}
 
 	if (iov_iter_count(from) > 0 && (err == -EFAULT || err > 0)) {
 		const size_t left = iov_iter_count(from);
@@ -2024,6 +2037,8 @@ static ssize_t btrfs_encoded_write(struct kiocb *iocb, struct iov_iter *from,
 		goto out;
 
 	ret = btrfs_do_encoded_write(iocb, from, encoded);
+	if (ret > 0)
+		btrfs_update_iversion(file);
 out:
 	btrfs_inode_unlock(inode, 0);
 	return ret;
