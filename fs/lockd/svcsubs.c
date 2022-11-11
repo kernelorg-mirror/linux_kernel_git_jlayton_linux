@@ -189,10 +189,10 @@ static int nlm_unlock_files(struct nlm_file *file, const struct file_lock *fl)
 	lock.fl_flags = FL_POSIX;
 
 	lock.fl_file = file->f_file[O_RDONLY];
-	if (lock.fl_file && vfs_lock_file(lock.fl_file, F_SETLK, &lock, NULL))
+	if (lock.fl_file && vfs_lock_file(&lock, F_SETLK, NULL))
 		goto out_err;
 	lock.fl_file = file->f_file[O_WRONLY];
-	if (lock.fl_file && vfs_lock_file(lock.fl_file, F_SETLK, &lock, NULL))
+	if (lock.fl_file && vfs_lock_file(&lock, F_SETLK, NULL))
 		goto out_err;
 	return 0;
 out_err:

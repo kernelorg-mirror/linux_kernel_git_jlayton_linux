@@ -475,7 +475,6 @@ nlmsvc_lock(struct svc_rqst *rqstp, struct nlm_file *file,
 #endif
 	struct nlm_block	*block = NULL;
 	int			error;
-	int			mode;
 	int			async_block = 0;
 	__be32			ret;
 
@@ -534,8 +533,7 @@ nlmsvc_lock(struct svc_rqst *rqstp, struct nlm_file *file,
 
 	if (!wait)
 		lock->fl.fl_flags &= ~FL_SLEEP;
-	mode = lock_to_openmode(&lock->fl);
-	error = vfs_lock_file(file->f_file[mode], F_SETLK, &lock->fl, NULL);
+	error = vfs_lock_file(&lock->fl, F_SETLK, NULL);
 	lock->fl.fl_flags &= ~FL_SLEEP;
 
 	dprintk("lockd: vfs_lock_file returned %d\n", error);
@@ -661,14 +659,12 @@ nlmsvc_unlock(struct net *net, struct nlm_file *file, struct nlm_lock *lock)
 	lock->fl.fl_type = F_UNLCK;
 	lock->fl.fl_file = file->f_file[O_RDONLY];
 	if (lock->fl.fl_file)
-		error = vfs_lock_file(lock->fl.fl_file, F_SETLK,
-					&lock->fl, NULL);
+		error = vfs_lock_file(&lock->fl, F_SETLK, NULL);
 	lock->fl.fl_file = file->f_file[O_WRONLY];
 	if (lock->fl.fl_file)
-		error |= vfs_lock_file(lock->fl.fl_file, F_SETLK,
-					&lock->fl, NULL);
+		error |= vfs_lock_file(&lock->fl, F_SETLK, NULL);
 
-	return (error < 0)? nlm_lck_denied_nolocks : nlm_granted;
+	return (error < 0) ? nlm_lck_denied_nolocks : nlm_granted;
 }
 
 /*
@@ -845,7 +841,8 @@ nlmsvc_grant_blocked(struct nlm_block *block)
 	fl_start = lock->fl.fl_start;
 	fl_end = lock->fl.fl_end;
 	mode = lock_to_openmode(&lock->fl);
-	error = vfs_lock_file(file->f_file[mode], F_SETLK, &lock->fl, NULL);
+	WARN_ON_ONCE(lock->fl.fl_file != file->f_file[mode]);
+	error = vfs_lock_file(&lock->fl, F_SETLK, NULL);
 	lock->fl.fl_flags &= ~FL_SLEEP;
 	lock->fl.fl_start = fl_start;
 	lock->fl.fl_end = fl_end;

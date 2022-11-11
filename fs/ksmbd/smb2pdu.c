@@ -7014,7 +7014,7 @@ no_check_cl:
 		flock = smb_lock->fl;
 		list_del(&smb_lock->llist);
 retry:
-		rc = vfs_lock_file(filp, smb_lock->cmd, flock, NULL);
+		rc = vfs_lock_file(flock, smb_lock->cmd, NULL);
 skip:
 		if (flags & SMB2_LOCKFLAG_UNLOCK) {
 			if (!rc) {
@@ -7136,7 +7136,7 @@ out:
 		rlock->fl_start = smb_lock->start;
 		rlock->fl_end = smb_lock->end;
 
-		rc = vfs_lock_file(filp, F_SETLK, rlock, NULL);
+		rc = vfs_lock_file(rlock, F_SETLK, NULL);
 		if (rc)
 			pr_err("rollback unlock fail : %d\n", rc);
 

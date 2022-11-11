@@ -2264,9 +2264,8 @@ out:
 
 /**
  * vfs_lock_file - file byte range lock
- * @filp: The file to apply the lock to
- * @cmd: type of locking operation (F_SETLK, F_GETLK, etc.)
  * @fl: The lock to be applied
+ * @cmd: type of locking operation (F_SETLK, F_GETLK, etc.)
  * @conf: Place to return a copy of the conflicting lock, if found.
  *
  * A caller that doesn't care about the conflicting lock may pass NULL
@@ -2295,13 +2294,13 @@ out:
  * ->lm_grant() before returning to the caller with a FILE_LOCK_DEFERRED
  * return code.
  */
-int vfs_lock_file(struct file *filp, unsigned int cmd, struct file_lock *fl, struct file_lock *conf)
+int vfs_lock_file(struct file_lock *fl, unsigned int cmd, struct file_lock *conf)
 {
-	WARN_ON_ONCE(filp != fl->fl_file);
+	struct file *filp = fl->fl_file;
+
 	if (filp->f_op->lock)
 		return filp->f_op->lock(filp, cmd, fl);
-	else
-		return posix_lock_file(filp, fl, conf);
+	return posix_lock_file(filp, fl, conf);
 }
 EXPORT_SYMBOL_GPL(vfs_lock_file);
 
@@ -2315,7 +2314,7 @@ static int do_lock_file_wait(struct file *filp, unsigned int cmd,
 		return error;
 
 	for (;;) {
-		error = vfs_lock_file(filp, cmd, fl, NULL);
+		error = vfs_lock_file(fl, cmd, NULL);
 		if (error != FILE_LOCK_DEFERRED)
 			break;
 		error = wait_event_interruptible(fl->fl_wait,
@@ -2579,7 +2578,7 @@ void locks_remove_posix(struct file *filp, fl_owner_t owner)
 	lock.fl_ops = NULL;
 	lock.fl_lmops = NULL;
 
-	error = vfs_lock_file(filp, F_SETLK, &lock, NULL);
+	error = vfs_lock_file(&lock, F_SETLK, NULL);
 
 	if (lock.fl_ops && lock.fl_ops->fl_release_private)
 		lock.fl_ops->fl_release_private(&lock);
