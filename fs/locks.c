@@ -2658,14 +2658,14 @@ void locks_remove_file(struct file *filp)
 
 /**
  * vfs_cancel_lock - file byte range unblock lock
- * @filp: The file to apply the unblock to
  * @fl: The lock to be unblocked
  *
  * Used by lock managers to cancel blocked requests
  */
-int vfs_cancel_lock(struct file *filp, struct file_lock *fl)
+int vfs_cancel_lock(struct file_lock *fl)
 {
-	WARN_ON_ONCE(filp != fl->fl_file);
+	struct file *filp = fl->fl_file;
+
 	if (filp->f_op->lock)
 		return filp->f_op->lock(filp, F_CANCELLK, fl);
 	return 0;

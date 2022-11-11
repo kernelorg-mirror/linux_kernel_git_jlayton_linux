@@ -159,7 +159,7 @@ int posix_lock_file(struct file *, struct file_lock *, struct file_lock *);
 int locks_delete_block(struct file_lock *);
 int vfs_test_lock(struct file_lock *);
 int vfs_lock_file(struct file_lock *fl, unsigned int cmd, struct file_lock *conf);
-int vfs_cancel_lock(struct file *filp, struct file_lock *fl);
+int vfs_cancel_lock(struct file_lock *fl);
 bool vfs_inode_has_locks(struct inode *inode);
 int locks_lock_inode_wait(struct inode *inode, struct file_lock *fl);
 int __break_lease(struct inode *inode, unsigned int flags, unsigned int type);
