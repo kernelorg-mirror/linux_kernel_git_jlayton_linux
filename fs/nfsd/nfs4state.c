@@ -7653,7 +7653,7 @@ static __be32 nfsd_test_lock(struct svc_rqst *rqstp, struct svc_fh *fhp, struct 
 	if (err)
 		goto out;
 	lock->fl_file = nf->nf_file;
-	err = nfserrno(vfs_test_lock(nf->nf_file, lock));
+	err = nfserrno(vfs_test_lock(lock));
 	lock->fl_file = NULL;
 out:
 	inode_unlock(inode);

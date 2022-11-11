@@ -2139,15 +2139,15 @@ SYSCALL_DEFINE2(flock, unsigned int, fd, unsigned int, cmd)
 
 /**
  * vfs_test_lock - test file byte range lock
- * @filp: The file to test lock for
  * @fl: The lock to test; also used to hold result
  *
  * Returns -ERRNO on failure.  Indicates presence of conflicting lock by
  * setting conf->fl_type to something other than F_UNLCK.
  */
-int vfs_test_lock(struct file *filp, struct file_lock *fl)
+int vfs_test_lock(struct file_lock *fl)
 {
-	WARN_ON_ONCE(filp != fl->fl_file);
+	struct file *filp = fl->fl_file;
+
 	if (filp->f_op->lock)
 		return filp->f_op->lock(filp, F_GETLK, fl);
 	posix_test_lock(filp, fl);
@@ -2247,7 +2247,7 @@ int fcntl_getlk(struct file *filp, unsigned int cmd, struct flock *flock)
 		fl->fl_owner = filp;
 	}
 
-	error = vfs_test_lock(filp, fl);
+	error = vfs_test_lock(fl);
 	if (error)
 		goto out;
 
@@ -2454,7 +2454,7 @@ int fcntl_getlk64(struct file *filp, unsigned int cmd, struct flock64 *flock)
 		fl->fl_owner = filp;
 	}
 
-	error = vfs_test_lock(filp, fl);
+	error = vfs_test_lock(fl);
 	if (error)
 		goto out;
 
