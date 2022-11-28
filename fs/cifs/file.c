@@ -3037,7 +3037,7 @@ fsync_exit:
  * As file closes, flush all cached write data for this inode checking
  * for write behind errors.
  */
-int cifs_flush(struct file *file, fl_owner_t id)
+int cifs_flush(struct file *file)
 {
 	struct inode *inode = file_inode(file);
 	int rc = 0;

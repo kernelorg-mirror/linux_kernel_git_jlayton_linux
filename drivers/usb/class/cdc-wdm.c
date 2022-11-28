@@ -674,7 +674,7 @@ static int wdm_fsync(struct file *file, loff_t start, loff_t end, int datasync)
  * malicious or defective hardware which ceased communication after close() was
  * implicitly called due to process termination.
  */
-static int wdm_flush(struct file *file, fl_owner_t id)
+static int wdm_flush(struct file *file)
 {
 	return wdm_wait_for_response(file, WDM_FLUSH_TIMEOUT);
 }

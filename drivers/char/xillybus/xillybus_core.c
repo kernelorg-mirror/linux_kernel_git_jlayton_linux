@@ -1174,7 +1174,7 @@ done:
 	return rc;
 }
 
-static int xillybus_flush(struct file *filp, fl_owner_t id)
+static int xillybus_flush(struct file *filp)
 {
 	if (!(filp->f_mode & FMODE_WRITE))
 		return 0;

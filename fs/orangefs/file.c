@@ -530,7 +530,7 @@ static int orangefs_lock(struct file *filp, int cmd, struct file_lock *fl)
 	return rc;
 }
 
-static int orangefs_flush(struct file *file, fl_owner_t id)
+static int orangefs_flush(struct file *file)
 {
 	/*
 	 * This is vfs_fsync_range(file, 0, LLONG_MAX, 0) without the

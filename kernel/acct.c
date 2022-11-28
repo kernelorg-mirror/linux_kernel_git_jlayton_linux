@@ -204,7 +204,7 @@ static void close_work(struct work_struct *work)
 	struct bsd_acct_struct *acct = container_of(work, struct bsd_acct_struct, work);
 	struct file *file = acct->file;
 	if (file->f_op->flush)
-		file->f_op->flush(file, NULL);
+		file->f_op->flush(file);
 	__fput_sync(file);
 	complete(&acct->done);
 }

@@ -5675,7 +5675,7 @@ static int binder_open(struct inode *nodp, struct file *filp)
 	return 0;
 }
 
-static int binder_flush(struct file *filp, fl_owner_t id)
+static int binder_flush(struct file *filp)
 {
 	struct binder_proc *proc = filp->private_data;
 

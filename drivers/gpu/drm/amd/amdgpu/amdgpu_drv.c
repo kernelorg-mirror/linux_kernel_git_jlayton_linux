@@ -2676,7 +2676,7 @@ static const struct dev_pm_ops amdgpu_pm_ops = {
 	.runtime_idle = amdgpu_pmops_runtime_idle,
 };
 
-static int amdgpu_flush(struct file *f, fl_owner_t id)
+static int amdgpu_flush(struct file *f)
 {
 	struct drm_file *file_priv = f->private_data;
 	struct amdgpu_fpriv *fpriv = file_priv->driver_priv;

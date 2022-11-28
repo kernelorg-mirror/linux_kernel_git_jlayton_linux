@@ -269,7 +269,7 @@ static ssize_t ps3flash_kernel_write(const void *buf, size_t count,
 	return res;
 }
 
-static int ps3flash_flush(struct file *file, fl_owner_t id)
+static int ps3flash_flush(struct file *file)
 {
 	return ps3flash_writeback(ps3flash_dev);
 }

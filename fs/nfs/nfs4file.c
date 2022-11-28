@@ -107,7 +107,7 @@ out_drop:
  * Flush all dirty pages, and check for write errors.
  */
 static int
-nfs4_file_flush(struct file *file, fl_owner_t id)
+nfs4_file_flush(struct file *file)
 {
 	struct inode	*inode = file_inode(file);
 	errseq_t since;

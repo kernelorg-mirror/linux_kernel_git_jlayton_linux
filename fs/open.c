@@ -1418,7 +1418,7 @@ int filp_close(struct file *filp, fl_owner_t id)
 	}
 
 	if (filp->f_op->flush)
-		retval = filp->f_op->flush(filp, id);
+		retval = filp->f_op->flush(filp);
 
 	if (likely(!(filp->f_mode & FMODE_PATH))) {
 		dnotify_flush(filp, id);

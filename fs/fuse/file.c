@@ -478,7 +478,7 @@ static void fuse_sync_writes(struct inode *inode)
 	fuse_release_nowrite(inode);
 }
 
-static int fuse_flush(struct file *file, fl_owner_t id)
+static int fuse_flush(struct file *file)
 {
 	struct inode *inode = file_inode(file);
 	struct fuse_mount *fm = get_fuse_mount(inode);
@@ -511,7 +511,7 @@ static int fuse_flush(struct file *file, fl_owner_t id)
 
 	memset(&inarg, 0, sizeof(inarg));
 	inarg.fh = ff->fh;
-	inarg.lock_owner = fuse_lock_owner_id(fm->fc, id);
+	inarg.lock_owner = fuse_lock_owner_id(fm->fc, 0);
 	args.opcode = FUSE_FLUSH;
 	args.nodeid = get_node_id(inode);
 	args.in_numargs = 1;

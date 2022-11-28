@@ -133,7 +133,7 @@ static int skel_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int skel_flush(struct file *file, fl_owner_t id)
+static int skel_flush(struct file *file)
 {
 	struct usb_skel *dev;
 	int res;

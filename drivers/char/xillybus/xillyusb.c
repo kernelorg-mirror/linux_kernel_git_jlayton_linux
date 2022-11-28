@@ -1606,7 +1606,7 @@ static ssize_t xillyusb_read(struct file *filp, char __user *userbuf,
 	return rc;
 }
 
-static int xillyusb_flush(struct file *filp, fl_owner_t id)
+static int xillyusb_flush(struct file *filp)
 {
 	struct xillyusb_channel *chan = filp->private_data;
 	int rc;

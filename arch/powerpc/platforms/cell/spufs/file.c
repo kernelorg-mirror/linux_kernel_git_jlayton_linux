@@ -1697,7 +1697,7 @@ static __poll_t spufs_mfc_poll(struct file *file,poll_table *wait)
 	return mask;
 }
 
-static int spufs_mfc_flush(struct file *file, fl_owner_t id)
+static int spufs_mfc_flush(struct file *file)
 {
 	struct spu_context *ctx = file->private_data;
 	int ret;
@@ -1729,7 +1729,7 @@ static int spufs_mfc_fsync(struct file *file, loff_t start, loff_t end, int data
 	int err = file_write_and_wait_range(file, start, end);
 	if (!err) {
 		inode_lock(inode);
-		err = spufs_mfc_flush(file, NULL);
+		err = spufs_mfc_flush(file);
 		inode_unlock(inode);
 	}
 	return err;

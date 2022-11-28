@@ -212,7 +212,7 @@ static int usbtmc_open(struct inode *inode, struct file *filp)
 /*
  * usbtmc_flush - called before file handle is closed
  */
-static int usbtmc_flush(struct file *file, fl_owner_t id)
+static int usbtmc_flush(struct file *file)
 {
 	struct usbtmc_file_data *file_data;
 	struct usbtmc_device_data *data;
