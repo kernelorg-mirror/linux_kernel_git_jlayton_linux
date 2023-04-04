@@ -2929,22 +2929,33 @@ static struct xarray *shmem_doff_map(struct inode *dir)
 	return &info->doff_map;
 }
 
-static int shmem_doff_add(struct inode *dir, struct dentry *dentry)
+static noinline int shmem_doff_add(struct inode *dir, struct dentry *dentry)
 {
 	struct shmem_inode_info *info = SHMEM_I(dir);
 	struct xa_limit limit = XA_LIMIT(2, U32_MAX);
 	u32 offset;
 	int ret;
 
-	if (dentry->d_fsdata)
+	if (dentry->d_fsdata) {
+		WARN_ON(1);
+		trace_printk("err: dir=%p dentry=%p name=%s already added (offset=%u)\n",
+			dir, dentry, dentry->d_name.name,
+			(u32)(unsigned long)dentry->d_fsdata);
 		return -EBUSY;
+	}
 
 	offset = 0;
 	ret = xa_alloc_cyclic(shmem_doff_map(dir), &offset, dentry, limit,
 			      &info->next_doff, GFP_KERNEL);
-	if (ret < 0)
+	if (ret < 0) {
+		trace_printk("err: dir=%p dentry=%p name=%s ret=%d\n",
+			dir, dentry, dentry->d_name.name, ret);
 		return ret;
+	}
 	dentry->d_fsdata = (void *)(unsigned long)offset;
+
+	trace_printk("dir=%p dentry=%p name=%s offset=%u\n",
+		dir, dentry, dentry->d_name.name, offset);
 	return 0;
 }
 
@@ -2953,6 +2964,7 @@ static struct dentry *shmem_doff_find_after(struct dentry *dir,
 {
 	struct xarray *xa = shmem_doff_map(d_inode(dir));
 	struct dentry *d, *found = NULL;
+	unsigned long start = *offset;
 
 	spin_lock(&dir->d_lock);
 	d = xa_find_after(xa, offset, ULONG_MAX, XA_PRESENT);
@@ -2963,15 +2975,30 @@ static struct dentry *shmem_doff_find_after(struct dentry *dir,
 		spin_unlock(&d->d_lock);
 	}
 	spin_unlock(&dir->d_lock);
+
+	if (found)
+		trace_printk("start=%lu returned=%lu dir=%p dentry=%p name=%s d_fsdata=%lld\n",
+			start, *offset, dir, found, found->d_name.name,
+			(loff_t)found->d_fsdata);
+	else
+		trace_printk("start=%lu returned=%lu dir=%p no entries found\n",
+			start, *offset, dir);
 	return found;
 }
 
-static void shmem_doff_remove(struct inode *dir, struct dentry *dentry)
+static noinline void shmem_doff_remove(struct inode *dir, struct dentry *dentry)
 {
 	u32 offset = (u32)(unsigned long)dentry->d_fsdata;
 
-	if (!offset)
+	if (!offset) {
+		WARN_ON(1);
+		trace_printk("err: dir=%p dentry=%p name=%s no cookie\n",
+			dir, dentry, dentry->d_name.name);
 		return;
+	}
+
+	trace_printk("dir=%p dentry=%p name=%s offset=%u\n",
+		dir, dentry, dentry->d_name.name, offset);
 
 	xa_erase(shmem_doff_map(dir), offset);
 	dentry->d_fsdata = NULL;
@@ -2986,6 +3013,8 @@ static void shmem_doff_map_destroy(struct inode *inode)
 	if (S_ISDIR(inode->i_mode)) {
 		struct xarray *xa = shmem_doff_map(inode);
 
+		if (!xa_empty(xa))
+			trace_printk("err: dir=%p xarray not empty\n", inode);
 		xa_destroy(xa);
 	}
 }
@@ -3071,6 +3100,49 @@ static int shmem_create(struct mnt_idmap *idmap, struct inode *dir,
 	return shmem_mknod(idmap, dir, dentry, mode | S_IFREG, 0);
 }
 
+static int shmem_dentry_delete(const struct dentry *dentry)
+{
+	/*
+	 * Retaining negative dentries for an in-memory filesystem
+	 * just wastes memory and lookup time. Arrange for them to
+	 * be deleted immediately.
+	 */
+	return 1;
+}
+
+static void shmem_dentry_release(struct dentry *dentry)
+{
+	struct inode *dir = d_inode(dentry->d_parent);
+	u32 offset = (u32)(unsigned long)dentry->d_fsdata;
+
+	if (offset) {
+		trace_printk("err: dir=%p dentry=%p name=%s offset=%u (unremoved)\n",
+			dir, dentry, dentry->d_name.name, offset);
+	} else
+		trace_printk("dir=%p dentry=%p name=%s\n",
+			dir, dentry, dentry->d_name.name);
+}
+
+static const struct dentry_operations shmem_dentry_operations = {
+	.d_delete	= shmem_dentry_delete,
+	.d_release	= shmem_dentry_release,
+};
+
+static struct dentry *shmem_lookup(struct inode *dir, struct dentry *dentry,
+				   unsigned int flags)
+{
+	if (dentry->d_name.len > NAME_MAX)
+		return ERR_PTR(-ENAMETOOLONG);
+
+	trace_printk("dir=%p dentry=%p name=%s\n",
+		dir, dentry, dentry->d_name.name);
+
+	if (!dentry->d_sb->s_d_op)
+		d_set_d_op(dentry, &shmem_dentry_operations);
+	d_add(dentry, NULL);
+	return NULL;
+}
+
 /*
  * Link a file..
  */
@@ -3078,6 +3150,8 @@ static int shmem_link(struct dentry *old_dentry, struct inode *dir, struct dentr
 {
 	struct inode *inode = d_inode(old_dentry);
 	int ret = 0;
+
+	trace_printk("dir=%p old_dentry=%p dentry=%p\n", dir, old_dentry, dentry);
 
 	/*
 	 * No ordinary (disk based) filesystem counts links as inodes;
@@ -3124,10 +3198,34 @@ static int shmem_unlink(struct inode *dir, struct dentry *dentry)
 	return 0;
 }
 
+static noinline void shmem_show_children(struct dentry *dir)
+{
+	struct dentry *child;
+
+	spin_lock(&dir->d_lock);
+	list_for_each_entry(child, &dir->d_subdirs, d_child) {
+		trace_printk("err: child=%p name=%s cookie=%u\n",
+			child, child->d_name.name,
+			(u32)(unsigned long)child->d_fsdata);
+	}
+	spin_unlock(&dir->d_lock);
+}
+
 static int shmem_rmdir(struct inode *dir, struct dentry *dentry)
 {
-	if (!simple_empty(dentry))
+	if (!simple_empty(dentry)) {
+		struct xarray *xa = shmem_doff_map(d_inode(dentry));
+
+		if (xa_empty(xa)) {
+			trace_printk("err: dir=%p name=%s has unexpected child dentries\n",
+				d_inode(dentry), dentry->d_name.name);
+			shmem_show_children(dentry);
+		} else
+			trace_printk("dir=%p name=%s is truly not empty\n",
+				d_inode(dentry), dentry->d_name.name);
+
 		return -ENOTEMPTY;
+	}
 
 	drop_nlink(d_inode(dentry));
 	drop_nlink(dir);
@@ -3176,10 +3274,18 @@ static int shmem_rename2(struct mnt_idmap *idmap,
 	int they_are_dirs = S_ISDIR(inode->i_mode);
 	int error;
 
+	trace_printk("old_dir=%p old_dentry=%p name=%s\n",
+		old_dir, old_dentry, old_dentry->d_name.name);
+	trace_printk("new_dir=%p new_dentry=%p name=%s\n",
+		new_dir, new_dentry, new_dentry->d_name.name);
+
 	if (flags & ~(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT))
 		return -EINVAL;
 
 	if (flags & RENAME_EXCHANGE) {
+		trace_printk("exchange: old_dir=%p old_dentry=%p new_dir=%p new_dentry=%p\n",
+			old_dir, old_dentry, new_dir, new_dentry);
+
 		shmem_doff_remove(old_dir, old_dentry);
 		shmem_doff_remove(new_dir, new_dentry);
 		error = shmem_doff_add(new_dir, old_dentry);
@@ -3206,14 +3312,20 @@ static int shmem_rename2(struct mnt_idmap *idmap,
 		return error;
 
 	if (d_really_is_positive(new_dentry)) {
+		trace_printk("replacing: new_dir=%p new_dentry=%p\n", new_dir, new_dentry);
 		(void) shmem_unlink(new_dir, new_dentry);
 		if (they_are_dirs) {
 			drop_nlink(d_inode(new_dentry));
 			drop_nlink(old_dir);
 		}
 	} else if (they_are_dirs) {
+		trace_printk("moving a subdirectory: old_dir=%p old_dentry=%p new_dir=%p new_dentry=%p\n",
+			old_dir, old_dentry, new_dir, new_dentry);
 		drop_nlink(old_dir);
 		inc_nlink(new_dir);
+	} else {
+		trace_printk("neither: old_dir=%p old_dentry=%p new_dir=%p new_dentry=%p\n",
+			old_dir, old_dentry, new_dir, new_dentry);
 	}
 
 	old_dir->i_size -= BOGO_DIRENT_SIZE;
@@ -3377,6 +3489,8 @@ static int shmem_readdir(struct file *file, struct dir_context *ctx)
 
 	lockdep_assert_held(&d_inode(dir)->i_rwsem);
 
+	trace_printk("dir=%p start pos=%lld\n", dir, ctx->pos);
+
 	if (!dir_emit_dots(file, ctx))
 		goto out;
 	for (offset = ctx->pos - 1; offset < ULONG_MAX - 1;) {
@@ -3392,6 +3506,7 @@ static int shmem_readdir(struct file *file, struct dir_context *ctx)
 	}
 
 out:
+	trace_printk("dir=%p end pos=%lld\n", dir, ctx->pos);
 	return 0;
 }
 
@@ -4146,7 +4261,7 @@ static const struct inode_operations shmem_dir_inode_operations = {
 #ifdef CONFIG_TMPFS
 	.getattr	= shmem_getattr,
 	.create		= shmem_create,
-	.lookup		= simple_lookup,
+	.lookup		= shmem_lookup,
 	.link		= shmem_link,
 	.unlink		= shmem_unlink,
 	.symlink	= shmem_symlink,
