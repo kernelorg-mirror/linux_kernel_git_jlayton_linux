@@ -40,6 +40,8 @@
 #include <linux/fs_parser.h>
 #include <linux/swapfile.h>
 #include <linux/iversion.h>
+#include <linux/xarray.h>
+
 #include "swap.h"
 
 static struct vfsmount *shm_mnt;
@@ -234,6 +236,7 @@ static const struct super_operations shmem_ops;
 const struct address_space_operations shmem_aops;
 static const struct file_operations shmem_file_operations;
 static const struct inode_operations shmem_inode_operations;
+static const struct file_operations shmem_dir_operations;
 static const struct inode_operations shmem_dir_inode_operations;
 static const struct inode_operations shmem_special_inode_operations;
 static const struct vm_operations_struct shmem_vm_ops;
@@ -2397,7 +2400,9 @@ static struct inode *shmem_get_inode(struct mnt_idmap *idmap, struct super_block
 			/* Some things misbehave if size == 0 on a directory */
 			inode->i_size = 2 * BOGO_DIRENT_SIZE;
 			inode->i_op = &shmem_dir_inode_operations;
-			inode->i_fop = &simple_dir_operations;
+			inode->i_fop = &shmem_dir_operations;
+			xa_init_flags(&info->doff_map, XA_FLAGS_ALLOC1);
+			info->next_doff = 0;
 			break;
 		case S_IFLNK:
 			/*
@@ -2917,6 +2922,74 @@ static int shmem_statfs(struct dentry *dentry, struct kstatfs *buf)
 	return 0;
 }
 
+static struct xarray *shmem_doff_map(struct inode *dir)
+{
+	struct shmem_inode_info *info = SHMEM_I(dir);
+
+	return &info->doff_map;
+}
+
+static int shmem_doff_add(struct inode *dir, struct dentry *dentry)
+{
+	struct shmem_inode_info *info = SHMEM_I(dir);
+	struct xa_limit limit = XA_LIMIT(2, U32_MAX);
+	u32 offset;
+	int ret;
+
+	if (dentry->d_fsdata)
+		return -EBUSY;
+
+	offset = 0;
+	ret = xa_alloc_cyclic(shmem_doff_map(dir), &offset, dentry, limit,
+			      &info->next_doff, GFP_KERNEL);
+	if (ret < 0)
+		return ret;
+	dentry->d_fsdata = (void *)(unsigned long)offset;
+	return 0;
+}
+
+static struct dentry *shmem_doff_find_after(struct dentry *dir,
+					    unsigned long *offset)
+{
+	struct xarray *xa = shmem_doff_map(d_inode(dir));
+	struct dentry *d, *found = NULL;
+
+	spin_lock(&dir->d_lock);
+	d = xa_find_after(xa, offset, ULONG_MAX, XA_PRESENT);
+	if (d) {
+		spin_lock_nested(&d->d_lock, DENTRY_D_LOCK_NESTED);
+		if (simple_positive(d))
+			found = dget_dlock(d);
+		spin_unlock(&d->d_lock);
+	}
+	spin_unlock(&dir->d_lock);
+	return found;
+}
+
+static void shmem_doff_remove(struct inode *dir, struct dentry *dentry)
+{
+	u32 offset = (u32)(unsigned long)dentry->d_fsdata;
+
+	if (!offset)
+		return;
+
+	xa_erase(shmem_doff_map(dir), offset);
+	dentry->d_fsdata = NULL;
+}
+
+/*
+ * During fs teardown (eg. umount), a directory's doff_map might still
+ * contain entries. xa_destroy() cleans out anything that remains.
+ */
+static void shmem_doff_map_destroy(struct inode *inode)
+{
+	if (S_ISDIR(inode->i_mode)) {
+		struct xarray *xa = shmem_doff_map(inode);
+
+		xa_destroy(xa);
+	}
+}
+
 /*
  * File creation. Allocate an inode, and we're done..
  */
@@ -2936,6 +3009,10 @@ shmem_mknod(struct mnt_idmap *idmap, struct inode *dir,
 						     &dentry->d_name,
 						     shmem_initxattrs, NULL);
 		if (error && error != -EOPNOTSUPP)
+			goto out_iput;
+
+		error = shmem_doff_add(dir, dentry);
+		if (error)
 			goto out_iput;
 
 		error = 0;
@@ -3015,6 +3092,10 @@ static int shmem_link(struct dentry *old_dentry, struct inode *dir, struct dentr
 			goto out;
 	}
 
+	ret = shmem_doff_add(dir, dentry);
+	if (ret)
+		goto out;
+
 	dir->i_size += BOGO_DIRENT_SIZE;
 	inode->i_ctime = dir->i_ctime = dir->i_mtime = current_time(inode);
 	inode_inc_iversion(dir);
@@ -3032,6 +3113,8 @@ static int shmem_unlink(struct inode *dir, struct dentry *dentry)
 
 	if (inode->i_nlink > 1 && !S_ISDIR(inode->i_mode))
 		shmem_free_inode(inode->i_sb);
+
+	shmem_doff_remove(dir, dentry);
 
 	dir->i_size -= BOGO_DIRENT_SIZE;
 	inode->i_ctime = dir->i_ctime = dir->i_mtime = current_time(inode);
@@ -3091,23 +3174,36 @@ static int shmem_rename2(struct mnt_idmap *idmap,
 {
 	struct inode *inode = d_inode(old_dentry);
 	int they_are_dirs = S_ISDIR(inode->i_mode);
+	int error;
 
 	if (flags & ~(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT))
 		return -EINVAL;
 
-	if (flags & RENAME_EXCHANGE)
+	if (flags & RENAME_EXCHANGE) {
+		shmem_doff_remove(old_dir, old_dentry);
+		shmem_doff_remove(new_dir, new_dentry);
+		error = shmem_doff_add(new_dir, old_dentry);
+		if (error)
+			return error;
+		error = shmem_doff_add(old_dir, new_dentry);
+		if (error)
+			return error;
 		return simple_rename_exchange(old_dir, old_dentry, new_dir, new_dentry);
+	}
 
 	if (!simple_empty(new_dentry))
 		return -ENOTEMPTY;
 
 	if (flags & RENAME_WHITEOUT) {
-		int error;
-
 		error = shmem_whiteout(idmap, old_dir, old_dentry);
 		if (error)
 			return error;
 	}
+
+	shmem_doff_remove(old_dir, old_dentry);
+	error = shmem_doff_add(new_dir, old_dentry);
+	if (error)
+		return error;
 
 	if (d_really_is_positive(new_dentry)) {
 		(void) shmem_unlink(new_dir, new_dentry);
@@ -3146,6 +3242,10 @@ static int shmem_symlink(struct mnt_idmap *idmap, struct inode *dir,
 				VM_NORESERVE);
 	if (!inode)
 		return -ENOSPC;
+
+	error = shmem_doff_add(dir, dentry);
+	if (error)
+		return error;
 
 	error = security_inode_init_security(inode, dir, &dentry->d_name,
 					     shmem_initxattrs, NULL);
@@ -3222,6 +3322,77 @@ static const char *shmem_get_link(struct dentry *dentry,
 	}
 	set_delayed_call(done, shmem_put_link, folio);
 	return folio_address(folio);
+}
+
+static loff_t shmem_dir_llseek(struct file *file, loff_t offset, int whence)
+{
+	switch (whence) {
+	case SEEK_CUR:
+		offset += file->f_pos;
+		fallthrough;
+	case SEEK_SET:
+		if (offset >= 0)
+			break;
+		fallthrough;
+	default:
+		return -EINVAL;
+	}
+	return vfs_setpos(file, offset, U32_MAX);
+}
+
+static bool shmem_dir_emit(struct dir_context *ctx, struct dentry *dentry)
+{
+	struct inode *inode = d_inode(dentry);
+
+	return ctx->actor(ctx, dentry->d_name.name, dentry->d_name.len,
+			  (loff_t)dentry->d_fsdata, inode->i_ino,
+			  fs_umode_to_dtype(inode->i_mode));
+}
+
+/**
+ * shmem_readdir - Emit entries starting at offset @ctx->pos
+ * @file: an open directory to iterate over
+ * @ctx: directory iteration context
+ *
+ * Caller must hold @file's i_rwsem to prevent insertion or removal of
+ * entries during this call.
+ *
+ * On entry, @ctx->pos contains an offset that represents the first entry
+ * to be read from the directory.
+ *
+ * The operation continues until there are no more entries to read, or
+ * until the ctx->actor indicates there is no more space in the caller's
+ * output buffer.
+ *
+ * On return, @ctx->pos contains an offset that will read the next entry
+ * in this directory when shmem_readdir() is called again with @ctx.
+ *
+ * Return values:
+ *   %0 - Complete
+ */
+static int shmem_readdir(struct file *file, struct dir_context *ctx)
+{
+	struct dentry *dentry, *dir = file->f_path.dentry;
+	unsigned long offset;
+
+	lockdep_assert_held(&d_inode(dir)->i_rwsem);
+
+	if (!dir_emit_dots(file, ctx))
+		goto out;
+	for (offset = ctx->pos - 1; offset < ULONG_MAX - 1;) {
+		dentry = shmem_doff_find_after(dir, &offset);
+		if (!dentry)
+			break;
+		if (!shmem_dir_emit(ctx, dentry)) {
+			dput(dentry);
+			break;
+		}
+		ctx->pos = offset + 1;
+		dput(dentry);
+	}
+
+out:
+	return 0;
 }
 
 #ifdef CONFIG_TMPFS_XATTR
@@ -3742,6 +3913,12 @@ static int shmem_show_options(struct seq_file *seq, struct dentry *root)
 	return 0;
 }
 
+#else /* CONFIG_TMPFS */
+
+static inline void shmem_doff_map_destroy(struct inode *dir)
+{
+}
+
 #endif /* CONFIG_TMPFS */
 
 static void shmem_put_super(struct super_block *sb)
@@ -3881,6 +4058,7 @@ static void shmem_free_in_core_inode(struct inode *inode)
 {
 	if (S_ISLNK(inode->i_mode))
 		kfree(inode->i_link);
+	shmem_doff_map_destroy(inode);
 	kmem_cache_free(shmem_inode_cachep, SHMEM_I(inode));
 }
 
@@ -3953,6 +4131,15 @@ static const struct inode_operations shmem_inode_operations = {
 	.fileattr_get	= shmem_fileattr_get,
 	.fileattr_set	= shmem_fileattr_set,
 #endif
+};
+
+static const struct file_operations shmem_dir_operations = {
+#ifdef CONFIG_TMPFS
+	.llseek		= shmem_dir_llseek,
+	.iterate_shared	= shmem_readdir,
+#endif
+	.read		= generic_read_dir,
+	.fsync		= noop_fsync,
 };
 
 static const struct inode_operations shmem_dir_inode_operations = {

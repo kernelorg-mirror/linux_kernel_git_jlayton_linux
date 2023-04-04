@@ -26,6 +26,8 @@ struct shmem_inode_info {
 	atomic_t		stop_eviction;	/* hold when working on inode */
 	struct timespec64	i_crtime;	/* file creation time */
 	unsigned int		fsflags;	/* flags for FS_IOC_[SG]ETFLAGS */
+	struct xarray		doff_map;	/* dir offset to entry mapping */
+	u32			next_doff;
 	struct inode		vfs_inode;
 };
 
