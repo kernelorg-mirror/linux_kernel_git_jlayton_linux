@@ -2070,6 +2070,74 @@ int file_remove_privs(struct file *file)
 }
 EXPORT_SYMBOL(file_remove_privs);
 
+/**
+ * current_mg_time - Return FS time (possibly fine-grained)
+ * @inode: inode.
+ *
+ * Return the current time truncated to the time granularity supported by
+ * the fs, as suitable for a ctime/mtime change. If the ctime is flagged
+ * as having been QUERIED, get a fine-grained timestamp.
+ */
+static struct timespec64 current_mg_time(struct inode *inode)
+{
+	struct timespec64 now;
+	atomic_long_t *pnsec = (atomic_long_t *)&inode->__i_ctime.tv_nsec;
+	long nsec = atomic_long_read(pnsec);
+
+	if (nsec & I_CTIME_QUERIED) {
+		ktime_get_real_ts64(&now);
+	} else {
+		struct timespec64 ctime;
+
+		ktime_get_coarse_real_ts64(&now);
+
+		/*
+		 * If we've recently fetched a fine-grained timestamp
+		 * then the coarse-grained one may still be earlier than the
+		 * existing one. Just keep the existing ctime if so.
+		 */
+		ctime = inode_get_ctime(inode);
+		if (timespec64_compare(&ctime, &now) > 0)
+			now = ctime;
+	}
+
+	return timestamp_truncate(now, inode);
+}
+
+/**
+ * current_time - Return FS time
+ * @inode: inode.
+ *
+ * Return the current time truncated to the time granularity supported by
+ * the fs.
+ *
+ * Note that inode and inode->sb cannot be NULL.
+ * Otherwise, the function warns and returns time without truncation.
+ */
+struct timespec64 current_time(struct inode *inode)
+{
+	struct timespec64 now;
+
+	ktime_get_coarse_real_ts64(&now);
+
+	return timestamp_truncate(now, inode);
+}
+EXPORT_SYMBOL(current_time);
+
+/**
+ * current_ctime - Return timestamp suitable for ctime update
+ * @inode: inode to eventually be updated
+ *
+ * Return the current time, which is usually coarse-grained but may be fine
+ * grained if the inode's existing ctime was queried since the last update.
+ */
+static struct timespec64 current_ctime(struct inode *inode)
+{
+	if (is_multigrain_ts(inode))
+		return current_mg_time(inode);
+	return current_time(inode);
+}
+
 static int inode_needs_update_time(struct inode *inode, struct timespec64 *now)
 {
 	int sync_it = 0;
@@ -2125,7 +2193,7 @@ int file_update_time(struct file *file)
 {
 	int ret;
 	struct inode *inode = file_inode(file);
-	struct timespec64 now = current_time(inode);
+	struct timespec64 now = current_ctime(inode);
 
 	ret = inode_needs_update_time(inode, &now);
 	if (ret <= 0)
@@ -2154,7 +2222,7 @@ static int file_modified_flags(struct file *file, int flags)
 {
 	int ret;
 	struct inode *inode = file_inode(file);
-	struct timespec64 now = current_time(inode);
+	struct timespec64 now = current_ctime(inode);
 
 	/*
 	 * Clear the security bits if the process is not being run by root.
@@ -2479,40 +2547,15 @@ struct timespec64 timestamp_truncate(struct timespec64 t, struct inode *inode)
 EXPORT_SYMBOL(timestamp_truncate);
 
 /**
- * current_time - Return FS time
- * @inode: inode.
- *
- * Return the current time truncated to the time granularity supported by
- * the fs.
- *
- * Note that inode and inode->sb cannot be NULL.
- * Otherwise, the function warns and returns time without truncation.
- */
-struct timespec64 current_time(struct inode *inode)
-{
-	struct timespec64 now;
-
-	ktime_get_coarse_real_ts64(&now);
-
-	if (unlikely(!inode->i_sb)) {
-		WARN(1, "current_time() called with uninitialized super_block in the inode");
-		return now;
-	}
-
-	return timestamp_truncate(now, inode);
-}
-EXPORT_SYMBOL(current_time);
-
-/**
  * inode_set_ctime_current - set the ctime to current_time
  * @inode: inode
  *
- * Set the inode->i_ctime to the current value for the inode. Returns
- * the current value that was assigned to i_ctime.
+ * Set the inode->__i_ctime to the current value for the inode. Returns
+ * the current value that was assigned to __i_ctime.
  */
 struct timespec64 inode_set_ctime_current(struct inode *inode)
 {
-	struct timespec64 now = current_time(inode);
+	struct timespec64 now = current_ctime(inode);
 
 	inode_set_ctime(inode, now.tv_sec, now.tv_nsec);
 	return now;
