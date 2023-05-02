@@ -416,7 +416,7 @@ void gfs2_dinode_out(const struct gfs2_inode *ip, void *buf)
 	str->di_eattr = cpu_to_be64(ip->i_eattr);
 	str->di_atime_nsec = cpu_to_be32(inode->i_atime.tv_nsec);
 	str->di_mtime_nsec = cpu_to_be32(inode->i_mtime.tv_nsec);
-	str->di_ctime_nsec = cpu_to_be32(inode->i_ctime.tv_nsec);
+	str->di_ctime_nsec = cpu_to_be32(ctime_nsec_peek(inode));
 }
 
 /**
