@@ -324,7 +324,7 @@ static void init_idisk_time(struct inode *inode)
 	struct f2fs_inode_info *fi = F2FS_I(inode);
 
 	fi->i_disk_time[0] = inode->i_atime;
-	fi->i_disk_time[1] = inode->i_ctime;
+	fi->i_disk_time[1] = ctime_peek(inode);
 	fi->i_disk_time[2] = inode->i_mtime;
 }
 
@@ -638,7 +638,7 @@ void f2fs_update_inode(struct inode *inode, struct page *node_page)
 	ri->i_ctime = cpu_to_le64(inode->i_ctime.tv_sec);
 	ri->i_mtime = cpu_to_le64(inode->i_mtime.tv_sec);
 	ri->i_atime_nsec = cpu_to_le32(inode->i_atime.tv_nsec);
-	ri->i_ctime_nsec = cpu_to_le32(inode->i_ctime.tv_nsec);
+	ri->i_ctime_nsec = cpu_to_le32(ctime_nsec_peek(inode));
 	ri->i_mtime_nsec = cpu_to_le32(inode->i_mtime.tv_nsec);
 	if (S_ISDIR(inode->i_mode))
 		ri->i_current_depth =
