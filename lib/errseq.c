@@ -36,11 +36,17 @@
 /* The low bits are designated for error code (max of MAX_ERRNO) */
 #define ERRSEQ_SHIFT		ilog2(MAX_ERRNO + 1)
 
-/* This bit is used as a flag to indicate whether the value has been seen */
+/* Error has been reported */
 #define ERRSEQ_SEEN		(1 << ERRSEQ_SHIFT)
 
+/* Must increment the counter on the next recorded error */
+#define ERRSEQ_MUST_INC		(1 << (ERRSEQ_SHIFT + 1))
+
 /* The lowest bit of the counter */
-#define ERRSEQ_CTR_INC		(1 << (ERRSEQ_SHIFT + 1))
+#define ERRSEQ_CTR_INC		(1 << (ERRSEQ_SHIFT + 2))
+
+/* For masking off the flag bits */
+#define ERRSEQ_FLAG_MASK	~(ERRSEQ_SEEN|ERRSEQ_MUST_INC)
 
 /**
  * errseq_set - set a errseq_t for later reporting
@@ -54,7 +60,7 @@
  *
  * Return: The previous value, primarily for debugging purposes. The
  * return value should not be used as a previously sampled value in later
- * calls as it will not have the SEEN flag set.
+ * calls as it will not have the MUST_INC flag set.
  */
 errseq_t errseq_set(errseq_t *eseq, int err)
 {
@@ -69,7 +75,7 @@ errseq_t errseq_set(errseq_t *eseq, int err)
 	 * also don't accept zero here as that would effectively clear a
 	 * previous error.
 	 */
-	old = READ_ONCE(*eseq);
+	old = errseq_fetch(eseq);
 
 	if (WARN(unlikely(err == 0 || (unsigned int)-err > MAX_ERRNO),
 				"err = %d\n", err))
@@ -79,10 +85,10 @@ errseq_t errseq_set(errseq_t *eseq, int err)
 		errseq_t new;
 
 		/* Clear out error bits and set new error */
-		new = (old & ~(MAX_ERRNO|ERRSEQ_SEEN)) | -err;
+		new = (old & ~(MAX_ERRNO|ERRSEQ_SEEN|ERRSEQ_MUST_INC)) | -err;
 
-		/* Only increment if someone has looked at it */
-		if (old & ERRSEQ_SEEN)
+		/* Only increment if marked for it */
+		if (old & ERRSEQ_MUST_INC)
 			new += ERRSEQ_CTR_INC;
 
 		/* If there would be no change, then call it done */
@@ -122,7 +128,7 @@ EXPORT_SYMBOL(errseq_set);
  */
 errseq_t errseq_sample(errseq_t *eseq)
 {
-	errseq_t old = READ_ONCE(*eseq);
+	errseq_t old = errseq_fetch(eseq);
 
 	/* If nobody has seen this error yet, then we can be the first. */
 	if (!(old & ERRSEQ_SEEN))
@@ -130,6 +136,33 @@ errseq_t errseq_sample(errseq_t *eseq)
 	return old;
 }
 EXPORT_SYMBOL(errseq_sample);
+
+/**
+ * errseq_sample_new() - Sample the errseq_t, ignoring earlier errors
+ * @eseq: Pointer to errseq_t to be sampled.
+ *
+ * This function allows callers to initialise their errseq_t variable.
+ * Any errors that occurred before this point will not be reported if
+ * this value is later used as a "since" value.
+ */
+errseq_t errseq_sample_new(errseq_t *eseq)
+{
+	errseq_t old = errseq_fetch(eseq);
+	errseq_t new = old;
+
+	/*
+	 * For the common case of no errors ever having been set, we can skip
+	 * marking the MUST_INC bit. Once an error has been set, the value
+	 * will never go back to zero.
+	 */
+	if (old != 0) {
+		new |= ERRSEQ_MUST_INC;
+		if (old != new)
+			cmpxchg(eseq, old, new);
+	}
+	return new;
+}
+EXPORT_SYMBOL(errseq_sample_new);
 
 /**
  * errseq_check() - Has an error occurred since a particular sample point?
@@ -144,9 +177,9 @@ EXPORT_SYMBOL(errseq_sample);
  */
 int errseq_check(errseq_t *eseq, errseq_t since)
 {
-	errseq_t cur = READ_ONCE(*eseq);
+	errseq_t cur = errseq_fetch(eseq) & ERRSEQ_FLAG_MASK;
 
-	if (likely(cur == since))
+	if (likely(cur == (since & ERRSEQ_FLAG_MASK)))
 		return 0;
 	return -(cur & MAX_ERRNO);
 }
@@ -182,7 +215,7 @@ int errseq_check_and_advance(errseq_t *eseq, errseq_t *since)
 	 * so that the common case of no error is handled without needing
 	 * to take the lock that protects the "since" value.
 	 */
-	old = READ_ONCE(*eseq);
+	old = errseq_fetch(eseq);
 	if (old != *since) {
 		/*
 		 * Set the flag and try to swap it into place if it has
@@ -192,11 +225,10 @@ int errseq_check_and_advance(errseq_t *eseq, errseq_t *since)
 		 * swap doesn't occur, then it has either been updated by a
 		 * writer who is altering the value in some way (updating
 		 * counter or resetting the error), or another reader who is
-		 * just setting the "seen" flag. Either outcome is OK, and we
-		 * can advance "since" and return an error based on what we
-		 * have.
+		 * just setting flags. Either outcome is OK, and we can
+		 * advance "since" and return an error based on what we have.
 		 */
-		new = old | ERRSEQ_SEEN;
+		new = old | ERRSEQ_SEEN | ERRSEQ_MUST_INC;
 		if (new != old)
 			cmpxchg(eseq, old, new);
 		*since = new;

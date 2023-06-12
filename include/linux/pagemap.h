@@ -102,11 +102,27 @@ static inline int filemap_check_wb_err(struct address_space *mapping,
  * @mapping: mapping to be sampled
  *
  * Writeback errors are always reported relative to a particular sample point
- * in the past. This function provides those sample points.
+ * in the past. This function provides those sample points. In the event that
+ * there are unseen errors at the time of the sample, they will be reported
+ * during the next check.
  */
 static inline errseq_t filemap_sample_wb_err(struct address_space *mapping)
 {
 	return errseq_sample(&mapping->wb_err);
+}
+
+/**
+ * filemap_peek_wb_err - peek at the current errseq_t to test for later errors
+ * @mapping: mapping to peek
+ *
+ * Writeback errors are always reported relative to a particular sample point
+ * in the past. This function provides those such sample points. If there are
+ * unseen errors present at the time of the sample, then they will be ignored
+ * in later checks.
+ */
+static inline errseq_t filemap_sample_new_wb_err(struct address_space *mapping)
+{
+	return errseq_sample_new(&mapping->wb_err);
 }
 
 /**
