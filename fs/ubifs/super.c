@@ -146,8 +146,8 @@ struct inode *ubifs_iget(struct super_block *sb, unsigned long inum)
 	inode->i_atime.tv_nsec = le32_to_cpu(ino->atime_nsec);
 	inode->i_mtime.tv_sec  = (int64_t)le64_to_cpu(ino->mtime_sec);
 	inode->i_mtime.tv_nsec = le32_to_cpu(ino->mtime_nsec);
-	inode->i_ctime.tv_sec  = (int64_t)le64_to_cpu(ino->ctime_sec);
-	inode->i_ctime.tv_nsec = le32_to_cpu(ino->ctime_nsec);
+	inode_ctime_set_sec(inode, (int64_t)le64_to_cpu(ino->ctime_sec));
+	inode_ctime_set_nsec(inode, le32_to_cpu(ino->ctime_nsec));
 	inode->i_mode = le32_to_cpu(ino->mode);
 	inode->i_size = le64_to_cpu(ino->size);
 

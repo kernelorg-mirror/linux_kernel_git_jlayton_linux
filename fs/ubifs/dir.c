@@ -96,8 +96,7 @@ struct inode *ubifs_new_inode(struct ubifs_info *c, struct inode *dir,
 	inode->i_flags |= S_NOCMTIME;
 
 	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
-	inode->i_mtime = inode->i_atime = inode->i_ctime =
-			 current_time(inode);
+	inode->i_mtime = inode->i_atime = inode_ctime_set_current(inode);
 	inode->i_mapping->nrpages = 0;
 
 	if (!is_xattr) {
@@ -325,7 +324,7 @@ static int ubifs_create(struct mnt_idmap *idmap, struct inode *dir,
 	mutex_lock(&dir_ui->ui_mutex);
 	dir->i_size += sz_change;
 	dir_ui->ui_size = dir->i_size;
-	dir->i_mtime = dir->i_ctime = inode->i_ctime;
+	dir->i_mtime = inode_ctime_set(inode, inode_ctime_peek(inode));
 	err = ubifs_jnl_update(c, dir, &nm, inode, 0, 0);
 	if (err)
 		goto out_cancel;
@@ -765,10 +764,10 @@ static int ubifs_link(struct dentry *old_dentry, struct inode *dir,
 
 	inc_nlink(inode);
 	ihold(inode);
-	inode->i_ctime = current_time(inode);
+	inode_ctime_set_current(inode);
 	dir->i_size += sz_change;
 	dir_ui->ui_size = dir->i_size;
-	dir->i_mtime = dir->i_ctime = inode->i_ctime;
+	dir->i_mtime = inode_ctime_set(inode, inode_ctime_peek(inode));
 	err = ubifs_jnl_update(c, dir, &nm, inode, 0, 0);
 	if (err)
 		goto out_cancel;
@@ -838,11 +837,11 @@ static int ubifs_unlink(struct inode *dir, struct dentry *dentry)
 	}
 
 	lock_2_inodes(dir, inode);
-	inode->i_ctime = current_time(dir);
+	inode_ctime_set(inode, current_time(dir));
 	drop_nlink(inode);
 	dir->i_size -= sz_change;
 	dir_ui->ui_size = dir->i_size;
-	dir->i_mtime = dir->i_ctime = inode->i_ctime;
+	dir->i_mtime = inode_ctime_set(inode, inode_ctime_peek(inode));
 	err = ubifs_jnl_update(c, dir, &nm, inode, 1, 0);
 	if (err)
 		goto out_cancel;
@@ -940,12 +939,12 @@ static int ubifs_rmdir(struct inode *dir, struct dentry *dentry)
 	}
 
 	lock_2_inodes(dir, inode);
-	inode->i_ctime = current_time(dir);
+	inode_ctime_set(inode, current_time(dir));
 	clear_nlink(inode);
 	drop_nlink(dir);
 	dir->i_size -= sz_change;
 	dir_ui->ui_size = dir->i_size;
-	dir->i_mtime = dir->i_ctime = inode->i_ctime;
+	dir->i_mtime = inode_ctime_set(inode, inode_ctime_peek(inode));
 	err = ubifs_jnl_update(c, dir, &nm, inode, 1, 0);
 	if (err)
 		goto out_cancel;
@@ -1019,7 +1018,7 @@ static int ubifs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	inc_nlink(dir);
 	dir->i_size += sz_change;
 	dir_ui->ui_size = dir->i_size;
-	dir->i_mtime = dir->i_ctime = inode->i_ctime;
+	dir->i_mtime = inode_ctime_set(inode, inode_ctime_peek(inode));
 	err = ubifs_jnl_update(c, dir, &nm, inode, 0, 0);
 	if (err) {
 		ubifs_err(c, "cannot create directory, error %d", err);
@@ -1110,7 +1109,7 @@ static int ubifs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	mutex_lock(&dir_ui->ui_mutex);
 	dir->i_size += sz_change;
 	dir_ui->ui_size = dir->i_size;
-	dir->i_mtime = dir->i_ctime = inode->i_ctime;
+	dir->i_mtime = inode_ctime_set(inode, inode_ctime_peek(inode));
 	err = ubifs_jnl_update(c, dir, &nm, inode, 0, 0);
 	if (err)
 		goto out_cancel;
@@ -1210,7 +1209,7 @@ static int ubifs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	mutex_lock(&dir_ui->ui_mutex);
 	dir->i_size += sz_change;
 	dir_ui->ui_size = dir->i_size;
-	dir->i_mtime = dir->i_ctime = inode->i_ctime;
+	dir->i_mtime = inode_ctime_set(inode, inode_ctime_peek(inode));
 	err = ubifs_jnl_update(c, dir, &nm, inode, 0, 0);
 	if (err)
 		goto out_cancel;
@@ -1415,7 +1414,7 @@ static int do_rename(struct inode *old_dir, struct dentry *old_dentry,
 	 * rename.
 	 */
 	time = current_time(old_dir);
-	old_inode->i_ctime = time;
+	inode_ctime_set(old_inode, time);
 
 	/* We must adjust parent link count when renaming directories */
 	if (is_dir) {
@@ -1444,8 +1443,8 @@ static int do_rename(struct inode *old_dir, struct dentry *old_dentry,
 
 	old_dir->i_size -= old_sz;
 	ubifs_inode(old_dir)->ui_size = old_dir->i_size;
-	old_dir->i_mtime = old_dir->i_ctime = time;
-	new_dir->i_mtime = new_dir->i_ctime = time;
+	old_dir->i_mtime = inode_ctime_set(old_dir, time);
+	new_dir->i_mtime = inode_ctime_set(new_dir, time);
 
 	/*
 	 * And finally, if we unlinked a direntry which happened to have the
@@ -1462,7 +1461,7 @@ static int do_rename(struct inode *old_dir, struct dentry *old_dentry,
 			clear_nlink(new_inode);
 		else
 			drop_nlink(new_inode);
-		new_inode->i_ctime = time;
+		inode_ctime_set(new_inode, time);
 	} else {
 		new_dir->i_size += new_sz;
 		ubifs_inode(new_dir)->ui_size = new_dir->i_size;
@@ -1589,10 +1588,10 @@ static int ubifs_xrename(struct inode *old_dir, struct dentry *old_dentry,
 	lock_4_inodes(old_dir, new_dir, NULL, NULL);
 
 	time = current_time(old_dir);
-	fst_inode->i_ctime = time;
-	snd_inode->i_ctime = time;
-	old_dir->i_mtime = old_dir->i_ctime = time;
-	new_dir->i_mtime = new_dir->i_ctime = time;
+	inode_ctime_set(fst_inode, time);
+	inode_ctime_set(snd_inode, time);
+	old_dir->i_mtime = inode_ctime_set(old_dir, time);
+	new_dir->i_mtime = inode_ctime_set(new_dir, time);
 
 	if (old_dir != new_dir) {
 		if (S_ISDIR(fst_inode->i_mode) && !S_ISDIR(snd_inode->i_mode)) {
