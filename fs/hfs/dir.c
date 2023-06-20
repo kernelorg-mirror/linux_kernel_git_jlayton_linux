@@ -263,7 +263,7 @@ static int hfs_remove(struct inode *dir, struct dentry *dentry)
 	if (res)
 		return res;
 	clear_nlink(inode);
-	inode->i_ctime = current_time(inode);
+	inode_ctime_set_current(inode);
 	hfs_delete_inode(inode);
 	mark_inode_dirty(inode);
 	return 0;

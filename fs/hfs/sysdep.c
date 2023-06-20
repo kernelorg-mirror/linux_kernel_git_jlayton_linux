@@ -28,7 +28,7 @@ static int hfs_revalidate_dentry(struct dentry *dentry, unsigned int flags)
 	/* fix up inode on a timezone change */
 	diff = sys_tz.tz_minuteswest * 60 - HFS_I(inode)->tz_secondswest;
 	if (diff) {
-		inode->i_ctime.tv_sec += diff;
+		inode_ctime_set_sec(inode, inode_ctime_peek(inode).tv_sec + diff);
 		inode->i_atime.tv_sec += diff;
 		inode->i_mtime.tv_sec += diff;
 		HFS_I(inode)->tz_secondswest += diff;
