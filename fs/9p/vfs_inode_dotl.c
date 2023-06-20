@@ -640,14 +640,15 @@ v9fs_stat2inode_dotl(struct p9_stat_dotl *stat, struct inode *inode,
 {
 	umode_t mode;
 	struct v9fs_inode *v9inode = V9FS_I(inode);
+	struct timespec64 ctime = { .tv_sec  = stat->st_ctime_sec,
+				    .tv_nsec = stat->st_ctime_nsec };
 
 	if ((stat->st_result_mask & P9_STATS_BASIC) == P9_STATS_BASIC) {
 		inode->i_atime.tv_sec = stat->st_atime_sec;
 		inode->i_atime.tv_nsec = stat->st_atime_nsec;
 		inode->i_mtime.tv_sec = stat->st_mtime_sec;
 		inode->i_mtime.tv_nsec = stat->st_mtime_nsec;
-		inode->i_ctime.tv_sec = stat->st_ctime_sec;
-		inode->i_ctime.tv_nsec = stat->st_ctime_nsec;
+		inode_ctime_set(inode, ctime);
 		inode->i_uid = stat->st_uid;
 		inode->i_gid = stat->st_gid;
 		set_nlink(inode, stat->st_nlink);
@@ -668,10 +669,8 @@ v9fs_stat2inode_dotl(struct p9_stat_dotl *stat, struct inode *inode,
 			inode->i_mtime.tv_sec = stat->st_mtime_sec;
 			inode->i_mtime.tv_nsec = stat->st_mtime_nsec;
 		}
-		if (stat->st_result_mask & P9_STATS_CTIME) {
-			inode->i_ctime.tv_sec = stat->st_ctime_sec;
-			inode->i_ctime.tv_nsec = stat->st_ctime_nsec;
-		}
+		if (stat->st_result_mask & P9_STATS_CTIME)
+			inode_ctime_set(inode, ctime);
 		if (stat->st_result_mask & P9_STATS_UID)
 			inode->i_uid = stat->st_uid;
 		if (stat->st_result_mask & P9_STATS_GID)
