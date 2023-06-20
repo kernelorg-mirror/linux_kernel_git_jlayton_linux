@@ -361,11 +361,11 @@ again2:
 	    downcall.resp.getattr.attributes.atime;
 	inode->i_mtime.tv_sec = (time64_t)new_op->
 	    downcall.resp.getattr.attributes.mtime;
-	inode->i_ctime.tv_sec = (time64_t)new_op->
-	    downcall.resp.getattr.attributes.ctime;
+	inode_ctime_set_sec(inode,
+			    (time64_t)new_op->downcall.resp.getattr.attributes.ctime);
 	inode->i_atime.tv_nsec = 0;
 	inode->i_mtime.tv_nsec = 0;
-	inode->i_ctime.tv_nsec = 0;
+	inode_ctime_set_nsec(inode, 0);
 
 	/* special case: mark the root inode as sticky */
 	inode->i_mode = type | (is_root_handle(inode) ? S_ISVTX : 0) |
