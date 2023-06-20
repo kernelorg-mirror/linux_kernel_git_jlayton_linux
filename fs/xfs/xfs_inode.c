@@ -846,7 +846,7 @@ xfs_init_new_inode(
 	tv = current_time(inode);
 	inode->i_mtime = tv;
 	inode->i_atime = tv;
-	inode->i_ctime = tv;
+	inode_ctime_set(inode, tv);
 
 	ip->i_extsize = 0;
 	ip->i_diflags = 0;
