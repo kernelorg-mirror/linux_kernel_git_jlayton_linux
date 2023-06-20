@@ -19,6 +19,7 @@ struct inode *affs_iget(struct super_block *sb, unsigned long ino)
 {
 	struct affs_sb_info	*sbi = AFFS_SB(sb);
 	struct buffer_head	*bh;
+	struct timespec64	ctime;
 	struct affs_tail	*tail;
 	struct inode		*inode;
 	u32			 block;
@@ -149,13 +150,13 @@ struct inode *affs_iget(struct super_block *sb, unsigned long ino)
 		break;
 	}
 
-	inode->i_mtime.tv_sec = inode->i_atime.tv_sec = inode->i_ctime.tv_sec
-		       = (be32_to_cpu(tail->change.days) * 86400LL +
-		         be32_to_cpu(tail->change.mins) * 60 +
-			 be32_to_cpu(tail->change.ticks) / 50 +
-			 AFFS_EPOCH_DELTA) +
-			 sys_tz.tz_minuteswest * 60;
-	inode->i_mtime.tv_nsec = inode->i_ctime.tv_nsec = inode->i_atime.tv_nsec = 0;
+	ctime.tv_sec = (be32_to_cpu(tail->change.days) * 86400LL +
+		        be32_to_cpu(tail->change.mins) * 60 +
+			be32_to_cpu(tail->change.ticks) / 50 +
+			AFFS_EPOCH_DELTA) +
+			sys_tz.tz_minuteswest * 60;
+	ctime.tv_nsec = 0;
+	inode->i_atime = inode->i_mtime = inode_ctime_set(inode, ctime);
 	affs_brelse(bh);
 	unlock_new_inode(inode);
 	return inode;
@@ -314,7 +315,7 @@ affs_new_inode(struct inode *dir)
 	inode->i_gid     = current_fsgid();
 	inode->i_ino     = block;
 	set_nlink(inode, 1);
-	inode->i_mtime   = inode->i_atime = inode->i_ctime = current_time(inode);
+	inode->i_mtime   = inode->i_atime = inode_ctime_set_current(inode);
 	atomic_set(&AFFS_I(inode)->i_opencnt, 0);
 	AFFS_I(inode)->i_blkcnt = 0;
 	AFFS_I(inode)->i_lc = NULL;
