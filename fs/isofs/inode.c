@@ -1425,10 +1425,10 @@ static int isofs_read_inode(struct inode *inode, int relocated)
 
 	inode->i_mtime.tv_sec =
 	inode->i_atime.tv_sec =
-	inode->i_ctime.tv_sec = iso_date(de->date, high_sierra);
+	inode_ctime_set_sec(inode, iso_date(de->date, high_sierra));
 	inode->i_mtime.tv_nsec =
 	inode->i_atime.tv_nsec =
-	inode->i_ctime.tv_nsec = 0;
+	inode_ctime_set_nsec(inode, 0);
 
 	ei->i_first_extent = (isonum_733(de->extent) +
 			isonum_711(de->ext_attr_length));
