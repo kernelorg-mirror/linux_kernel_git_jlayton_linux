@@ -690,6 +690,7 @@ static int ocfs2_link(struct dentry *old_dentry,
 	struct ocfs2_dinode *fe = NULL;
 	struct ocfs2_super *osb = OCFS2_SB(dir->i_sb);
 	struct ocfs2_dir_lookup_result lookup = { NULL, };
+	struct timespec64 ts;
 	sigset_t oldset;
 	u64 old_de_ino;
 
@@ -793,10 +794,10 @@ static int ocfs2_link(struct dentry *old_dentry,
 	}
 
 	inc_nlink(inode);
-	inode->i_ctime = current_time(inode);
+	ts = inode_ctime_set_current(inode);
 	ocfs2_set_links_count(fe, inode->i_nlink);
-	fe->i_ctime = cpu_to_le64(inode->i_ctime.tv_sec);
-	fe->i_ctime_nsec = cpu_to_le32(inode->i_ctime.tv_nsec);
+	fe->i_ctime = cpu_to_le64(ts.tv_sec);
+	fe->i_ctime_nsec = cpu_to_le32(ts.tv_nsec);
 	ocfs2_journal_dirty(handle, fe_bh);
 
 	err = ocfs2_add_entry(handle, dentry, inode,
@@ -995,7 +996,7 @@ static int ocfs2_unlink(struct inode *dir,
 	ocfs2_set_links_count(fe, inode->i_nlink);
 	ocfs2_journal_dirty(handle, fe_bh);
 
-	dir->i_ctime = dir->i_mtime = current_time(dir);
+	dir->i_mtime = inode_ctime_set_current(dir);
 	if (S_ISDIR(inode->i_mode))
 		drop_nlink(dir);
 
@@ -1537,7 +1538,7 @@ static int ocfs2_rename(struct mnt_idmap *idmap,
 					 new_dir_bh, &target_insert);
 	}
 
-	old_inode->i_ctime = current_time(old_inode);
+	inode_ctime_set_current(old_inode);
 	mark_inode_dirty(old_inode);
 
 	status = ocfs2_journal_access_di(handle, INODE_CACHE(old_inode),
@@ -1546,8 +1547,8 @@ static int ocfs2_rename(struct mnt_idmap *idmap,
 	if (status >= 0) {
 		old_di = (struct ocfs2_dinode *) old_inode_bh->b_data;
 
-		old_di->i_ctime = cpu_to_le64(old_inode->i_ctime.tv_sec);
-		old_di->i_ctime_nsec = cpu_to_le32(old_inode->i_ctime.tv_nsec);
+		old_di->i_ctime = cpu_to_le64(inode_ctime_peek(old_inode).tv_sec);
+		old_di->i_ctime_nsec = cpu_to_le32(inode_ctime_peek(old_inode).tv_nsec);
 		ocfs2_journal_dirty(handle, old_inode_bh);
 	} else
 		mlog_errno(status);
@@ -1586,9 +1587,9 @@ static int ocfs2_rename(struct mnt_idmap *idmap,
 
 	if (new_inode) {
 		drop_nlink(new_inode);
-		new_inode->i_ctime = current_time(new_inode);
+		inode_ctime_set_current(new_inode);
 	}
-	old_dir->i_ctime = old_dir->i_mtime = current_time(old_dir);
+	old_dir->i_mtime = inode_ctime_set_current(old_dir);
 
 	if (update_dot_dot) {
 		status = ocfs2_update_entry(old_inode, handle,
@@ -1610,7 +1611,8 @@ static int ocfs2_rename(struct mnt_idmap *idmap,
 
 	if (old_dir != new_dir) {
 		/* Keep the same times on both directories.*/
-		new_dir->i_ctime = new_dir->i_mtime = old_dir->i_ctime;
+		new_dir->i_mtime = inode_ctime_peek(old_dir);
+		inode_ctime_set(new_dir, new_dir->i_mtime);
 
 		/*
 		 * This will also pick up the i_nlink change from the
