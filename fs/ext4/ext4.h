@@ -3823,6 +3823,26 @@ static inline int ext4_buffer_uptodate(struct buffer_head *bh)
 	return buffer_uptodate(bh);
 }
 
+static inline void ext4_inode_set_ctime(struct inode *inode, struct ext4_inode *raw_inode)
+{
+	struct timespec64 ctime = inode_ctime_peek(inode);
+
+	if (EXT4_FITS_IN_INODE(raw_inode, EXT4_I(inode), i_ctime_extra)) {
+		raw_inode->i_ctime = cpu_to_le32(ctime.tv_sec);
+		raw_inode->i_ctime_extra = ext4_encode_extra_time(&ctime);
+	} else {
+		raw_inode->i_ctime = cpu_to_le32(clamp_t(int32_t, ctime.tv_sec, S32_MIN, S32_MAX));
+	}
+}
+
+static inline void ext4_inode_get_ctime(struct inode *inode, const struct ext4_inode *raw_inode)
+{
+	struct timespec64 ctime = { .tv_sec = (signed)le32_to_cpu(raw_inode->i_ctime) };
+
+	if (EXT4_FITS_IN_INODE(raw_inode, EXT4_I(inode), i_ctime_extra))
+		ext4_decode_extra_time(&ctime, raw_inode->i_ctime_extra);
+	inode_ctime_set(inode, ctime);
+}
 #endif	/* __KERNEL__ */
 
 #define EFSBADCRC	EBADMSG		/* Bad CRC detected */
