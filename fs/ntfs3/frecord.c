@@ -3264,6 +3264,7 @@ int ni_write_inode(struct inode *inode, int sync, const char *hint)
 
 	if (is_rec_inuse(ni->mi.mrec) &&
 	    !(sbi->flags & NTFS_FLAGS_LOG_REPLAYING) && inode->i_nlink) {
+		struct timespec64 ctime;
 		bool modified = false;
 
 		/* Update times in standard attribute. */
@@ -3280,7 +3281,8 @@ int ni_write_inode(struct inode *inode, int sync, const char *hint)
 			modified = true;
 		}
 
-		dup.c_time = kernel2nt(&inode->i_ctime);
+		ctime = inode_ctime_peek(inode);
+		dup.c_time = kernel2nt(&ctime);
 		if (std->c_time != dup.c_time) {
 			std->c_time = dup.c_time;
 			modified = true;
