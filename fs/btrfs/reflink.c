@@ -29,10 +29,9 @@ static int clone_finish_inode_update(struct btrfs_trans_handle *trans,
 	int ret;
 
 	inode_inc_iversion(inode);
-	if (!no_time_update) {
-		inode->i_mtime = current_time(inode);
-		inode->i_ctime = inode->i_mtime;
-	}
+	if (!no_time_update)
+		inode->i_mtime = inode_ctime_set_current(inode);
+
 	/*
 	 * We round up to the block size at eof when determining which
 	 * extents to clone above, but shouldn't round up the file size.
