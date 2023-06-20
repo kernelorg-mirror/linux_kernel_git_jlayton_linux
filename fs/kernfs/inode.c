@@ -152,7 +152,7 @@ static inline void set_default_inode_attr(struct inode *inode, umode_t mode)
 {
 	inode->i_mode = mode;
 	inode->i_atime = inode->i_mtime =
-		inode->i_ctime = current_time(inode);
+		inode_ctime_set_current(inode);
 }
 
 static inline void set_inode_attr(struct inode *inode,
@@ -162,7 +162,7 @@ static inline void set_inode_attr(struct inode *inode,
 	inode->i_gid = attrs->ia_gid;
 	inode->i_atime = attrs->ia_atime;
 	inode->i_mtime = attrs->ia_mtime;
-	inode->i_ctime = attrs->ia_ctime;
+	inode_ctime_set(inode, attrs->ia_ctime);
 }
 
 static void kernfs_refresh_inode(struct kernfs_node *kn, struct inode *inode)
