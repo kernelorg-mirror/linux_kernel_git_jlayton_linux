@@ -202,8 +202,8 @@ struct inode *sysv_iget(struct super_block *sb, unsigned int ino)
 	inode->i_size = fs32_to_cpu(sbi, raw_inode->i_size);
 	inode->i_atime.tv_sec = fs32_to_cpu(sbi, raw_inode->i_atime);
 	inode->i_mtime.tv_sec = fs32_to_cpu(sbi, raw_inode->i_mtime);
-	inode->i_ctime.tv_sec = fs32_to_cpu(sbi, raw_inode->i_ctime);
-	inode->i_ctime.tv_nsec = 0;
+	inode_ctime_set_sec(inode, fs32_to_cpu(sbi, raw_inode->i_ctime));
+	inode_ctime_set_nsec(inode, 0);
 	inode->i_atime.tv_nsec = 0;
 	inode->i_mtime.tv_nsec = 0;
 	inode->i_blocks = 0;
@@ -256,7 +256,7 @@ static int __sysv_write_inode(struct inode *inode, int wait)
 	raw_inode->i_size = cpu_to_fs32(sbi, inode->i_size);
 	raw_inode->i_atime = cpu_to_fs32(sbi, inode->i_atime.tv_sec);
 	raw_inode->i_mtime = cpu_to_fs32(sbi, inode->i_mtime.tv_sec);
-	raw_inode->i_ctime = cpu_to_fs32(sbi, inode->i_ctime.tv_sec);
+	raw_inode->i_ctime = cpu_to_fs32(sbi, inode_ctime_peek(inode).tv_sec);
 
 	si = SYSV_I(inode);
 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
