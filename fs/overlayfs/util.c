@@ -1202,6 +1202,6 @@ void ovl_copyattr(struct inode *inode)
 	inode->i_mode = realinode->i_mode;
 	inode->i_atime = realinode->i_atime;
 	inode->i_mtime = realinode->i_mtime;
-	inode->i_ctime = realinode->i_ctime;
+	inode_ctime_set(inode, inode_ctime_peek(realinode));
 	i_size_write(inode, i_size_read(realinode));
 }
