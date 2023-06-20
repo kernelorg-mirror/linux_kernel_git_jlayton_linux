@@ -110,10 +110,10 @@ static inline void dip2vip_cpy(struct vxfs_sb_info *sbi,
 	inode->i_size = vip->vii_size;
 
 	inode->i_atime.tv_sec = vip->vii_atime;
-	inode->i_ctime.tv_sec = vip->vii_ctime;
+	inode_ctime_set_sec(inode, vip->vii_ctime);
 	inode->i_mtime.tv_sec = vip->vii_mtime;
 	inode->i_atime.tv_nsec = 0;
-	inode->i_ctime.tv_nsec = 0;
+	inode_ctime_set_nsec(inode, 0);
 	inode->i_mtime.tv_nsec = 0;
 
 	inode->i_blocks = vip->vii_blocks;
