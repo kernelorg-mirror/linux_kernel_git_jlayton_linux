@@ -1,8 +1,9 @@
 @@
 struct inode *inode;
+expression E1, E2;
 @@
-- inode->i_ctime = current_time(inode)
-+ inode_set_ctime_current(inode)
+- inode->i_ctime = E1 = E2 = current_time(inode)
++ E1 = E2 = inode_set_ctime_current(inode)
 
 @@
 struct inode *inode;
@@ -10,6 +11,12 @@ expression E1;
 @@
 - inode->i_ctime = E1 = current_time(inode)
 + E1 = inode_set_ctime_current(inode)
+
+@@
+struct inode *inode;
+@@
+- inode->i_ctime = current_time(inode)
++ inode_set_ctime_current(inode)
 
 @@
 struct inode *inode;
