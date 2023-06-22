@@ -390,7 +390,9 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 	inode->i_private = private;
 
 	if (record->time.tv_sec)
-		inode->i_mtime = inode_get_ctime(inode) = record->time;
+		inode->i_mtime = inode_set_ctime(inode,
+						 record->time.tv_sec,
+						 record->time.tv_nsec);
 
 	d_add(dentry, inode);
 
