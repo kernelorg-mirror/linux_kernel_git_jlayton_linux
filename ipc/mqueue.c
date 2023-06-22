@@ -656,7 +656,7 @@ static ssize_t mqueue_read_file(struct file *filp, char __user *u_data,
 	if (ret <= 0)
 		return ret;
 
-	file_inode(filp)->i_atime = file_inode(filp)->i_ctime = current_time(file_inode(filp));
+	file_inode(filp)->i_atime = current_time(file_inode(filp));
 	return ret;
 }
 
