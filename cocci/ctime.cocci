@@ -13,6 +13,15 @@ expression E1;
 
 @@
 struct inode *inode;
+expression E1;
+@@
+- E1 = current_time(inode)
++ E1 = inode_set_ctime_current(inode)
+...
+- inode->i_ctime = E1;
+
+@@
+struct inode *inode;
 struct timespec64 ts;
 @@
 - inode->i_ctime = ts
