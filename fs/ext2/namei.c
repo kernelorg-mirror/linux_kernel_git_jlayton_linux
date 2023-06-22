@@ -292,7 +292,7 @@ static int ext2_unlink(struct inode * dir, struct dentry *dentry)
 	if (err)
 		goto out;
 
-	inode_get_ctime(inode) = inode_get_ctime(dir);
+	inode_set_ctime_current(inode);
 	inode_dec_link_count(inode);
 	err = 0;
 out:
