@@ -22,9 +22,12 @@ static inline void fsstack_copy_attr_atime(struct inode *dest,
 static inline void fsstack_copy_attr_times(struct inode *dest,
 					   const struct inode *src)
 {
+	struct timespec64 ctime;
+
 	dest->i_atime = src->i_atime;
 	dest->i_mtime = src->i_mtime;
-	dest->i_ctime = src->i_ctime;
+	ctime = inode_get_ctime(src);
+	inode_set_ctime(dest, ctime.tv_sec, ctime.tv_nsec);
 }
 
 #endif /* _LINUX_FS_STACK_H */
