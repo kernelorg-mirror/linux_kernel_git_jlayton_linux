@@ -20,10 +20,15 @@ struct timespec64 ts;
 
 @@
 struct inode *inode;
-expression sec, E1, E2;
+expression sec, E1, E2, E3;
 @@
+(
 - inode->i_ctime.tv_sec = sec
 + inode_set_ctime(inode, sec, 0)
+|
+- E3 = inode->i_ctime.tv_sec = sec
++ E3 = inode_set_ctime(inode, sec, 0).tv_sec
+)
 ...
 (
 - inode->i_ctime.tv_nsec = 0;
