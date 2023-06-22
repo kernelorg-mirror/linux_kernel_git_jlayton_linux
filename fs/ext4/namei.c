@@ -3197,7 +3197,8 @@ static int ext4_rmdir(struct inode *dir, struct dentry *dentry)
 	 * recovery. */
 	inode->i_size = 0;
 	ext4_orphan_add(handle, inode);
-	inode_get_ctime(dir) = dir->i_mtime = inode_set_ctime_current(inode);
+	inode_set_ctime_current(inode);
+	dir->i_mtime = inode_set_ctime_current(dir);
 	retval = ext4_mark_inode_dirty(handle, inode);
 	if (retval)
 		goto end_rmdir;

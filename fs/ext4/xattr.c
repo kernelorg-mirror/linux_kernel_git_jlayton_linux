@@ -362,7 +362,7 @@ static u64 ext4_xattr_inode_get_ref(struct inode *ea_inode)
 
 static void ext4_xattr_inode_set_ref(struct inode *ea_inode, u64 ref_count)
 {
-	inode_get_ctime(ea_inode).tv_sec = (u32)(ref_count >> 32);
+	inode_set_ctime(ea_inode, (u32)(ref_count >> 32), 0);
 	inode_set_iversion_raw(ea_inode, ref_count & 0xffffffff);
 }
 

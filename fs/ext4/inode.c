@@ -4275,7 +4275,7 @@ static int ext4_fill_raw_inode(struct inode *inode, struct ext4_inode *raw_inode
 	}
 	raw_inode->i_links_count = cpu_to_le16(inode->i_nlink);
 
-	EXT4_INODE_SET_XTIME(i_ctime, inode, raw_inode);
+	ext4_inode_set_ctime(inode, raw_inode);
 	EXT4_INODE_SET_XTIME(i_mtime, inode, raw_inode);
 	EXT4_INODE_SET_XTIME(i_atime, inode, raw_inode);
 	EXT4_EINODE_SET_XTIME(i_crtime, ei, raw_inode);
@@ -4884,7 +4884,7 @@ struct inode *__ext4_iget(struct super_block *sb, unsigned long ino,
 		}
 	}
 
-	EXT4_INODE_GET_XTIME(i_ctime, inode, raw_inode);
+	ext4_inode_get_ctime(inode, raw_inode);
 	EXT4_INODE_GET_XTIME(i_mtime, inode, raw_inode);
 	EXT4_INODE_GET_XTIME(i_atime, inode, raw_inode);
 	EXT4_EINODE_GET_XTIME(i_crtime, ei, raw_inode);
@@ -5007,7 +5007,7 @@ static void __ext4_update_other_inode_time(struct super_block *sb,
 		spin_unlock(&inode->i_lock);
 
 		spin_lock(&ei->i_raw_lock);
-		EXT4_INODE_SET_XTIME(i_ctime, inode, raw_inode);
+		ext4_inode_get_ctime(inode, raw_inode);
 		EXT4_INODE_SET_XTIME(i_mtime, inode, raw_inode);
 		EXT4_INODE_SET_XTIME(i_atime, inode, raw_inode);
 		ext4_inode_csum_set(inode, raw_inode, ei);
@@ -5402,9 +5402,8 @@ int ext4_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 			 * Update c/mtime on truncate up, ext4_truncate() will
 			 * update c/mtime in shrink case below
 			 */
-			if (!shrink) {
+			if (!shrink)
 				inode->i_mtime = inode_set_ctime_current(inode);
-			}
 
 			if (shrink)
 				ext4_fc_track_range(handle, inode,

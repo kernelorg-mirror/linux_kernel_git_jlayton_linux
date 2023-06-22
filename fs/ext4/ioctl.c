@@ -449,7 +449,8 @@ static long swap_inode_boot_loader(struct super_block *sb,
 	diff = size - size_bl;
 	swap_inode_data(inode, inode_bl);
 
-	inode_get_ctime(inode_bl) = inode_set_ctime_current(inode);
+	inode_set_ctime_current(inode);
+	inode_set_ctime_current(inode_bl);
 	inode_inc_iversion(inode);
 
 	inode->i_generation = get_random_u32();

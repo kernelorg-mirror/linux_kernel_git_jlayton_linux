@@ -3777,7 +3777,7 @@ static inline int ext4_buffer_uptodate(struct buffer_head *bh)
 
 static inline void ext4_inode_set_ctime(struct inode *inode, struct ext4_inode *raw_inode)
 {
-	struct timespec64 ctime = inode_ctime_peek(inode);
+	struct timespec64 ctime = inode_get_ctime(inode);
 
 	if (EXT4_FITS_IN_INODE(raw_inode, EXT4_I(inode), i_ctime_extra)) {
 		raw_inode->i_ctime = cpu_to_le32(ctime.tv_sec);
@@ -3793,7 +3793,7 @@ static inline void ext4_inode_get_ctime(struct inode *inode, const struct ext4_i
 
 	if (EXT4_FITS_IN_INODE(raw_inode, EXT4_I(inode), i_ctime_extra))
 		ext4_decode_extra_time(&ctime, raw_inode->i_ctime_extra);
-	inode_ctime_set(inode, ctime);
+	inode_set_ctime(inode, ctime.tv_sec, ctime.tv_nsec);
 }
 #endif	/* __KERNEL__ */
 
