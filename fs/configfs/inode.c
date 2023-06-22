@@ -99,7 +99,8 @@ static inline void set_inode_attr(struct inode * inode, struct iattr * iattr)
 	inode->i_gid = iattr->ia_gid;
 	inode->i_atime = iattr->ia_atime;
 	inode->i_mtime = iattr->ia_mtime;
-	inode_get_ctime(inode) = iattr->ia_ctime;
+	inode_set_ctime(inode, iattr->ia_ctime.tv_sec,
+			iattr->ia_ctime.tv_nsec);
 }
 
 struct inode *configfs_new_inode(umode_t mode, struct configfs_dirent *sd,
