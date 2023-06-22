@@ -3282,7 +3282,7 @@ static inline bool f2fs_is_time_consistent(struct inode *inode)
 {
 	if (!timespec64_equal(F2FS_I(inode)->i_disk_time, &inode->i_atime))
 		return false;
-	if (!timespec64_equal(F2FS_I(inode)->i_disk_time + 1, &inode->i_ctime))
+	if (!timespec64_equal(F2FS_I(inode)->i_disk_time + 1, &inode_get_ctime(inode)))
 		return false;
 	if (!timespec64_equal(F2FS_I(inode)->i_disk_time + 2, &inode->i_mtime))
 		return false;

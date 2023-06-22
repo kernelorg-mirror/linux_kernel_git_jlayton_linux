@@ -468,10 +468,10 @@ static void update_ctime(struct inode *inode)
 	struct timespec64 now = current_time(inode);
 
 	if (inode_unhashed(inode) || !inode->i_nlink ||
-	    timespec64_equal(&inode->i_ctime, &now))
+	    timespec64_equal(&inode_get_ctime(inode), &now))
 		return;
 
-	inode->i_ctime = current_time(inode);
+	inode_set_ctime_current(inode);
 	mark_inode_dirty(inode);
 }
 

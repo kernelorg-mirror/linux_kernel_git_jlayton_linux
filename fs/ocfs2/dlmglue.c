@@ -2185,7 +2185,7 @@ static void __ocfs2_stuff_meta_lvb(struct inode *inode)
 	lvb->lvb_iatime_packed  =
 		cpu_to_be64(ocfs2_pack_timespec(&inode->i_atime));
 	lvb->lvb_ictime_packed =
-		cpu_to_be64(ocfs2_pack_timespec(&inode->i_ctime));
+		cpu_to_be64(ocfs2_pack_timespec(&inode_get_ctime(inode)));
 	lvb->lvb_imtime_packed =
 		cpu_to_be64(ocfs2_pack_timespec(&inode->i_mtime));
 	lvb->lvb_iattr    = cpu_to_be32(oi->ip_attr);
@@ -2238,7 +2238,7 @@ static int ocfs2_refresh_inode_from_lvb(struct inode *inode)
 			      be64_to_cpu(lvb->lvb_iatime_packed));
 	ocfs2_unpack_timespec(&inode->i_mtime,
 			      be64_to_cpu(lvb->lvb_imtime_packed));
-	ocfs2_unpack_timespec(&inode->i_ctime,
+	ocfs2_unpack_timespec(&inode_get_ctime(inode),
 			      be64_to_cpu(lvb->lvb_ictime_packed));
 	spin_unlock(&oi->ip_lock);
 	return 0;

@@ -1820,7 +1820,7 @@ static int relatime_need_update(struct vfsmount *mnt, struct inode *inode,
 	/*
 	 * Is ctime younger than or equal to atime? If yes, update atime:
 	 */
-	if (timespec64_compare(&inode->i_ctime, &inode->i_atime) >= 0)
+	if (timespec64_compare(&inode_get_ctime(inode), &inode->i_atime) >= 0)
 		return 1;
 
 	/*
@@ -1843,7 +1843,8 @@ int generic_update_time(struct inode *inode, struct timespec64 *time, int flags)
 		if (flags & S_ATIME)
 			inode->i_atime = *time;
 		if (flags & S_CTIME)
-			inode->i_ctime = *time;
+			inode_set_ctime(inode, (*time).tv_sec,
+					(*time).tv_nsec);
 		if (flags & S_MTIME)
 			inode->i_mtime = *time;
 
@@ -2037,7 +2038,7 @@ static int inode_needs_update_time(struct inode *inode, struct timespec64 *now)
 	if (!timespec64_equal(&inode->i_mtime, now))
 		sync_it = S_MTIME;
 
-	if (!timespec64_equal(&inode->i_ctime, now))
+	if (!timespec64_equal(&inode_get_ctime(inode), now))
 		sync_it |= S_CTIME;
 
 	if (IS_I_VERSION(inode) && inode_iversion_need_inc(inode))

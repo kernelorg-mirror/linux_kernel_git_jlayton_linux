@@ -13,10 +13,10 @@ static void hpfs_update_directory_times(struct inode *dir)
 {
 	time64_t t = local_to_gmt(dir->i_sb, local_get_seconds(dir->i_sb));
 	if (t == dir->i_mtime.tv_sec &&
-	    t == dir->i_ctime.tv_sec)
+	    t == inode_get_ctime(dir).tv_sec)
 		return;
-	dir->i_mtime.tv_sec = dir->i_ctime.tv_sec = t;
-	dir->i_mtime.tv_nsec = dir->i_ctime.tv_nsec = 0;
+	dir->i_mtime.tv_sec = inode_set_ctime(dir, t, 0).tv_sec;
+	dir->i_mtime.tv_nsec = 0;
 	hpfs_write_inode_nolock(dir);
 }
 
@@ -59,8 +59,9 @@ static int hpfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	result->i_ino = fno;
 	hpfs_i(result)->i_parent_dir = dir->i_ino;
 	hpfs_i(result)->i_dno = dno;
-	result->i_ctime.tv_sec = result->i_mtime.tv_sec = result->i_atime.tv_sec = local_to_gmt(dir->i_sb, le32_to_cpu(dee.creation_date));
-	result->i_ctime.tv_nsec = 0; 
+	inode_set_ctime(result,
+			result->i_mtime.tv_sec = result->i_atime.tv_sec = local_to_gmt(dir->i_sb, le32_to_cpu(dee.creation_date)),
+			0);
 	result->i_mtime.tv_nsec = 0; 
 	result->i_atime.tv_nsec = 0; 
 	hpfs_i(result)->i_ea_size = 0;
@@ -167,8 +168,9 @@ static int hpfs_create(struct mnt_idmap *idmap, struct inode *dir,
 	result->i_fop = &hpfs_file_ops;
 	set_nlink(result, 1);
 	hpfs_i(result)->i_parent_dir = dir->i_ino;
-	result->i_ctime.tv_sec = result->i_mtime.tv_sec = result->i_atime.tv_sec = local_to_gmt(dir->i_sb, le32_to_cpu(dee.creation_date));
-	result->i_ctime.tv_nsec = 0;
+	inode_set_ctime(result,
+			result->i_mtime.tv_sec = result->i_atime.tv_sec = local_to_gmt(dir->i_sb, le32_to_cpu(dee.creation_date)),
+			0);
 	result->i_mtime.tv_nsec = 0;
 	result->i_atime.tv_nsec = 0;
 	hpfs_i(result)->i_ea_size = 0;
@@ -250,8 +252,9 @@ static int hpfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	hpfs_init_inode(result);
 	result->i_ino = fno;
 	hpfs_i(result)->i_parent_dir = dir->i_ino;
-	result->i_ctime.tv_sec = result->i_mtime.tv_sec = result->i_atime.tv_sec = local_to_gmt(dir->i_sb, le32_to_cpu(dee.creation_date));
-	result->i_ctime.tv_nsec = 0;
+	inode_set_ctime(result,
+			result->i_mtime.tv_sec = result->i_atime.tv_sec = local_to_gmt(dir->i_sb, le32_to_cpu(dee.creation_date)),
+			0);
 	result->i_mtime.tv_nsec = 0;
 	result->i_atime.tv_nsec = 0;
 	hpfs_i(result)->i_ea_size = 0;
@@ -326,8 +329,9 @@ static int hpfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	result->i_ino = fno;
 	hpfs_init_inode(result);
 	hpfs_i(result)->i_parent_dir = dir->i_ino;
-	result->i_ctime.tv_sec = result->i_mtime.tv_sec = result->i_atime.tv_sec = local_to_gmt(dir->i_sb, le32_to_cpu(dee.creation_date));
-	result->i_ctime.tv_nsec = 0;
+	inode_set_ctime(result,
+			result->i_mtime.tv_sec = result->i_atime.tv_sec = local_to_gmt(dir->i_sb, le32_to_cpu(dee.creation_date)),
+			0);
 	result->i_mtime.tv_nsec = 0;
 	result->i_atime.tv_nsec = 0;
 	hpfs_i(result)->i_ea_size = 0;

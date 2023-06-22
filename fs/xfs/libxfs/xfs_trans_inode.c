@@ -67,7 +67,7 @@ xfs_trans_ichgtime(
 	if (flags & XFS_ICHGTIME_MOD)
 		inode->i_mtime = tv;
 	if (flags & XFS_ICHGTIME_CHG)
-		inode->i_ctime = tv;
+		inode_set_ctime(inode, tv.tv_sec, tv.tv_nsec);
 	if (flags & XFS_ICHGTIME_CREATE)
 		ip->i_crtime = tv;
 }

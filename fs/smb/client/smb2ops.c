@@ -1391,7 +1391,9 @@ smb2_close_getattr(const unsigned int xid, struct cifs_tcon *tcon,
 	if (file_inf.LastWriteTime)
 		inode->i_mtime = cifs_NTtimeToUnix(file_inf.LastWriteTime);
 	if (file_inf.ChangeTime)
-		inode->i_ctime = cifs_NTtimeToUnix(file_inf.ChangeTime);
+		inode_set_ctime(inode,
+				cifs_NTtimeToUnix(file_inf.ChangeTime).tv_sec,
+				cifs_NTtimeToUnix(file_inf.ChangeTime).tv_nsec);
 	if (file_inf.LastAccessTime)
 		inode->i_atime = cifs_NTtimeToUnix(file_inf.LastAccessTime);
 

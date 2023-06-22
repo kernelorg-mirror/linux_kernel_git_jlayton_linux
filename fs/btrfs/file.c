@@ -1117,8 +1117,8 @@ static void update_time_for_write(struct inode *inode)
 	if (!timespec64_equal(&inode->i_mtime, &now))
 		inode->i_mtime = now;
 
-	if (!timespec64_equal(&inode->i_ctime, &now))
-		inode->i_ctime = now;
+	if (!timespec64_equal(&inode_get_ctime(inode), &now))
+		inode_set_ctime(inode, now.tv_sec, now.tv_nsec);
 
 	if (IS_I_VERSION(inode))
 		inode_inc_iversion(inode);
@@ -2716,8 +2716,7 @@ static int btrfs_punch_hole(struct file *file, loff_t offset, loff_t len)
 
 	ASSERT(trans != NULL);
 	inode_inc_iversion(inode);
-	inode->i_mtime = current_time(inode);
-	inode->i_ctime = inode->i_mtime;
+	inode->i_mtime = inode_set_ctime_current(inode);
 	ret = btrfs_update_inode(trans, root, BTRFS_I(inode));
 	updated_inode = true;
 	btrfs_end_transaction(trans);
@@ -2734,11 +2733,10 @@ out_only_mutex:
 		 * for detecting, at fsync time, if the inode isn't yet in the
 		 * log tree or it's there but not up to date.
 		 */
-		struct timespec64 now = current_time(inode);
+		struct timespec64 now = inode_set_ctime_current(inode);
 
 		inode_inc_iversion(inode);
 		inode->i_mtime = now;
-		inode->i_ctime = now;
 		trans = btrfs_start_transaction(root, 1);
 		if (IS_ERR(trans)) {
 			ret = PTR_ERR(trans);
@@ -2809,7 +2807,7 @@ static int btrfs_fallocate_update_isize(struct inode *inode,
 	if (IS_ERR(trans))
 		return PTR_ERR(trans);
 
-	inode->i_ctime = current_time(inode);
+	inode_set_ctime_current(inode);
 	i_size_write(inode, end);
 	btrfs_inode_safe_disk_i_size_write(BTRFS_I(inode), 0);
 	ret = btrfs_update_inode(trans, root, BTRFS_I(inode));

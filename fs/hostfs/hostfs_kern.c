@@ -554,7 +554,13 @@ static int read_name(struct inode *ino, char *name)
 	i_gid_write(ino, st.gid);
 	ino->i_atime = (struct timespec64){ st.atime.tv_sec, st.atime.tv_nsec };
 	ino->i_mtime = (struct timespec64){ st.mtime.tv_sec, st.mtime.tv_nsec };
-	ino->i_ctime = (struct timespec64){ st.ctime.tv_sec, st.ctime.tv_nsec };
+	inode_set_ctime(ino, ((struct timespec64){
+				st.ctime.tv_sec,
+				st.ctime.tv_nsec,
+			}).tv_sec, ((struct timespec64){
+				st.ctime.tv_sec,
+				st.ctime.tv_nsec,
+			}).tv_nsec);
 	ino->i_size = st.size;
 	ino->i_blocks = st.blocks;
 	return 0;
