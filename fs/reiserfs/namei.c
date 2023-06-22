@@ -966,7 +966,8 @@ static int reiserfs_rmdir(struct inode *dir, struct dentry *dentry)
 			       inode->i_nlink);
 
 	clear_nlink(inode);
-	inode_get_ctime(inode) = dir->i_mtime = inode_set_ctime_current(dir);
+	inode_set_ctime_current(inode);
+	dir->i_mtime = inode_set_ctime_current(dir);
 	reiserfs_update_sd(&th, inode);
 
 	DEC_DIR_INODE_NLINK(dir)
@@ -1325,7 +1326,6 @@ static int reiserfs_rename(struct mnt_idmap *idmap,
 	int jbegin_count;
 	umode_t old_inode_mode;
 	unsigned long savelink = 1;
-	struct timespec64 ctime;
 
 	if (flags & ~RENAME_NOREPLACE)
 		return -EINVAL;
@@ -1576,16 +1576,14 @@ static int reiserfs_rename(struct mnt_idmap *idmap,
 
 	mark_de_hidden(old_de.de_deh + old_de.de_entry_num);
 	journal_mark_dirty(&th, old_de.de_bh);
-	ctime = current_time(old_dir);
-	inode_set_ctime(old_dir, (old_dir->i_mtime = ctime).tv_sec,
-			(old_dir->i_mtime = ctime).tv_nsec);
-	inode_set_ctime(new_dir, (new_dir->i_mtime = ctime).tv_sec,
-			(new_dir->i_mtime = ctime).tv_nsec);
+	old_dir->i_mtime = inode_set_ctime_current(old_dir);
+	new_dir->i_mtime = inode_set_ctime_current(new_dir);
+
 	/*
 	 * thanks to Alex Adriaanse <alex_a@caltech.edu> for patch
 	 * which adds ctime update of renamed object
 	 */
-	inode_set_ctime(old_inode, ctime.tv_sec, ctime.tv_nsec);
+	inode_set_ctime_current(old_inode);
 
 	if (new_dentry_inode) {
 		/* adjust link number of the victim */
@@ -1594,7 +1592,7 @@ static int reiserfs_rename(struct mnt_idmap *idmap,
 		} else {
 			drop_nlink(new_dentry_inode);
 		}
-		inode_set_ctime(new_dentry_inode, ctime.tv_sec, ctime.tv_nsec);
+		inode_set_ctime_current(new_dentry_inode);
 		savelink = new_dentry_inode->i_nlink;
 	}
 
