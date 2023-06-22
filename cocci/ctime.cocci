@@ -56,5 +56,5 @@ expression val, val2;
 struct inode *inode;
 @@
 - inode->i_ctime
-+ inode_ctime_get(inode)
++ inode_get_ctime(inode)
 
