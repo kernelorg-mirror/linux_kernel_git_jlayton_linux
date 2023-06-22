@@ -3028,7 +3028,8 @@ static int shmem_link(struct dentry *old_dentry, struct inode *dir, struct dentr
 	}
 
 	dir->i_size += BOGO_DIRENT_SIZE;
-	inode_get_ctime(dir) = dir->i_mtime = inode_set_ctime_current(inode);
+	inode_set_ctime_current(inode);
+	dir->i_mtime = inode_set_ctime_current(dir);
 	inode_inc_iversion(dir);
 	inc_nlink(inode);
 	ihold(inode);	/* New dentry reference */
@@ -3046,7 +3047,8 @@ static int shmem_unlink(struct inode *dir, struct dentry *dentry)
 		shmem_free_inode(inode->i_sb);
 
 	dir->i_size -= BOGO_DIRENT_SIZE;
-	inode_get_ctime(dir) = dir->i_mtime = inode_set_ctime_current(inode);
+	inode_set_ctime_current(inode);
+	dir->i_mtime = inode_set_ctime_current(dir);
 	inode_inc_iversion(dir);
 	drop_nlink(inode);
 	dput(dentry);	/* Undo the count from "create" - this does all the work */
@@ -3134,9 +3136,9 @@ static int shmem_rename2(struct mnt_idmap *idmap,
 
 	old_dir->i_size -= BOGO_DIRENT_SIZE;
 	new_dir->i_size += BOGO_DIRENT_SIZE;
-	inode_get_ctime(old_dir) = old_dir->i_mtime =
-			inode_get_ctime(new_dir) = new_dir->i_mtime =
-		inode_get_ctime(inode) = current_time(old_dir);
+	inode_set_ctime_current(inode);
+	old_dir->i_mtime = inode_set_ctime_current(old_dir);
+	new_dir->i_mtime = inode_set_ctime_current(new_dir);
 	inode_inc_iversion(old_dir);
 	inode_inc_iversion(new_dir);
 	return 0;
