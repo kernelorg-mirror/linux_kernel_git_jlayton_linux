@@ -390,7 +390,8 @@ int simple_link(struct dentry *old_dentry, struct inode *dir, struct dentry *den
 {
 	struct inode *inode = d_inode(old_dentry);
 
-	inode_get_ctime(dir) = dir->i_mtime = inode_set_ctime_current(inode);
+	inode_set_ctime_current(inode);
+	dir->i_mtime = inode_set_ctime_current(dir);
 	inc_nlink(inode);
 	ihold(inode);
 	dget(dentry);
@@ -424,7 +425,8 @@ int simple_unlink(struct inode *dir, struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
 
-	inode_get_ctime(dir) = dir->i_mtime = inode_set_ctime_current(inode);
+	inode_set_ctime_current(inode);
+	dir->i_mtime = inode_set_ctime_current(dir);
 	drop_nlink(inode);
 	dput(dentry);
 	return 0;
@@ -458,10 +460,10 @@ int simple_rename_exchange(struct inode *old_dir, struct dentry *old_dentry,
 			inc_nlink(old_dir);
 		}
 	}
-	inode_get_ctime(old_dir) = old_dir->i_mtime =
-			inode_get_ctime(new_dir) = new_dir->i_mtime =
-		d_inode(old_dentry)->i_ctime =
-		d_inode(new_dentry)->i_ctime = current_time(old_dir);
+	inode_set_ctime_current(d_inode(old_dentry));
+	inode_set_ctime_current(d_inode(new_dentry));
+	old_dir->i_mtime = inode_set_ctime_current(old_dir);
+	new_dir->i_mtime = inode_set_ctime_current(new_dir);
 
 	return 0;
 }
@@ -494,8 +496,9 @@ int simple_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 		inc_nlink(new_dir);
 	}
 
-	inode_get_ctime(old_dir) = old_dir->i_mtime = inode_get_ctime(new_dir) =
-			new_dir->i_mtime = inode_get_ctime(inode) = current_time(old_dir);
+	inode_set_ctime_current(inode);
+	old_dir->i_mtime = inode_set_ctime_current(old_dir);
+	new_dir->i_mtime = inode_set_ctime_current(new_dir);
 
 	return 0;
 }
