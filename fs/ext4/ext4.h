@@ -897,6 +897,9 @@ do {										\
 #define EXT4_INODE_SET_XTIME(xtime, inode, raw_inode)				\
 	EXT4_INODE_SET_XTIME_VAL(xtime, inode, raw_inode, (inode)->xtime)
 
+#define EXT4_INODE_SET_CTIME(inode, raw_inode)					\
+	EXT4_INODE_SET_XTIME_VAL(i_ctime, inode, raw_inode, inode_get_ctime(inode))
+
 #define EXT4_EINODE_SET_XTIME(xtime, einode, raw_inode)			       \
 	EXT4_INODE_SET_XTIME_VAL(xtime, &((einode)->vfs_inode), raw_inode, (einode)->xtime)
 
@@ -911,6 +914,12 @@ do {										\
 #define EXT4_INODE_GET_XTIME(xtime, inode, raw_inode)				\
 do {										\
 	(inode)->xtime = EXT4_INODE_GET_XTIME_VAL(xtime, inode, raw_inode);	\
+} while (0)
+
+#define EXT4_INODE_GET_CTIME(inode, raw_inode)					\
+do {										\
+	inode_set_ctime_to_ts(inode,						\
+		EXT4_INODE_GET_XTIME_VAL(i_ctime, inode, raw_inode));		\
 } while (0)
 
 #define EXT4_EINODE_GET_XTIME(xtime, einode, raw_inode)			       \
