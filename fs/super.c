@@ -943,7 +943,8 @@ int reconfigure_super(struct fs_context *fc)
 	 */
 	if (remount_ro) {
 		if (force) {
-			sb_start_ro_state_change(sb);
+			sb->s_readonly_remount = 1;
+			smp_wmb();
 		} else {
 			retval = sb_prepare_remount_readonly(sb);
 			if (retval)
@@ -951,10 +952,12 @@ int reconfigure_super(struct fs_context *fc)
 		}
 	} else if (remount_rw) {
 		/*
-		 * Protect filesystem's reconfigure code from writes from
-		 * userspace until reconfigure finishes.
+		 * We set s_readonly_remount here to protect filesystem's
+		 * reconfigure code from writes from userspace until
+		 * reconfigure finishes.
 		 */
-		sb_start_ro_state_change(sb);
+		sb->s_readonly_remount = 1;
+		smp_wmb();
 	}
 
 	if (fc->ops->reconfigure) {
@@ -970,7 +973,9 @@ int reconfigure_super(struct fs_context *fc)
 
 	WRITE_ONCE(sb->s_flags, ((sb->s_flags & ~fc->sb_flags_mask) |
 				 (fc->sb_flags & fc->sb_flags_mask)));
-	sb_end_ro_state_change(sb);
+	/* Needs to be ordered wrt mnt_is_readonly() */
+	smp_wmb();
+	sb->s_readonly_remount = 0;
 
 	/*
 	 * Some filesystems modify their metadata via some other path than the
@@ -985,7 +990,7 @@ int reconfigure_super(struct fs_context *fc)
 	return 0;
 
 cancel_readonly:
-	sb_end_ro_state_change(sb);
+	sb->s_readonly_remount = 0;
 	return retval;
 }
 

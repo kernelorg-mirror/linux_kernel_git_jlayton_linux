@@ -1242,7 +1242,7 @@ struct super_block {
 	 */
 	atomic_long_t s_fsnotify_connectors;
 
-	/* Read-only state of the superblock is being changed */
+	/* Being remounted read-only */
 	int s_readonly_remount;
 
 	/* per-sb errseq_t for reporting writeback errors via syncfs */
