@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause)
+
+name: nfsd_server
+
+doc:
+  nfsd server configuration over generic netlink.
+
+attribute-sets:
+  -
+    name: rpc-status-comp-op-attr
+    enum-name: nfsd-rpc-status-comp-attr
+    name-prefix: nfsd-attr-rpc-status-comp-
+    attributes:
+      -
+        name: unspec
+        type: unused
+        value: 0
+      -
+        name: op
+        type: u32
+  -
+    name: rpc-status-attr
+    enum-name: nfsd-rpc-status-attr
+    name-prefix: nfsd-attr-rpc-status-
+    attributes:
+      -
+        name: unspec
+        type: unused
+        value: 0
+      -
+        name: xid
+        type: u32
+        byte-order: big-endian
+      -
+        name: flags
+        type: u32
+      -
+        name: prog
+        type: u32
+      -
+        name: version
+        type: u8
+      -
+        name: proc
+        type: u32
+      -
+        name: service_time
+        type: s64
+      -
+        name: pad
+        type: pad
+      -
+        name: saddr4
+        type: u32
+        byte-order: big-endian
+        display-hint: ipv4
+      -
+        name: daddr4
+        type: u32
+        byte-order: big-endian
+        display-hint: ipv4
+      -
+        name: saddr6
+        type: binary
+        display-hint: ipv6
+      -
+        name: daddr6
+        type: binary
+        display-hint: ipv6
+      -
+        name: sport
+        type: u16
+        byte-order: big-endian
+      -
+        name: dport
+        type: u16
+        byte-order: big-endian
+      -
+        name: compond-op
+        type: array-nest
+        nested-attributes: rpc-status-comp-op-attr
+
+operations:
+  enum-name: nfsd-commands
+  name-prefix: nfsd-cmd-
+  list:
+    -
+      name: unspec
+      doc: unused
+      value: 0
+    -
+      name: rpc-status-get
+      doc: dump pending nfsd rpc
+      attribute-set: rpc-status-attr
+      dump:
+        pre: nfsd-server-nl-rpc-status-get-start
+        post: nfsd-server-nl-rpc-status-get-done
