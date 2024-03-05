@@ -2207,6 +2207,15 @@ no_open:
 EXPORT_SYMBOL_GPL(nfs_atomic_open);
 
 static int
+nfs_lookup_revalidate_delegated_parent(struct inode *dir, struct dentry *dentry,
+				       struct inode *inode)
+{
+	return nfs_lookup_revalidate_done(dir, dentry, inode,
+					  nfs_verify_change_attribute(dir, dentry->d_time) ?
+					  1 : 0);
+}
+
+static int
 nfs4_lookup_revalidate(struct inode *dir, const struct qstr *name,
 		       struct dentry *dentry, unsigned int flags)
 {
@@ -2232,6 +2241,9 @@ nfs4_lookup_revalidate(struct inode *dir, const struct qstr *name,
 
 	if (nfs_verifier_is_delegated(dentry))
 		return nfs_lookup_revalidate_delegated(dir, dentry, inode);
+
+	if (nfs_have_delegated_attributes(dir))
+		return nfs_lookup_revalidate_delegated_parent(dir, dentry, inode);
 
 	/* NFS only supports OPEN on regular files */
 	if (!S_ISREG(inode->i_mode))
