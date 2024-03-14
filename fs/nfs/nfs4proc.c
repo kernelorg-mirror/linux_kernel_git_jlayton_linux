@@ -4452,6 +4452,28 @@ out:
 	return status;
 }
 
+#ifdef CONFIG_NFS_V4_1
+static bool should_request_dir_deleg(struct inode *inode)
+{
+	if (!inode)
+		return false;
+	if (!S_ISDIR(inode->i_mode))
+		return false;
+	if (!nfs_server_capable(inode, NFS_CAP_GET_DIR_DELEG))
+		return false;
+	if (!test_and_clear_bit(NFS_INO_GDD_GETATTR, &(NFS_I(inode)->flags)))
+		return false;
+	if (nfs4_have_delegation(inode, FMODE_READ, 0))
+		return false;
+	return true;
+}
+#else
+static bool should_request_dir_deleg(struct inode *inode)
+{
+	return false;
+}
+#endif
+
 static int _nfs4_proc_getattr(struct nfs_server *server, struct nfs_fh *fhandle,
 				struct nfs_fattr *fattr, struct inode *inode)
 {
@@ -4465,11 +4487,12 @@ static int _nfs4_proc_getattr(struct nfs_server *server, struct nfs_fh *fhandle,
 		.server = server,
 	};
 	struct rpc_message msg = {
-		.rpc_proc = &nfs4_procedures[NFSPROC4_CLNT_GETATTR],
 		.rpc_argp = &args,
 		.rpc_resp = &res,
 	};
 	unsigned short task_flags = 0;
+	bool gdd;
+	int status;
 
 	if (nfs4_has_session(server->nfs_client))
 		task_flags = RPC_TASK_MOVEABLE;
@@ -4478,11 +4501,32 @@ static int _nfs4_proc_getattr(struct nfs_server *server, struct nfs_fh *fhandle,
 	if (inode && (server->flags & NFS_MOUNT_SOFTREVAL))
 		task_flags |= RPC_TASK_TIMEOUT;
 
+retry:
+	gdd = should_request_dir_deleg(inode);
+	if (gdd)
+		msg.rpc_proc = &nfs4_procedures[NFSPROC4_CLNT_GDD_GETATTR];
+	else
+		msg.rpc_proc = &nfs4_procedures[NFSPROC4_CLNT_GETATTR];
+
 	nfs4_bitmap_copy_adjust(bitmask, nfs4_bitmask(server, fattr->label), inode, 0);
 	nfs_fattr_init(fattr);
 	nfs4_init_sequence(&args.seq_args, &res.seq_res, 0, 0);
-	return nfs4_do_call_sync(server->client, server, &msg,
-			&args.seq_args, &res.seq_res, task_flags);
+	status = nfs4_do_call_sync(server->client, server, &msg,
+				   &args.seq_args, &res.seq_res, task_flags);
+	switch (status) {
+	case 0:
+		if (gdd && res.nf_status == GDD4_OK)
+			status = nfs_inode_set_delegation(inode, current_cred(), FMODE_READ,
+							  &res.deleg, 0, NFS4_OPEN_DELEGATE_READ);
+		break;
+	case -ENOTSUPP:
+		/* If the server doesn't support GET_DIR_DELEGATION, retry without it */
+		if (gdd) {
+			server->caps &= ~NFS_CAP_GET_DIR_DELEG;
+			goto retry;
+		}
+	}
+	return status;
 }
 
 int nfs4_proc_getattr(struct nfs_server *server, struct nfs_fh *fhandle,
@@ -10786,6 +10830,7 @@ static const struct nfs4_minor_version_ops nfs_v4_1_minor_ops = {
 	.minor_version = 1,
 	.init_caps = NFS_CAP_READDIRPLUS
 		| NFS_CAP_ATOMIC_OPEN
+		| NFS_CAP_GET_DIR_DELEG
 		| NFS_CAP_POSIX_LOCK
 		| NFS_CAP_STATEID_NFSV41
 		| NFS_CAP_ATOMIC_OPEN_V1
@@ -10812,6 +10857,7 @@ static const struct nfs4_minor_version_ops nfs_v4_2_minor_ops = {
 	.minor_version = 2,
 	.init_caps = NFS_CAP_READDIRPLUS
 		| NFS_CAP_ATOMIC_OPEN
+		| NFS_CAP_GET_DIR_DELEG
 		| NFS_CAP_POSIX_LOCK
 		| NFS_CAP_STATEID_NFSV41
 		| NFS_CAP_ATOMIC_OPEN_V1

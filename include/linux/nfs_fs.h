@@ -336,6 +336,7 @@ struct nfs4_copy_state {
 #define NFS_INO_LAYOUTCOMMITTING (10)		/* layoutcommit inflight */
 #define NFS_INO_LAYOUTSTATS	(11)		/* layoutstats inflight */
 #define NFS_INO_ODIRECT		(12)		/* I/O setting is O_DIRECT */
+#define NFS_INO_GDD_GETATTR	(13)		/* Ask for dir deleg on next GETATTR */
 
 static inline struct nfs_inode *NFS_I(const struct inode *inode)
 {
