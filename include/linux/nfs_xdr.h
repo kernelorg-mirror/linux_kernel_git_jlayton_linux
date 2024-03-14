@@ -1095,6 +1095,8 @@ struct nfs4_getattr_res {
 	struct nfs4_sequence_res	seq_res;
 	const struct nfs_server *	server;
 	struct nfs_fattr *		fattr;
+	nfs4_stateid			deleg;
+	u32				nf_status;
 };
 
 struct nfs4_link_arg {
