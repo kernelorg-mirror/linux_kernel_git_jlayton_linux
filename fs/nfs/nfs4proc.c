@@ -4453,8 +4453,14 @@ out:
 }
 
 #ifdef CONFIG_NFS_V4_1
+static bool dir_delegations_enabled = true;
+module_param(dir_delegations_enabled, bool, 0644);
+MODULE_PARM_DESC(dir_delegations_enabled, "Enable directory delegations?");
+
 static bool should_request_dir_deleg(struct inode *inode)
 {
+	if (!dir_delegations_enabled)
+		return false;
 	if (!inode)
 		return false;
 	if (!S_ISDIR(inode->i_mode))
