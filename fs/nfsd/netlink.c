@@ -11,9 +11,10 @@
 #include <uapi/linux/nfsd_netlink.h>
 
 /* Common nested types */
-const struct nla_policy nfsd_version_nl_policy[NFSD_A_VERSION_MINOR + 1] = {
+const struct nla_policy nfsd_version_nl_policy[NFSD_A_VERSION_ENABLED + 1] = {
 	[NFSD_A_VERSION_MAJOR] = { .type = NLA_U32, },
 	[NFSD_A_VERSION_MINOR] = { .type = NLA_U32, },
+	[NFSD_A_VERSION_ENABLED] = { .type = NLA_FLAG, },
 };
 
 /* NFSD_CMD_THREADS_SET - do */

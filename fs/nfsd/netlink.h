@@ -12,7 +12,7 @@
 #include <uapi/linux/nfsd_netlink.h>
 
 /* Common nested types */
-extern const struct nla_policy nfsd_version_nl_policy[NFSD_A_VERSION_MINOR + 1];
+extern const struct nla_policy nfsd_version_nl_policy[NFSD_A_VERSION_ENABLED + 1];
 
 int nfsd_nl_rpc_status_get_start(struct netlink_callback *cb);
 int nfsd_nl_rpc_status_get_done(struct netlink_callback *cb);

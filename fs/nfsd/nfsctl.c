@@ -1744,6 +1744,7 @@ int nfsd_nl_version_set_doit(struct sk_buff *skb, struct genl_info *info)
 	nlmsg_for_each_attr(attr, info->nlhdr, GENL_HDRLEN, rem) {
 		struct nlattr *tb[NFSD_A_VERSION_MAX + 1];
 		u32 major, minor = 0;
+		bool enabled;
 
 		if (nla_type(attr) != NFSD_A_SERVER_PROTO_VERSION)
 			continue;
@@ -1759,14 +1760,16 @@ int nfsd_nl_version_set_doit(struct sk_buff *skb, struct genl_info *info)
 		if (tb[NFSD_A_VERSION_MINOR])
 			minor = nla_get_u32(tb[NFSD_A_VERSION_MINOR]);
 
+		enabled = nla_get_flag(tb[NFSD_A_VERSION_ENABLED]);
+
 		switch (major) {
 		case 4:
-			nfsd_minorversion(nn, minor, NFSD_SET);
+			nfsd_minorversion(nn, minor, enabled ? NFSD_SET : NFSD_CLEAR);
 			break;
 		case 3:
 		case 2:
 			if (!minor)
-				nfsd_vers(nn, major, NFSD_SET);
+				nfsd_vers(nn, major, enabled ? NFSD_SET : NFSD_CLEAR);
 			break;
 		default:
 			break;
@@ -1810,7 +1813,10 @@ int nfsd_nl_version_get_doit(struct sk_buff *skb, struct genl_info *info)
 		for (j = 0; j <= NFSD_SUPPORTED_MINOR_VERSION; j++) {
 			struct nlattr *attr;
 
-			if (!nfsd_vers(nn, i, NFSD_TEST))
+			/* Don't record any versions the kernel doesn't have
+			 * compiled in
+			 */
+			if (!nfsd_support_version(i))
 				continue;
 
 			/* NFSv{2,3} does not support minor numbers */
@@ -1829,6 +1835,14 @@ int nfsd_nl_version_get_doit(struct sk_buff *skb, struct genl_info *info)
 
 			if (nla_put_u32(skb, NFSD_A_VERSION_MAJOR, i) ||
 			    nla_put_u32(skb, NFSD_A_VERSION_MINOR, j)) {
+				err = -EINVAL;
+				goto err_nfsd_unlock;
+			}
+
+			/* Set the enabled flag if the version is enabled */
+			if (nfsd_vers(nn, i, NFSD_TEST) &&
+			    (i < 4 || nfsd_minorversion(nn, j, NFSD_TEST)) &&
+			    nla_put_flag(skb, NFSD_A_VERSION_ENABLED)) {
 				err = -EINVAL;
 				goto err_nfsd_unlock;
 			}
