@@ -996,7 +996,7 @@ void svc_age_temp_xprts_now(struct svc_serv *serv, struct sockaddr *server_addr)
 	spin_lock_bh(&serv->sv_lock);
 	list_for_each_safe(le, next, &serv->sv_tempsocks) {
 		xprt = list_entry(le, struct svc_xprt, xpt_list);
-		if (rpc_cmp_addr(server_addr, (struct sockaddr *)
+		if (rpc_same_addr(server_addr, (struct sockaddr *)
 				&xprt->xpt_local)) {
 			dprintk("svc_age_temp_xprts_now: found %p\n", xprt);
 			list_move(le, &to_be_closed);
@@ -1299,7 +1299,7 @@ struct svc_xprt *svc_find_listener(struct svc_serv *serv, const char *xcl_name,
 			continue;
 		if (strcmp(xprt->xpt_class->xcl_name, xcl_name))
 			continue;
-		if (!rpc_cmp_addr_port(sa, (struct sockaddr *)&xprt->xpt_local))
+		if (!rpc_same_addr_port(sa, (struct sockaddr *)&xprt->xpt_local))
 			continue;
 		found = xprt;
 		svc_xprt_get(xprt);

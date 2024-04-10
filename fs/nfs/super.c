@@ -1007,7 +1007,7 @@ nfs_compare_remount_data(struct nfs_server *nfss,
 	    (ctx->options & NFS_OPTION_FSCACHE) != (nfss->options & NFS_OPTION_FSCACHE) ||
 	    ctx->nfs_server.port != nfss->port ||
 	    ctx->nfs_server.addrlen != nfss->nfs_client->cl_addrlen ||
-	    !rpc_cmp_addr((struct sockaddr *)&ctx->nfs_server.address,
+	    !rpc_same_addr((struct sockaddr *)&ctx->nfs_server.address,
 			  (struct sockaddr *)&nfss->nfs_client->cl_addr))
 		return -EINVAL;
 

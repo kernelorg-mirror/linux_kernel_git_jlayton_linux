@@ -315,7 +315,7 @@ again:
 			continue;
 
 		/* Match the full socket address */
-		if (!rpc_cmp_addr_port(sap, clap))
+		if (!rpc_same_addr_port(sap, clap))
 			/* Match all xprt_switch full socket addresses */
 			if (IS_ERR(clp->cl_rpcclient) ||
                             !rpc_clnt_xprt_switch_has_addr(clp->cl_rpcclient,

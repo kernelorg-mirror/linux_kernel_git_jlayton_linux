@@ -47,7 +47,7 @@ static inline void rpc_set_port(struct sockaddr *sap,
 #define IPV6_SCOPE_DELIMITER		'%'
 #define IPV6_SCOPE_ID_LEN		sizeof("%nnnnnnnnnn")
 
-static inline bool rpc_cmp_addr4(const struct sockaddr *sap1,
+static inline bool rpc_same_addr4(const struct sockaddr *sap1,
 				 const struct sockaddr *sap2)
 {
 	const struct sockaddr_in *sin1 = (const struct sockaddr_in *)sap1;
@@ -68,7 +68,7 @@ static inline bool __rpc_copy_addr4(struct sockaddr *dst,
 }
 
 #if IS_ENABLED(CONFIG_IPV6)
-static inline bool rpc_cmp_addr6(const struct sockaddr *sap1,
+static inline bool rpc_same_addr6(const struct sockaddr *sap1,
 				 const struct sockaddr *sap2)
 {
 	const struct sockaddr_in6 *sin1 = (const struct sockaddr_in6 *)sap1;
@@ -94,7 +94,7 @@ static inline bool __rpc_copy_addr6(struct sockaddr *dst,
 	return true;
 }
 #else	/* !(IS_ENABLED(CONFIG_IPV6) */
-static inline bool rpc_cmp_addr6(const struct sockaddr *sap1,
+static inline bool rpc_same_addr6(const struct sockaddr *sap1,
 				   const struct sockaddr *sap2)
 {
 	return false;
@@ -108,7 +108,7 @@ static inline bool __rpc_copy_addr6(struct sockaddr *dst,
 #endif	/* !(IS_ENABLED(CONFIG_IPV6) */
 
 /**
- * rpc_cmp_addr - compare the address portion of two sockaddrs.
+ * rpc_same_addr - compare the address portion of two sockaddrs.
  * @sap1: first sockaddr
  * @sap2: second sockaddr
  *
@@ -117,29 +117,29 @@ static inline bool __rpc_copy_addr6(struct sockaddr *dst,
  *
  * Returns true if the addrs are equal, false if they aren't.
  */
-static inline bool rpc_cmp_addr(const struct sockaddr *sap1,
+static inline bool rpc_same_addr(const struct sockaddr *sap1,
 				const struct sockaddr *sap2)
 {
 	if (sap1->sa_family == sap2->sa_family) {
 		switch (sap1->sa_family) {
 		case AF_INET:
-			return rpc_cmp_addr4(sap1, sap2);
+			return rpc_same_addr4(sap1, sap2);
 		case AF_INET6:
-			return rpc_cmp_addr6(sap1, sap2);
+			return rpc_same_addr6(sap1, sap2);
 		}
 	}
 	return false;
 }
 
 /**
- * rpc_cmp_addr_port - compare the address and port number of two sockaddrs.
+ * rpc_same_addr_port - compare the address and port number of two sockaddrs.
  * @sap1: first sockaddr
  * @sap2: second sockaddr
  */
-static inline bool rpc_cmp_addr_port(const struct sockaddr *sap1,
+static inline bool rpc_same_addr_port(const struct sockaddr *sap1,
 				     const struct sockaddr *sap2)
 {
-	if (!rpc_cmp_addr(sap1, sap2))
+	if (!rpc_same_addr(sap1, sap2))
 		return false;
 	return rpc_get_port(sap1) == rpc_get_port(sap2);
 }

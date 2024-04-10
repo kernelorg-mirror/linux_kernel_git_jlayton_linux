@@ -3141,7 +3141,7 @@ static int rpc_xprt_probe_trunked(struct rpc_clnt *clnt,
 
 	rcu_read_lock();
 	main_xprt = xprt_get(rcu_dereference(clnt->cl_xprt));
-	status = rpc_cmp_addr_port((struct sockaddr *)&xprt->addr,
+	status = rpc_same_addr_port((struct sockaddr *)&xprt->addr,
 				   (struct sockaddr *)&main_xprt->addr);
 	rcu_read_unlock();
 	xprt_put(main_xprt);
@@ -3198,7 +3198,7 @@ static int rpc_xprt_offline(struct rpc_clnt *clnt,
 	rcu_read_lock();
 	main_xprt = xprt_get(rcu_dereference(clnt->cl_xprt));
 	xps = xprt_switch_get(rcu_dereference(clnt->cl_xpi.xpi_xpswitch));
-	err = rpc_cmp_addr_port((struct sockaddr *)&xprt->addr,
+	err = rpc_same_addr_port((struct sockaddr *)&xprt->addr,
 				(struct sockaddr *)&main_xprt->addr);
 	rcu_read_unlock();
 	xprt_put(main_xprt);

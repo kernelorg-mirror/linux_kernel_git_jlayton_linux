@@ -3854,7 +3854,7 @@ nfsd4_create_session(struct svc_rqst *rqstp,
 	} else {
 		status = nfserr_clid_inuse;
 		if (!same_creds(&unconf->cl_cred, &rqstp->rq_cred) ||
-		    !rpc_cmp_addr(sa, (struct sockaddr *) &unconf->cl_addr)) {
+		    !rpc_same_addr(sa, (struct sockaddr *) &unconf->cl_addr)) {
 			trace_nfsd_clid_cred_mismatch(unconf, rqstp);
 			goto out_cache_error;
 		}

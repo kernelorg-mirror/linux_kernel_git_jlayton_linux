@@ -842,7 +842,7 @@ static bool nfs4_cb_match_client(const struct sockaddr *addr,
 		return false;
 
 	/* Match only the IP address, not the port number */
-	return rpc_cmp_addr(addr, clap);
+	return rpc_same_addr(addr, clap);
 }
 
 /*

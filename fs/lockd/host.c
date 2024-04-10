@@ -249,7 +249,7 @@ struct nlm_host *nlmclnt_lookup_host(const struct sockaddr *sap,
 	hlist_for_each_entry(host, chain, h_hash) {
 		if (host->net != net)
 			continue;
-		if (!rpc_cmp_addr(nlm_addr(host), sap))
+		if (!rpc_same_addr(nlm_addr(host), sap))
 			continue;
 
 		/* Same address. Share an NSM handle if we already have one */
@@ -360,7 +360,7 @@ struct nlm_host *nlmsvc_lookup_host(const struct svc_rqst *rqstp,
 	hlist_for_each_entry(host, chain, h_hash) {
 		if (host->net != net)
 			continue;
-		if (!rpc_cmp_addr(nlm_addr(host), ni.sap))
+		if (!rpc_same_addr(nlm_addr(host), ni.sap))
 			continue;
 
 		/* Same address. Share an NSM handle if we already have one */
@@ -371,7 +371,7 @@ struct nlm_host *nlmsvc_lookup_host(const struct svc_rqst *rqstp,
 			continue;
 		if (host->h_version != ni.version)
 			continue;
-		if (!rpc_cmp_addr(nlm_srcaddr(host), src_sap))
+		if (!rpc_same_addr(nlm_srcaddr(host), src_sap))
 			continue;
 
 		/* Move to head of hash chain. */
