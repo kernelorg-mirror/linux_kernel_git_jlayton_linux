@@ -1939,6 +1939,14 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 		}
 	}
 
+	/* For now, no removing old sockets while server is running */
+	if (serv->sv_nrthreads && !list_empty(&permsocks)) {
+		list_splice_init(&permsocks, &serv->sv_permsocks);
+		spin_unlock_bh(&serv->sv_lock);
+		err = -EBUSY;
+		goto out;
+	}
+
 	/* Close the remaining sockets on the permsocks list */
 	while(!list_empty(&permsocks)) {
 		xprt = list_first_entry(&permsocks, struct svc_xprt, xpt_list);
