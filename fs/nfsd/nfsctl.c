@@ -1823,9 +1823,6 @@ int nfsd_nl_version_get_doit(struct sk_buff *skb, struct genl_info *info)
 			if (i < 4 && j)
 				continue;
 
-			if (i == 4 && !nfsd_minorversion(nn, j, NFSD_TEST))
-				continue;
-
 			attr = nla_nest_start_noflag(skb,
 					NFSD_A_SERVER_PROTO_VERSION);
 			if (!attr) {
