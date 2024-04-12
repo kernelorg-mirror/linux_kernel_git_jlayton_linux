@@ -66,6 +66,12 @@ attribute-sets:
     name: server-worker
     attributes:
       -
+        name: gracetime
+        type: u32
+      -
+        name: leasetime
+        type: u32
+      -
         name: threads
         type: u32
   -
@@ -138,6 +144,8 @@ operations:
       do:
         request:
           attributes:
+            - gracetime
+            - leasetime
             - threads
     -
       name: threads-get
@@ -146,6 +154,8 @@ operations:
       do:
         reply:
           attributes:
+            - gracetime
+            - leasetime
             - threads
     -
       name: version-set

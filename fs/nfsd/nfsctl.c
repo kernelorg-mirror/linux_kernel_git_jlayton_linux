@@ -1662,19 +1662,54 @@ int nfsd_nl_rpc_status_get_done(struct netlink_callback *cb)
  */
 int nfsd_nl_threads_set_doit(struct sk_buff *skb, struct genl_info *info)
 {
-	u32 nthreads;
-	int ret;
+	struct net *net = genl_info_net(info);
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	u32 nthreads, gracetime = 0, leasetime = 0;
+	const struct nlattr *attr;
+	int ret, rem;
+
 
 	if (GENL_REQ_ATTR_CHECK(info, NFSD_A_SERVER_WORKER_THREADS))
 		return -EINVAL;
 
-	nthreads = nla_get_u32(info->attrs[NFSD_A_SERVER_WORKER_THREADS]);
-	mutex_lock(&nfsd_mutex);
-	ret = nfsd_svc(nthreads,
-		       genl_info_net(info), get_current_cred());
-	mutex_unlock(&nfsd_mutex);
+	nlmsg_for_each_attr(attr, info->nlhdr, GENL_HDRLEN, rem) {
+		switch(nla_type(attr)) {
+		case NFSD_A_SERVER_GRACETIME:
+			gracetime = nla_get_u32(attr);
+			break;
+		case NFSD_A_SERVER_LEASETIME:
+			leasetime = nla_get_u32(attr);
+			break;
+		case NFSD_A_SERVER_WORKER_THREADS:
+			nthreads = nla_get_u32(attr);
+			break;
+		}
+	}
 
+	mutex_lock(&nfsd_mutex);
+	if (gracetime || leasetime) {
+		ret = -EBUSY;
+		if (nn->nfsd_serv && nn->nfsd_serv->sv_nrthreads)
+			goto out_unlock;
+
+		ret = -EINVAL;
+		if (gracetime) {
+			if (gracetime < 10 || gracetime > 3600)
+				goto out_unlock;
+			nn->nfsd4_grace = gracetime;
+		}
+		if (leasetime) {
+			if (leasetime < 10 || leasetime > 3600)
+				goto out_unlock;
+			nn->nfsd4_lease = leasetime;
+		}
+	}
+	ret = nfsd_svc(nthreads, net, get_current_cred());
+	mutex_unlock(&nfsd_mutex);
 	return ret == nthreads ? 0 : -EINVAL;
+out_unlock:
+	mutex_unlock(&nfsd_mutex);
+	return ret;
 }
 
 /**
@@ -1686,6 +1721,8 @@ int nfsd_nl_threads_set_doit(struct sk_buff *skb, struct genl_info *info)
  */
 int nfsd_nl_threads_get_doit(struct sk_buff *skb, struct genl_info *info)
 {
+	struct net *net = genl_info_net(info);
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 	void *hdr;
 	int err;
 
@@ -1699,8 +1736,13 @@ int nfsd_nl_threads_get_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_free_msg;
 	}
 
-	if (nla_put_u32(skb, NFSD_A_SERVER_WORKER_THREADS,
-			nfsd_nrthreads(genl_info_net(info)))) {
+	mutex_lock(&nfsd_mutex);
+	err = nla_put_u32(skb, NFSD_A_SERVER_GRACETIME, nn->nfsd4_grace) ||
+	      nla_put_u32(skb, NFSD_A_SERVER_LEASETIME, nn->nfsd4_lease) ||
+	      nla_put_u32(skb, NFSD_A_SERVER_WORKER_THREADS,
+			  nn->nfsd_serv ? nn->nfsd_serv->sv_nrthreads : 0);
+	mutex_unlock(&nfsd_mutex);
+	if (err) {
 		err = -EINVAL;
 		goto err_free_msg;
 	}
