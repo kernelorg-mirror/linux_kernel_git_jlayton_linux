@@ -406,7 +406,9 @@ static ssize_t write_threads(struct file *file, char *buf, size_t size)
 		if (newthreads < 0)
 			return -EINVAL;
 		trace_nfsd_ctl_threads(net, newthreads);
+		mutex_lock(&nfsd_mutex);
 		rv = nfsd_svc(newthreads, net, file->f_cred);
+		mutex_unlock(&nfsd_mutex);
 		if (rv < 0)
 			return rv;
 	} else
@@ -1667,8 +1669,10 @@ int nfsd_nl_threads_set_doit(struct sk_buff *skb, struct genl_info *info)
 		return -EINVAL;
 
 	nthreads = nla_get_u32(info->attrs[NFSD_A_SERVER_WORKER_THREADS]);
+	mutex_lock(&nfsd_mutex);
 	ret = nfsd_svc(nthreads,
 		       genl_info_net(info), get_current_cred());
+	mutex_unlock(&nfsd_mutex);
 
 	return ret == nthreads ? 0 : -EINVAL;
 }
