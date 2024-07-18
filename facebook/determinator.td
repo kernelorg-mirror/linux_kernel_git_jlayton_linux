@@ -1,0 +1,151 @@
+load("@builtins//:test_utils.td.bzl", "true")
+load("@builtins//:schedule_type.td.bzl", "schedule_type_is")
+load("@builtins//:skycastle.td.bzl", "skycastle")
+load("//bzl:flavors.td.bzl", "ARCH_FLAVORS", "ARCHITECTURES", "BUILD_ONLY_FLAVORS", "ARCH_X86_64")
+
+
+SKYCASTLE_WORKFLOW = "//tools/skycastle/workflows2/kernel/build/kernel-build.sky"
+SKYCASTLE_WORKFLOW_FLAGS = "//tools/skycastle/workflows2/kernel/build/flags.sky"
+ONCALL = "kernel_infra"
+GLOBAL_PREFIX="schedule-build"
+SLP_PROVIDER_ID = "257456667334183"  # kernel_root
+
+
+# This is a copy-paste from https://www.internalfb.com/code/fbsource/tools/utd/migrated_nbtd_jobs/extensions/skycastle.td.bzl
+# I don't have a good understanding of what's going on here, but I assume we can use these values as a safe defaults
+def _gen_slp_integration_spec(user_input):
+    slp_integration_spec = {
+        "event_environment": "PROD",
+        "integration_mode": "AUTOMATIC_OBSERVER",
+        "provider_id": SLP_PROVIDER_ID,
+        "validation_session_id": user_input.values.get("slp_validation_session_id")
+    }
+    return str({k: v for k, v in slp_integration_spec.items() if v})
+
+def _skycastle_impl(
+    run_context,
+    user_input,
+    alias,
+    arch,
+    build_only = False,
+    selftests = False,
+    flavor = None,
+    continuous = False,
+    affected_files = None,
+):
+    args = {
+        "arch": arch,
+        "build-only": build_only,
+        "selftests": selftests,
+        "notify": False,
+    }
+
+    if flavor:
+        args["flavor"] = flavor
+
+    if flavor in BUILD_ONLY_FLAVORS:
+        args["skip-kexec-sanity"] = True
+        args["skip-coldstart-sanity"] = True
+
+    flags = {
+        "{}:{}".format(SKYCASTLE_WORKFLOW_FLAGS, arg): value
+        for arg, value in args.items()
+    }
+
+    flags[
+        "//tools/skycastle/lib2/sandcastle/flags.sky:commit_hash"
+    ] = user_input.values["vcs_revision"]
+
+    tags = ["kernel", "linux-kernel", "utd"]
+    # We only run build + vmtest on continuous runs
+    if continuous:
+        entry_point = "vmtest"
+        tags += ["continous"]
+        flags[
+            "//tools/skycastle/workflows2/kernel/lib/vmtest.sky:is_trusted_run"
+        ] = True
+    else:
+        entry_point = "main"
+        tags += ["diff"]
+
+    return skycastle.schedule(
+        alias = alias,
+        workflow=SKYCASTLE_WORKFLOW,
+        entry_point=entry_point,
+        oncall=ONCALL,
+        repo_name="linux-kernel",
+        flags = flags,
+        tags = tags,
+        skycastle_keyword_options = {
+            "slp-integration-spec": _gen_slp_integration_spec(user_input),
+        },
+    )
+
+[
+    [
+        td_rule(
+            name = "{}-{}".format(GLOBAL_PREFIX, arch),
+            predicate = schedule_type_is("diff"),
+            output = derive(
+                impl = _skycastle_impl,
+                args = {
+                    "alias": "{}-{}".format(GLOBAL_PREFIX, arch),
+                    "run_context": source.run_context(),
+                    "user_input": source.user_input(),
+                    "arch": arch,
+                    "affected_files": source.affected_files(),
+                },
+            )
+        ),
+        td_rule(
+            name = "{}-{}-selftests".format(GLOBAL_PREFIX, arch),
+            predicate = schedule_type_is("diff"),
+            output = derive(
+                impl = _skycastle_impl,
+                args = {
+                    "alias": "{}-{}-selftests".format(GLOBAL_PREFIX, arch),
+                    "run_context": source.run_context(),
+                    "user_input": source.user_input(),
+                    "arch": arch,
+                    "selftests": True,
+                    "affected_files": source.affected_files(),
+                },
+            )
+        ),
+    ] + [
+        td_rule(
+            name = "{}-{}-{}".format(GLOBAL_PREFIX, arch, flavor),
+            predicate = schedule_type_is("diff"),
+            output = derive(
+                impl = _skycastle_impl,
+                args = {
+                    "alias": "{}-{}-{}".format(GLOBAL_PREFIX, arch, flavor),
+                    "run_context": source.run_context(),
+                    "user_input": source.user_input(),
+                    "arch": arch,
+                    "flavor": flavor,
+                    "build_only": True,
+                    "affected_files": source.affected_files(),
+                },
+            )
+        )
+        for flavor in ARCH_FLAVORS[arch]
+    ]
+    for arch in ARCHITECTURES
+]
+
+# For continuous runs we run default x86_64 build
+td_rule(
+    name = "{}-continuous-{}".format(GLOBAL_PREFIX, ARCH_X86_64),
+    predicate = schedule_type_is("continuous"),
+    output = derive(
+        impl = _skycastle_impl,
+        args = {
+            "alias": "{}-continuous-{}".format(GLOBAL_PREFIX, ARCH_X86_64),
+            "run_context": source.run_context(),
+            "user_input": source.user_input(),
+            "arch": ARCH_X86_64,
+            "continuous": True,
+        },
+    )
+)

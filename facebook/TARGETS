@@ -1,0 +1,7 @@
+genrule(
+    name = "lol2-initramfs",
+    out = "initramfs.cpio.zst",
+    cmd = "fbpkg.fetch --dest $TMP kernel.lol2_validation_initramfs.x86_64:LATEST && mv $TMP/initramfs $OUT",
+    labels = ["linux_kernel", "uses_fbpkg"],
+    visibility = ["PUBLIC"],
+)
