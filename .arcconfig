@@ -65,11 +65,6 @@
       "description": "Build kernel target, default: x86_64",
       "owner": "kernel",
       "command": ["facebook/build/build.sh"]
-    },
-    "make": {
-      "description": "Build make target, default: all",
-      "owner": "kernel",
-      "command": ["facebook/build/local-build.sh"]
     }
   }
 }
