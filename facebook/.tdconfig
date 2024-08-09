@@ -14,13 +14,12 @@ SANDCASTLE_PRIORITY = struct(
 
 def _set_default_capabilities(output):
     caps = {
-        "type": "lego",
-        "vcs": "linux-kernel-git",
         "tenant": "kernel",
     }
-    caps.update(output.get("capabilities", {}))
+    output_caps = dict(output.get("capabilities", {}))
+    output_caps.update(caps)
     output_with_caps = dict(output)
-    output_with_caps["capabilities"] = caps
+    output_with_caps["capabilities"] = output_caps
     return output_with_caps
 
 def _default_capabilities_decorator():
