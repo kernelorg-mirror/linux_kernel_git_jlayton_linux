@@ -64,6 +64,7 @@ ARCH_FLAVORS = {
         "hardenedtrain",
         "kdump",
         "lol2",
+        "npi",
     ],
     ARCH_AARCH64: [
         "kdump",
