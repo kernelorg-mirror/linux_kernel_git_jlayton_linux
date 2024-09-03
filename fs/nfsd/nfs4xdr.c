@@ -4141,13 +4141,31 @@ nfsd4_encode_link(struct nfsd4_compoundres *resp, __be32 nfserr,
 	return nfsd4_encode_change_info4(xdr, &link->li_cinfo);
 }
 
+static int
+nfsd4_open_nfsace4_type_and_mask(struct nfsd4_open *open, u32 *mask)
+{
+	struct inode *inode = open->op_stp->st_stid->sc_file->fi_inode;
+	struct svc_rqst *rqstp = open->op_rqstp;
+
+	*mask = 0;
+	if (inode->i_mode & S_IRUGO == S_IRUGO)
+		*mask |= ACE4_READ_DATA;
+	if ((open->op_share_access & OPEN4_SHARE_ACCESS_WRITE) &&
+	    inode->i_mode & S_IWUGO == S_IWUGO)
+		*mask |= ACE4_WRITE_DATA;
+
+	if (*mask)
+		return NFS4_ACL_WHO_EVERYONE;
+}
+
 /*
  * This implementation does not yet support returning an ACE in an
  * OPEN that offers a delegation.
  */
 static __be32
-nfsd4_encode_open_nfsace4(struct xdr_stream *xdr)
+nfsd4_encode_open_nfsace4(struct xdr_stream *xdr, struct nfsd4_open *open)
 {
+	u32 mask = ACE4_READ_DATA;
 	__be32 status;
 
 	/* type */
@@ -4158,8 +4176,12 @@ nfsd4_encode_open_nfsace4(struct xdr_stream *xdr)
 	status = nfsd4_encode_aceflag4(xdr, 0);
 	if (status != nfs_ok)
 		return nfserr_resource;
+
 	/* access mask */
-	status = nfsd4_encode_acemask4(xdr, 0);
+	if (open->op_share_access & NFS4_SHARE_ACCESS_WRITE)
+		mask |= ACE4_WRITE_DATA;
+
+	status = nfsd4_encode_acemask4(xdr, mask);
 	if (status != nfs_ok)
 		return nfserr_resource;
 	/* who - empty for now */
