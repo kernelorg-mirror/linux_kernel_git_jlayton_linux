@@ -58,6 +58,8 @@ ARCH_FLAVORS = {
         "lol2",
         "clangtrain",
         "hardenedtrain",
+        "crackerjackguest",
+        "crackerjackhost",
         "debug",
     ],
     ARCH_AARCH64: [
