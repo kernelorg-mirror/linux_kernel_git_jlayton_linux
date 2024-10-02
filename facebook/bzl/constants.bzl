@@ -7,11 +7,14 @@ BUILD_IMAGE_AARCH64_SHA256="41288b4fcb842e08a196c5c68da13bad0cba644a2d46de1dfe0a
 KPATCH_BUILD_RPM_URI="http://yum/yum/centos/9/backports/x86_64/RPMS/kpatch-build-0.9.10-0.4.hs.el9.x86_64.rpm"
 KPATCH_BUILD_RPM_SHA256="8665a0fab79db7063184381c7a964ce6a255ec11a38076c17a7901b0ec2e170f"
 
-CLANG_TRAIN_DATA_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/clang_train_data/v69/profdata.6.9.0-0_fbk0_clangtrain_rc14_882_g0454ed39ffdd.7200s.yhs.2024-06-23-13-54-38"
-CLANG_TRAIN_DATA_SHA256="5f2293c5550094f609045056357d2ef34b6360ced418ba531671a20b99eb34f1"
+CLANG_TRAIN_DATA_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/clang_train_data/v613/profdata.6.13.2-0_fbk2_clangtrain_rc4_0_g11312d0b0da1.7200s.yhs.2025-05-20-11-32-59"
+CLANG_TRAIN_DATA_SHA256="92361b83018ba3568000bbf3e90bd48849de0a4f2942973056a48fd68b9109a3"
 
-HARDENED_TRAIN_DATA_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/clang_train_data/v69/profdata.6.9.0-0_fbk0_clangtrain_rc14_882_g0454ed39ffdd.7200s.yhs.2024-06-23-13-54-38"
-HARDENED_TRAIN_DATA_SHA256="5f2293c5550094f609045056357d2ef34b6360ced418ba531671a20b99eb34f1"
+HARDENED_TRAIN_DATA_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/clang_train_data/v613/profdata.6.13.2-0_fbk2_clangtrain_rc4_0_g11312d0b0da1.7200s.yhs.2025-05-20-11-32-59"
+HARDENED_TRAIN_DATA_SHA256="92361b83018ba3568000bbf3e90bd48849de0a4f2942973056a48fd68b9109a3"
+
+AARCH64_TRAIN_DATA_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/clang_train_data/v613/aarch64/vmlinux.profdata.aarch64.1050"
+AARCH64_TRAIN_DATA_SHA256="cfad06ec875e343cbee20dacd121d460de50ae455c39c5f3a6050a6ecae57851"
 
 SelftestsType = enum("none", "all", "bpf")
 

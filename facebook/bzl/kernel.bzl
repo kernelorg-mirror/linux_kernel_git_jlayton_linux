@@ -1,4 +1,4 @@
-load(":flavors.td.bzl", "ARCHITECTURE_TO_KERNEL_ARCH", "ARCH_X86_64", "ARCHITECTURE_TO_RPMBUILD_TARGET")
+load(":flavors.td.bzl", "ARCHITECTURE_TO_KERNEL_ARCH", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_RPMBUILD_TARGET")
 load(":config.bzl", "config_name")
 load(":constants.bzl", "SELFTESTS", "SelftestsType")
 load(":container.bzl", "container_genrule")
@@ -134,13 +134,16 @@ def gen_kernel(
     elif flavor and "debug" in flavor:
         llvm_macro = "LLVM=1"
     else:
-        # only x86_64 has clang PGO for now
+        # both x86_64 and arm64 have clang PGO
         if arch == ARCH_X86_64:
             # default clang pgo kernel
             if flavor and "hardened" in flavor:
                 extra_srcs += [("$(location //facebook/build:hardened-train-data)", "/tmp/vmlinux.profdata")]
             else:
                 extra_srcs += [("$(location //facebook/build:clang-train-data)", "/tmp/vmlinux.profdata")]
+            llvm_macro = "LLVM=1 CFLAGS_PGO_CLANG=-fprofile-use=/tmp/vmlinux.profdata"
+        elif arch == ARCH_AARCH64:
+            extra_srcs += [("$(location //facebook/build:aarch64-train-data)", "/tmp/vmlinux.profdata")]
             llvm_macro = "LLVM=1 CFLAGS_PGO_CLANG=-fprofile-use=/tmp/vmlinux.profdata"
         else:
             llvm_macro = "LLVM=1"
