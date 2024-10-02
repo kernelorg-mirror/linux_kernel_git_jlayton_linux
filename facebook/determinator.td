@@ -57,8 +57,10 @@ def _skycastle_impl(
     ] = user_input.values["vcs_revision"]
 
     tags = ["kernel", "linux-kernel", "utd"]
+    sl_workloads = user_input.values.get("servicelab_workloads", None)
     if user_input.values.get("run_servicelab", False):
         entry_point = "servicelab"
+        flags["%s:servicelab_workloads" % SKYCASTLE_WORKFLOW_FLAGS] = sl_workloads
         tags += ["continous"]
     # We only run build + vmtest on continuous runs
     elif continuous:
