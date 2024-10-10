@@ -6171,13 +6171,14 @@ nfsd4_process_open2(struct svc_rqst *rqstp, struct svc_fh *current_fh, struct nf
 	deleg_only = new_stp && open_xor_delegation(open);
 nodeleg:
 	if (deleg_only) {
+		mutex_unlock(&stp->st_mutex);
 		memcpy(&open->op_stateid, &zero_stateid, sizeof(open->op_stateid));
 		open->op_rflags |= OPEN4_RESULT_NO_OPEN_STATEID;
 		release_open_stateid(stp);
 	} else {
 		nfs4_inc_and_copy_stateid(&open->op_stateid, &stp->st_stid);
+		mutex_unlock(&stp->st_mutex);
 	}
-	mutex_unlock(&stp->st_mutex);
 
 	status = nfs_ok;
 	trace_nfsd_open(&stp->st_stid.sc_stateid);
