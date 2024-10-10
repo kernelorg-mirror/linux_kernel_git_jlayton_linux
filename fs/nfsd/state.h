@@ -41,6 +41,8 @@
 #include "nfsfh.h"
 #include "nfsd.h"
 
+extern bool open_xor_deleg_enable;
+
 typedef struct {
 	u32             cl_boot;
 	u32             cl_id;

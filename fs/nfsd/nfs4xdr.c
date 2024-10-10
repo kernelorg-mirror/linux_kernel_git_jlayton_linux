@@ -3441,6 +3441,11 @@ static const struct open_arguments4 nfsd_open_arguments = {
 static __be32 nfsd4_encode_fattr4_open_arguments(struct xdr_stream *xdr,
 						 const struct nfsd4_fattr_args *args)
 {
+	if (open_xor_deleg_enable)
+		oa_share_access_want |= BIT(OPEN_ARGS_SHARE_ACCESS_WANT_OPEN_XOR_DELEGATION);
+	else
+		oa_share_access_want &= ~BIT(OPEN_ARGS_SHARE_ACCESS_WANT_OPEN_XOR_DELEGATION);
+
 	if (!xdrgen_encode_fattr4_open_arguments(xdr, &nfsd_open_arguments))
 		return nfserr_resource;
 	return nfs_ok;

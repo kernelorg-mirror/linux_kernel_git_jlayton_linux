@@ -59,6 +59,11 @@
 
 #define NFSDDBG_FACILITY                NFSDDBG_PROC
 
+bool open_xor_deleg_enable = true;
+module_param(open_xor_deleg_enable, bool, 0644);
+MODULE_PARM_DESC(open_xor_deleg_enable,
+		 "Enable OPEN_XOR_DELEGATION support: true");
+
 #define all_ones {{ ~0, ~0}, ~0}
 static const stateid_t one_stateid = {
 	.si_generation = ~0,
@@ -6057,6 +6062,8 @@ static void nfsd4_deleg_xgrade_none_ext(struct nfsd4_open *open,
 /* Are we only returning a delegation stateid? */
 static bool open_xor_delegation(struct nfsd4_open *open)
 {
+	if (!open_xor_deleg_enable)
+		return false;
 	if (!(open->op_deleg_want & OPEN4_SHARE_ACCESS_WANT_OPEN_XOR_DELEGATION))
 		return false;
 	if (open->op_delegate_type != NFS4_OPEN_DELEGATE_READ &&
