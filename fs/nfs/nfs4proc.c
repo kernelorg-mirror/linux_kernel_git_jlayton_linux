@@ -1366,7 +1366,7 @@ nfs4_map_atomic_open_share(struct nfs_server *server,
 	/* res |= NFS4_SHARE_WANT_NO_PREFERENCE; */
 	if (server->caps & NFS_CAP_DELEGTIME)
 		res |= NFS4_SHARE_WANT_DELEG_TIMESTAMPS;
-	if (server->caps & NFS_CAP_OPEN_XOR)
+	if ((server->caps & NFS_CAP_OPEN_XOR) && !(server->flags & NFS_MOUNT_NO_OPEN_XOR_DELEG))
 		res |= NFS4_SHARE_WANT_OPEN_XOR_DELEGATION;
 out:
 	return res;

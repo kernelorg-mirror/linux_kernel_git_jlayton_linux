@@ -554,6 +554,9 @@ static void nfs_show_mount_options(struct seq_file *m, struct nfs_server *nfss,
 	if (nfss->flags & NFS_MOUNT_NO_ALIGNWRITE)
 		seq_puts(m, ",noalignwrite");
 
+	if (nfss->flags & NFS_MOUNT_NO_OPEN_XOR_DELEG)
+		seq_puts(m, ",nooxd");
+
 	if (nfss->flags & NFS_MOUNT_WRITE_EAGER) {
 		if (nfss->flags & NFS_MOUNT_WRITE_WAIT)
 			seq_puts(m, ",write=wait");

@@ -68,6 +68,7 @@ enum nfs_param {
 	Opt_namelen,
 	Opt_nconnect,
 	Opt_max_connect,
+	Opt_oxd,
 	Opt_port,
 	Opt_posix,
 	Opt_proto,
@@ -201,6 +202,7 @@ static const struct fs_parameter_spec nfs_fs_parameters[] = {
 	fsparam_enum  ("write",		Opt_write, nfs_param_enums_write),
 	fsparam_u32   ("wsize",		Opt_wsize),
 	fsparam_string("xprtsec",	Opt_xprtsec),
+	fsparam_flag_no("oxd",		Opt_oxd),
 	{}
 };
 
@@ -616,6 +618,12 @@ static int nfs_fs_context_parse_param(struct fs_context *fc,
 			ctx->flags &= ~NFS_MOUNT_NONLM;
 			ctx->flags &= ~(NFS_MOUNT_LOCAL_FLOCK | NFS_MOUNT_LOCAL_FCNTL);
 		}
+		break;
+	case Opt_oxd:
+		if (result.negated)
+			ctx->flags |= NFS_MOUNT_NO_OPEN_XOR_DELEG;
+		else
+			ctx->flags &= ~NFS_MOUNT_NO_OPEN_XOR_DELEG;
 		break;
 	case Opt_udp:
 		ctx->flags &= ~NFS_MOUNT_TCP;
