@@ -53,6 +53,7 @@ ARCHITECTURE_TO_RPMBUILD_TARGET = {
 #
 ARCH_FLAVORS = {
     ARCH_X86_64: [
+        "asicedk",
         "clangtrain",
         "crackerjackhost",
         "cvmhost",
