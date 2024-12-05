@@ -61,10 +61,12 @@ ARCH_FLAVORS = {
         "crackerjackguest",
         "crackerjackhost",
         "debug",
+        "debugnightly",
     ],
     ARCH_AARCH64: [
         "kdump",
         "debug",
+        "debugnightly",
     ],
 }
 
