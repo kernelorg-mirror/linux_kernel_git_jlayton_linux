@@ -73,12 +73,17 @@ kernelversion="$(make -s kernelversion EXTRAVERSION=)"
 gittish="$(git describe | awk -F- '{print $(NF-1)"_"$(NF)}')"
 # git tag --match is very slow, so see if we can get lucky without --match,
 # otherwise we need to fallback on the slow method
-fbk_tag="$(git describe --abbrev=0 --tags)"
+# The --exclude comes from kdump kernel builds being discovered by
+# "^kdump-.*" regular expression, but we don't define any additional semantic
+# information with it, we just want the build to happen from the tagged commit.
+# So we want it not to be seen by build machinery at all.
+# https://fburl.com/wiki/hdpuxsgi
+fbk_tag="$(git describe --abbrev=0 --tags --exclude 'kdump-*')"
 
-# This is coming from D38149809
+# This is coming from D38149809, for --exclude see above
 if [[ $fbk_tag != *"fbk"* ]] && [[ "$fbk_tag" != *"-upstream" ]]
 then
-    fbk_tag="$(git describe --abbrev=0 --tags --match '*fbk*')"
+    fbk_tag="$(git describe --abbrev=0 --tags --match '*fbk*' --exclude 'kdump-*')"
 fi
 
 # modules definitions come from configerator because they need to be built on
