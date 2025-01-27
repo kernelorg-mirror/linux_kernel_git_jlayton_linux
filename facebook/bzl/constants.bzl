@@ -1,8 +1,8 @@
-BUILD_IMAGE_X86_64_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/build_images/D54352581.c9.x86_64"
-BUILD_IMAGE_X86_64_SHA256="e70627dfeb1f00fe8527b6378c24af34179f5da4deda02a1c90d9482e5c27b25"
+BUILD_IMAGE_X86_64_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/build_images/D68645928.c9.llvm19.x86_64"
+BUILD_IMAGE_X86_64_SHA256="c34ee90aa27967e22c70e855a89647b2eb05574b739504d1e6766828563063d0"
 
-BUILD_IMAGE_AARCH64_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/build_images/D54352581.c9.aarch64"
-BUILD_IMAGE_AARCH64_SHA256="0e91aa671d120c160601cea52b32b7e3ecc0b08ca59b4647ac78ac072c98a354"
+BUILD_IMAGE_AARCH64_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/build_images/D68645928.c9.llvm19.aarch64"
+BUILD_IMAGE_AARCH64_SHA256="41288b4fcb842e08a196c5c68da13bad0cba644a2d46de1dfe0ac7a0cc76c51c"
 
 KPATCH_BUILD_RPM_URI="http://yum/yum/centos/9/backports/x86_64/RPMS/kpatch-build-0.9.8-1.3.hs.el9.x86_64.rpm"
 KPATCH_BUILD_RPM_SHA256="b2edfd1d3756794088c320f5cf9adcc0d72afcf0bb646717e99033b98138805f"
