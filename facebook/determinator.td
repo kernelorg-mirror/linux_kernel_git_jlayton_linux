@@ -61,11 +61,11 @@ def _skycastle_impl(
     if user_input.values.get("run_servicelab", False):
         entry_point = "servicelab"
         flags["%s:servicelab_workloads" % SKYCASTLE_WORKFLOW_FLAGS] = sl_workloads
-        tags += ["continous"]
+        tags += ["continuous"]
     # We only run build + vmtest on continuous runs
     elif continuous:
         entry_point = "vmtest"
-        tags += ["continous"]
+        tags += ["continuous"]
         flags[
             "//tools/skycastle/workflows2/kernel/lib/vmtest.sky:is_trusted_run"
         ] = True
@@ -129,7 +129,7 @@ def _skycastle_impl(
                     "user_input": source.user_input(),
                     "arch": arch,
                     "flavor": flavor,
-                    "build_only": True,
+                    "build_only": False if flavor in ['debug'] else True,
                     "affected_files": source.affected_files(),
                 },
             )
@@ -140,17 +140,26 @@ def _skycastle_impl(
 ]
 
 # For continuous runs we run default x86_64 build
-td_rule(
-    name = "{}-continuous-{}".format(GLOBAL_PREFIX, ARCH_X86_64),
-    predicate = schedule_type_is("continuous"),
-    output = derive(
-        impl = _skycastle_impl,
-        args = {
-            "alias": "{}-continuous-{}".format(GLOBAL_PREFIX, ARCH_X86_64),
-            "run_context": source.run_context(),
-            "user_input": source.user_input(),
-            "arch": ARCH_X86_64,
-            "continuous": True,
-        },
-    )
-)
+def _suffix(flavor):
+  if flavor:
+    return "-{}".format(flavor)
+  return ""
+
+[
+  td_rule(
+      name = "{}-continuous-{}{}".format(GLOBAL_PREFIX, ARCH_X86_64, _suffix(flavor)),
+      predicate = schedule_type_is("continuous"),
+      output = derive(
+          impl = _skycastle_impl,
+          args = {
+              "alias": "{}-continuous-{}{}".format(GLOBAL_PREFIX, ARCH_X86_64, _suffix(flavor)),
+              "run_context": source.run_context(),
+              "user_input": source.user_input(),
+              "arch": ARCH_X86_64,
+              "continuous": True,
+              "flavor": flavor,
+          },
+      )
+  )
+  for flavor in [None, "debug"]
+]
