@@ -53,15 +53,17 @@ ARCHITECTURE_TO_RPMBUILD_TARGET = {
 #
 ARCH_FLAVORS = {
     ARCH_X86_64: [
-        "hardened",
-        "kdump",
-        "lol2",
         "clangtrain",
-        "hardenedtrain",
         "crackerjackguest",
         "crackerjackhost",
+        "cvmguest",
+        "cvmhost",
         "debug",
         "debugnightly",
+        "hardened",
+        "hardenedtrain",
+        "kdump",
+        "lol2",
     ],
     ARCH_AARCH64: [
         "kdump",
