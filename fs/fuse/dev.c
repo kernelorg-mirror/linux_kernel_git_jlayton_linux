@@ -502,17 +502,37 @@ static int queue_interrupt(struct fuse_req *req)
 	return 0;
 }
 
+static void request_wait_warn(struct fuse_req *req)
+{
+	struct fuse_conn *fc = req->fm->fc;
+	unsigned long age = (jiffies - req->create_time) / HZ;
+
+	pr_warn("fuse: FUSE connection %u hasn't responded in %lu seconds\n", fc->dev, age);
+}
+
+#define FUSE_REQ_WAIT_TIMEOUT	(60 * HZ)
+
 static void request_wait_answer(struct fuse_req *req)
 {
 	struct fuse_conn *fc = req->fm->fc;
 	struct fuse_iqueue *fiq = &fc->iq;
 	int err;
+	bool warned = false;
 
 	if (!fc->no_interrupt) {
-		/* Any signal may interrupt this */
-		err = wait_event_interruptible(req->waitq,
-					test_bit(FR_FINISHED, &req->flags));
-		if (!err)
+		for (;;) {
+			/* Any signal may interrupt this */
+			err = wait_event_interruptible_timeout(req->waitq,
+					test_bit(FR_FINISHED, &req->flags), FUSE_REQ_WAIT_TIMEOUT);
+			if (err != 0)
+				break;
+			if (!warned) {
+				request_wait_warn(req);
+				warned = true;
+			}
+		}
+
+		if (err > 0)
 			return;
 
 		set_bit(FR_INTERRUPTED, &req->flags);
@@ -524,9 +544,17 @@ static void request_wait_answer(struct fuse_req *req)
 
 	if (!test_bit(FR_FORCE, &req->flags)) {
 		/* Only fatal signals may interrupt this */
-		err = wait_event_killable(req->waitq,
-					test_bit(FR_FINISHED, &req->flags));
-		if (!err)
+		for (;;) {
+			err = wait_event_killable_timeout(req->waitq,
+					test_bit(FR_FINISHED, &req->flags), FUSE_REQ_WAIT_TIMEOUT);
+			if (err != 0)
+				break;
+			if (!warned) {
+				request_wait_warn(req);
+				warned = true;
+			}
+		}
+		if (err > 0)
 			return;
 
 		spin_lock(&fiq->lock);
@@ -545,7 +573,16 @@ static void request_wait_answer(struct fuse_req *req)
 	 * Either request is already in userspace, or it was forced.
 	 * Wait it out.
 	 */
-	wait_event(req->waitq, test_bit(FR_FINISHED, &req->flags));
+	for (;;) {
+		err = wait_event_timeout(req->waitq, test_bit(FR_FINISHED, &req->flags),
+					 FUSE_REQ_WAIT_TIMEOUT);
+		if (err != 0)
+			break;
+		if (!warned) {
+			request_wait_warn(req);
+			warned = true;
+		}
+	}
 }
 
 static void __fuse_request_send(struct fuse_req *req)
