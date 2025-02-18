@@ -807,6 +807,10 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 			ci = mlx5_wq_cyc_ctr2ix(&sq->wq, sqcc);
 			wi = &sq->db.wqe_info[ci];
 
+			/* if the CC got over the limit break the loop and hope for the best */
+			if (unlikely((u16)(sqcc - sq->cc) > (u16)(wqe_counter - sq->cc)))
+				goto cqe_error;
+
 			sqcc += wi->num_wqebbs;
 
 			if (likely(wi->skb)) {
@@ -832,6 +836,7 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 		} while (!last_wqe);
 
 		if (unlikely(get_cqe_opcode(cqe) == MLX5_CQE_REQ_ERR)) {
+cqe_error:
 			if (!test_and_set_bit(MLX5E_SQ_STATE_RECOVERING,
 					      &sq->state)) {
 				mlx5e_dump_error_cqe(&sq->cq, sq->sqn,
