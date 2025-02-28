@@ -4752,6 +4752,18 @@ int pci_bridge_wait_for_secondary_bus(struct pci_dev *dev, char *reset_type)
 	if (!pcie_downstream_port(dev))
 		return 0;
 
+	/*
+	 * Allow for user specified unconditional sleep before accessing the
+	 * link. There is no spec defined upper limit, so this allows extra
+	 * time for slow systems, such as hardware emulation platforms, to
+	 * reset and re-establish the link.
+	 */
+	if (dev->secondary_bus_link_delay_s) {
+		pci_dbg(dev, "waiting extra %d for downstream link\n",
+		        dev->secondary_bus_link_delay_s);
+		ssleep(dev->secondary_bus_link_delay_s);
+	}
+
 	if (pcie_get_speed_cap(dev) <= PCIE_SPEED_5_0GT) {
 		u16 status;
 

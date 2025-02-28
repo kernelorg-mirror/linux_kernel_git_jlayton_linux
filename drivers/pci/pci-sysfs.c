@@ -575,6 +575,38 @@ static ssize_t reset_subordinate_store(struct device *dev,
 }
 static DEVICE_ATTR_WO(reset_subordinate);
 
+static ssize_t reset_subordinate_link_delay_store(struct device *dev,
+						  struct device_attribute *attr,
+					          const char *buf, size_t count)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	unsigned long val;
+
+	/* this can crash the machine when done on the "wrong" device */
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (kstrtoul(buf, 0, &val) < 0)
+		return -EINVAL;
+
+	/* an hour is a generous maximum wait time */
+	if (val > 60 * 60)
+		return -EINVAL;
+
+	pdev->secondary_bus_link_delay_s = val;
+
+	return count;
+}
+
+static ssize_t reset_subordinate_link_delay_show(struct device *dev,
+						 struct device_attribute *attr,
+						 char *buf)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	return sysfs_emit(buf, "%u\n", pdev->secondary_bus_link_delay_s);
+}
+static DEVICE_ATTR_RW(reset_subordinate_link_delay);
+
 #if defined(CONFIG_PM) && defined(CONFIG_ACPI)
 static ssize_t d3cold_allowed_store(struct device *dev,
 				    struct device_attribute *attr,
@@ -652,6 +684,7 @@ static struct attribute *pci_bridge_attrs[] = {
 	&dev_attr_subordinate_bus_number.attr,
 	&dev_attr_secondary_bus_number.attr,
 	&dev_attr_reset_subordinate.attr,
+	&dev_attr_reset_subordinate_link_delay.attr,
 	NULL,
 };
 
