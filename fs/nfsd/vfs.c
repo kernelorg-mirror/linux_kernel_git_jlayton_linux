@@ -502,6 +502,8 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	int		retries;
 
 dprintk("nfsd_setattr pacl=%p valid=0x%x\n", attr->na_pacl, iap->ia_valid);
+	trace_nfsd_setattr(rqstp, fhp, iap, guardtime);
+
 	if (iap->ia_valid & ATTR_SIZE) {
 		accmode |= NFSD_MAY_WRITE|NFSD_MAY_OWNER_OVERRIDE;
 		ftype = S_IFREG;
