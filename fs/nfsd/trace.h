@@ -2416,6 +2416,29 @@ TRACE_EVENT(nfsd_vfs_create,
 		  show_fs_file_type(__entry->type), __get_str(name))
 );
 
+TRACE_EVENT(nfsd_vfs_symlink,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh *fhp,
+		 const char *name,
+		 unsigned int namelen,
+		 const char *tgt),
+	TP_ARGS(rqstp, fhp, name, namelen, tgt),
+	TP_STRUCT__entry(
+		SVC_RQST_ENDPOINT_FIELDS(rqstp)
+		__field(u32, fh_hash)
+		__string_len(name, name, namelen)
+		__string(tgt, tgt)
+	),
+	TP_fast_assign(
+		SVC_RQST_ENDPOINT_ASSIGNMENTS(rqstp);
+		__entry->fh_hash = knfsd_fh_hash(&fhp->fh_handle);
+		__assign_str(name);
+		__assign_str(tgt);
+	),
+	TP_printk("xid=0x%08x fh_hash=0x%08x name=%s target=%s",
+		  __entry->xid, __entry->fh_hash,
+		  __get_str(name), __get_str(tgt))
+);
 #endif /* _NFSD_TRACE_H */
 
 #undef TRACE_INCLUDE_PATH
