@@ -2531,6 +2531,30 @@ TRACE_EVENT(nfsd_vfs_readdir,
 	TP_printk("xid=0x%08x fh_hash=0x%08x offset=0x%llx",
 		  __entry->xid, __entry->fh_hash, __entry->offset)
 );
+
+DECLARE_EVENT_CLASS(nfsd_vfs_getattr_class,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh *fhp),
+	TP_ARGS(rqstp, fhp),
+	TP_STRUCT__entry(
+		SVC_RQST_ENDPOINT_FIELDS(rqstp)
+		__field(u32, fh_hash)
+	),
+	TP_fast_assign(
+		SVC_RQST_ENDPOINT_ASSIGNMENTS(rqstp);
+		__entry->fh_hash = knfsd_fh_hash(&fhp->fh_handle);
+	),
+	TP_printk("xid=0x%08x fh_hash=0x%08x",
+		  __entry->xid, __entry->fh_hash)
+);
+
+#define DEFINE_NFSD_VFS_GETATTR_EVENT(__name)					\
+	DEFINE_EVENT(nfsd_vfs_getattr_class, __name,				\
+		     TP_PROTO(struct svc_rqst *rqstp, struct svc_fh *fhp),	\
+		     TP_ARGS(rqstp, fhp))
+
+DEFINE_NFSD_VFS_GETATTR_EVENT(nfsd_vfs_getattr);
+DEFINE_NFSD_VFS_GETATTR_EVENT(nfsd_vfs_statfs);
 #endif /* _NFSD_TRACE_H */
 
 #undef TRACE_INCLUDE_PATH
