@@ -189,7 +189,7 @@ fi
 /boot/System.map-%{_uname}
 /boot/config-%{_uname}
 /boot/vmlinuz-%{_uname}
-%ghost /boot/initramfs-%{_uname}.img
+%ghost %attr(0600, root, root) /boot/initramfs-%{_uname}.img
 
 %if %{defined _headers_rpm}
 %files headers
