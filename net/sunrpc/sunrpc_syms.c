@@ -77,9 +77,38 @@ static __net_exit void sunrpc_exit_net(struct net *net)
 	WARN_ON_ONCE(!list_empty(&sn->all_clients));
 }
 
+static void shutdown_all_clients(struct sunrpc_net *sn)
+{
+	struct rpc_clnt *clnt;
+
+	lockdep_assert_held(&sn->rpc_client_lock);
+
+	list_for_each_entry(clnt, &sn->all_clients, cl_clients)
+		rpc_clnt_shutdown(clnt);
+}
+
+static bool all_clients_gone(struct sunrpc_net *sn)
+{
+	bool empty;
+
+	spin_lock(&sn->rpc_client_lock);
+	empty = list_empty(&sn->all_clients);
+	spin_unlock(&sn->rpc_client_lock);
+	return empty;
+}
+
+static void sunrpc_pre_exit_net(struct net *net)
+{
+	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
+
+	shutdown_all_clients(sn);
+	wait_var_event(&sn->all_clients, all_clients_gone(sn));
+}
+
 static struct pernet_operations sunrpc_net_ops = {
 	.init = sunrpc_init_net,
 	.exit = sunrpc_exit_net,
+	.pre_exit = sunrpc_pre_exit_net,
 	.id = &sunrpc_net_id,
 	.size = sizeof(struct sunrpc_net),
 };

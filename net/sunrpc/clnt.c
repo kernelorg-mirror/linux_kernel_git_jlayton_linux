@@ -91,6 +91,8 @@ static void rpc_unregister_client(struct rpc_clnt *clnt)
 
 	spin_lock(&sn->rpc_client_lock);
 	list_del(&clnt->cl_clients);
+	if (list_empty(&sn->all_clients))
+		wake_up_var(&sn->all_clients);
 	spin_unlock(&sn->rpc_client_lock);
 }
 
