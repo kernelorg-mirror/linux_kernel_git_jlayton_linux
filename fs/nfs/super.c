@@ -56,6 +56,7 @@
 #include <linux/parser.h>
 #include <linux/nsproxy.h>
 #include <linux/rcupdate.h>
+#include <linux/lockd/lockd.h>
 
 #include <linux/uaccess.h>
 #include <linux/nfs_ssc.h>
@@ -1385,6 +1386,23 @@ void nfs_kill_super(struct super_block *s)
 	nfs_free_server(server);
 }
 EXPORT_SYMBOL_GPL(nfs_kill_super);
+
+void nfs_server_shutdown(struct nfs_server *server)
+{
+	/* already shut down? */
+	if (server->flags & NFS_MOUNT_SHUTDOWN)
+		return;
+
+	server->flags |= NFS_MOUNT_SHUTDOWN;
+	rpc_clnt_shutdown(server->client);
+	rpc_clnt_shutdown(server->nfs_client->cl_rpcclient);
+
+	if (!IS_ERR(server->client_acl))
+		rpc_clnt_shutdown(server->client_acl);
+
+	if (server->nlm_host)
+		nlm_host_shutdown_rpc(server->nlm_host);
+}
 
 #if IS_ENABLED(CONFIG_NFS_V4)
 

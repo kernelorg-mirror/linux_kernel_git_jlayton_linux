@@ -14,6 +14,7 @@
 #include <linux/rcupdate.h>
 #include <linux/lockd/lockd.h>
 
+#include "internal.h"
 #include "nfs4_fs.h"
 #include "netns.h"
 #include "sysfs.h"
@@ -242,20 +243,7 @@ shutdown_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (val != 1)
 		return -EINVAL;
 
-	/* already shut down? */
-	if (server->flags & NFS_MOUNT_SHUTDOWN)
-		goto out;
-
-	server->flags |= NFS_MOUNT_SHUTDOWN;
-	rpc_clnt_shutdown(server->client);
-	rpc_clnt_shutdown(server->nfs_client->cl_rpcclient);
-
-	if (!IS_ERR(server->client_acl))
-		rpc_clnt_shutdown(server->client_acl);
-
-	if (server->nlm_host)
-		nlm_host_shutdown_rpc(server->nlm_host);
-out:
+	nfs_server_shutdown(server);
 	return count;
 }
 
