@@ -2103,10 +2103,15 @@ out1:
 }
 
 void
+gss_svc_pre_shutdown_net(struct net *net)
+{
+	destroy_use_gss_proxy_proc_entry(net);
+}
+
+void
 gss_svc_shutdown_net(struct net *net)
 {
 	destroy_krb5_enctypes_proc_entry(net);
-	destroy_use_gss_proxy_proc_entry(net);
 	rsi_cache_destroy_net(net);
 	rsc_cache_destroy_net(net);
 }

@@ -19,6 +19,7 @@
 int gss_svc_init(void);
 void gss_svc_shutdown(void);
 int gss_svc_init_net(struct net *net);
+void gss_svc_pre_shutdown_net(struct net *net);
 void gss_svc_shutdown_net(struct net *net);
 struct auth_domain *svcauth_gss_register_pseudoflavor(u32 pseudoflavor,
 						      char *name);

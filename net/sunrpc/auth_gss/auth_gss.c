@@ -2237,9 +2237,15 @@ static __net_exit void rpcsec_gss_exit_net(struct net *net)
 	gss_svc_shutdown_net(net);
 }
 
+static __net_exit void rpcsec_gss_pre_exit_net(struct net *net)
+{
+	gss_svc_pre_shutdown_net(net);
+}
+
 static struct pernet_operations rpcsec_gss_net_ops = {
 	.init = rpcsec_gss_init_net,
 	.exit = rpcsec_gss_exit_net,
+	.pre_exit = rpcsec_gss_pre_exit_net,
 };
 
 /*
