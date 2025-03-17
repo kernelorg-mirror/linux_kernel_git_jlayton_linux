@@ -16,6 +16,7 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/addr.h>
 #include <linux/lockd/lockd.h>
+#include <linux/lockd/debug.h>
 #include <linux/lockd/share.h>
 #include <linux/module.h>
 #include <linux/mount.h>

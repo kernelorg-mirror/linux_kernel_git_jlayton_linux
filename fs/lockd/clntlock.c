@@ -16,6 +16,7 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
 #include <linux/lockd/lockd.h>
+#include <linux/lockd/debug.h>
 #include <linux/kthread.h>
 
 #include "trace.h"

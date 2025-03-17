@@ -37,6 +37,7 @@
 #include <net/addrconf.h>
 #include <net/ipv6.h>
 #include <linux/lockd/lockd.h>
+#include <linux/lockd/debug.h>
 #include <linux/nfs.h>
 
 #include "netns.h"

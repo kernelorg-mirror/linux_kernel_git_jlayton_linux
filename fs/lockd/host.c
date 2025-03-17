@@ -17,6 +17,7 @@
 #include <linux/sunrpc/addr.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/lockd/lockd.h>
+#include <linux/lockd/debug.h>
 #include <linux/mutex.h>
 
 #include <linux/sunrpc/svc_xprt.h>

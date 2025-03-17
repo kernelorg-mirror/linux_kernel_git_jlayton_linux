@@ -17,6 +17,7 @@
 #include <linux/sunrpc/xprtsock.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/lockd/lockd.h>
+#include <linux/lockd/debug.h>
 
 #include <linux/unaligned.h>
 

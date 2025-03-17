@@ -14,6 +14,7 @@
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/stats.h>
 #include <linux/lockd/lockd.h>
+#include <linux/lockd/debug.h>
 
 #include <uapi/linux/nfs3.h>
 

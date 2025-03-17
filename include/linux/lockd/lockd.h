@@ -24,7 +24,6 @@
 #ifdef CONFIG_LOCKD_V4
 #include <linux/lockd/xdr4.h>
 #endif
-#include <linux/lockd/debug.h>
 #include <linux/sunrpc/svc.h>
 
 /*

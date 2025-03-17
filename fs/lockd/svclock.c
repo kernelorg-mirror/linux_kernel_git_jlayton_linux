@@ -30,6 +30,7 @@
 #include <linux/sunrpc/svc_xprt.h>
 #include <linux/lockd/nlm.h>
 #include <linux/lockd/lockd.h>
+#include <linux/lockd/debug.h>
 
 #define NLMDBG_FACILITY		NLMDBG_SVCLOCK
 
