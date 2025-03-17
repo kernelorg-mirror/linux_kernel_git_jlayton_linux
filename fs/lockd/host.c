@@ -692,3 +692,10 @@ nlm_gc_hosts(struct net *net)
 		ln->next_gc = jiffies + NLM_HOST_COLLECT;
 	}
 }
+
+void
+nlm_host_shutdown_rpc(struct nlm_host *host)
+{
+	rpc_clnt_shutdown(host->h_rpcclnt);
+}
+EXPORT_SYMBOL_GPL(nlm_host_shutdown_rpc);

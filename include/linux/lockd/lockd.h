@@ -248,6 +248,7 @@ void		  nlm_shutdown_hosts(void);
 void		  nlm_shutdown_hosts_net(struct net *net);
 void		  nlm_host_rebooted(const struct net *net,
 					const struct nlm_reboot *);
+void		  nlm_host_shutdown_rpc(struct nlm_host *host);
 
 /*
  * Host monitoring

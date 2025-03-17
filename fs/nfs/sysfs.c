@@ -254,7 +254,7 @@ shutdown_store(struct kobject *kobj, struct kobj_attribute *attr,
 		rpc_clnt_shutdown(server->client_acl);
 
 	if (server->nlm_host)
-		rpc_clnt_shutdown(server->nlm_host->h_rpcclnt);
+		nlm_host_shutdown_rpc(server->nlm_host);
 out:
 	return count;
 }
