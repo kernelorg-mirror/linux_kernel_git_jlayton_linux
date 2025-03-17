@@ -2562,9 +2562,37 @@ static void nfs_net_exit(struct net *net)
 	nfs_clients_exit(net);
 }
 
+static bool all_clients_gone(struct nfs_net *nn)
+{
+	bool	gone;
+
+	spin_lock(&nn->nfs_client_lock);
+	gone = list_empty(&nn->nfs_client_list);
+	spin_unlock(&nn->nfs_client_lock);
+
+	return gone;
+}
+
+static void nfs_net_pre_exit(struct net *net)
+{
+	struct nfs_net *nn = net_generic(net, nfs_net_id);
+	struct nfs_server *server;
+	struct nfs_client *clp;
+
+	spin_lock(&nn->nfs_client_lock);
+	list_for_each_entry(server, &nn->nfs_volume_list, master_link)
+		nfs_server_shutdown(server);
+	list_for_each_entry(clp, &nn->nfs_client_list, cl_share_link)
+		rpc_clnt_shutdown(clp->cl_rpcclient);
+	spin_unlock(&nn->nfs_client_lock);
+
+	wait_var_event(&nn->nfs_client_list, all_clients_gone(nn));
+}
+
 static struct pernet_operations nfs_net_ops = {
 	.init = nfs_net_init,
 	.exit = nfs_net_exit,
+	.pre_exit = nfs_net_pre_exit,
 	.id   = &nfs_net_id,
 	.size = sizeof(struct nfs_net),
 };
