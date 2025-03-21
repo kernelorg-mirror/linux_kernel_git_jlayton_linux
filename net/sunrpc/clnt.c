@@ -2070,6 +2070,16 @@ call_bind(struct rpc_task *task)
 	xprt->ops->rpcbind(task);
 }
 
+static bool
+netunreach_fatal(rpc_task *task)
+{
+	if (task->tk_flags & RPC_TASK_NETUNREACH_FATAL) {
+		rpc_clnt_shutdown(task->tk_client);
+		return true;
+	}
+	return false;
+}
+
 /*
  * 4a.	Sort out bind result
  */
@@ -2121,7 +2131,7 @@ call_bind_status(struct rpc_task *task)
 		goto retry_timeout;
 	case -ENETDOWN:
 	case -ENETUNREACH:
-		if (task->tk_flags & RPC_TASK_NETUNREACH_FATAL)
+		if (netunreach_fatak(task))
 			break;
 		fallthrough;
 	case -ECONNREFUSED:		/* connection problems */
@@ -2213,7 +2223,7 @@ call_connect_status(struct rpc_task *task)
 	switch (status) {
 	case -ENETDOWN:
 	case -ENETUNREACH:
-		if (task->tk_flags & RPC_TASK_NETUNREACH_FATAL)
+		if (netunreach_fatak(task))
 			break;
 		fallthrough;
 	case -ECONNREFUSED:
@@ -2480,7 +2490,7 @@ call_status(struct rpc_task *task)
 	switch(status) {
 	case -ENETDOWN:
 	case -ENETUNREACH:
-		if (task->tk_flags & RPC_TASK_NETUNREACH_FATAL)
+		if (netunreach_fatak(task))
 			goto out_exit;
 		fallthrough;
 	case -EHOSTDOWN:
