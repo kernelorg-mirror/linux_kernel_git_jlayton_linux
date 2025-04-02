@@ -1,6 +1,6 @@
 load(":flavors.td.bzl", "ARCHITECTURE_TO_KERNEL_ARCH", "ARCH_X86_64", "ARCHITECTURE_TO_RPMBUILD_TARGET")
 load(":config.bzl", "config_name")
-load(":constants.bzl", "SELFTESTS")
+load(":constants.bzl", "SELFTESTS", "SelftestsType")
 load(":container.bzl", "container_genrule")
 load(":modules.bzl", "module")
 load(":modules_list.bzl", MODULES="modules")
@@ -97,7 +97,7 @@ def gen_kernel(
     headers_rpm = True,
     devel_rpm = True,
     build_modules = True,
-    selftests = False,
+    selftests: SelftestsType = SelftestsType("none"),
     extra_srcs = None,
     labels = None,
 ):
@@ -105,7 +105,7 @@ def gen_kernel(
         arch = arch,
         flavor = flavor,
         selftests = selftests,
-        replace_arch = False
+        replace_arch = False,
     )
 
     config_target = "//facebook/config:" + config_name(
@@ -243,10 +243,6 @@ def gen_kernel(
         rpmbuild_args += ["--define", "\"_devel_rpm 1\""]
     else:
         rpmbuild_args += ["--undefine", "_devel_rpm"]
-    if selftests:
-        rpmbuild_args += ["--define", "\"_selftests 1\""]
-    else:
-        rpmbuild_args += ["--undefine", "_selftests"]
     if build_modules:
         rpmbuild_args += ["--define", "\"_modules 1\""]
     else:
@@ -254,8 +250,15 @@ def gen_kernel(
     rpmbuild_args += ["--define", "\"_version {}\"".format(info.kernelversion)]
     rpmbuild_args += ["--define", "\"_release {}\"".format(extra_version)]
     rpmbuild_args += ["--define", "\"_uname {}\"".format(uname)]
-    rpmbuild_args += ["--define", "\"_selftest_suites {}\"".format(" ".join(SELFTESTS))]
     rpmbuild_args += ["--define", "\"_fb_makeopts {}\"".format(fb_makeflags)]
+    if selftests in [SelftestsType("all"), SelftestsType("bpf")]:
+        rpmbuild_args += ["--define", "\"_selftests 1\""]
+    else:
+        rpmbuild_args += ["--undefine", "_selftests"]
+    if selftests == SelftestsType("all"):
+        rpmbuild_args += ["--define", "\"_selftest_suites {}\"".format(" ".join(SELFTESTS))]
+    if selftests == SelftestsType("bpf"):
+        rpmbuild_args += ["--define", "\"_selftest_suites bpf\""]
 
     container_genrule(
         name = name + "-rpmbuild",
@@ -273,7 +276,7 @@ def gen_kernel(
               target=ARCHITECTURE_TO_RPMBUILD_TARGET[arch],
               args=" ".join(rpmbuild_args),
         ),
-        bind_ro = [
+        bind_ro = extra_srcs + [
             (":{}-rpmspec".format(name), "/ro/kernel.spec"),
         ],
         overlay_rw = [
@@ -307,11 +310,19 @@ def gen_kernel(
         labels = ["linux_kernel"],
         visibility = ["PUBLIC"],
     )
-    if selftests:
+    if selftests == SelftestsType("all"):
             native.genrule(
                 name = name + "-selftests.rpm",
                 cmd = "cp $(location :{}-rpmbuild)/kernel-selftests-*.rpm $OUT".format(name),
                 out = "kernel-selftests.rpm",
+                labels = ["linux_kernel"],
+                visibility = ["PUBLIC"],
+            )
+    elif selftests == SelftestsType("bpf"):
+            native.genrule(
+                name = name + "-bpf-selftests.rpm",
+                cmd = "cp $(location :{}-rpmbuild)/kernel-bpf-selftests-*.rpm $OUT".format(name),
+                out = "kernel-bpf-selftests.rpm",
                 labels = ["linux_kernel"],
                 visibility = ["PUBLIC"],
             )
@@ -410,14 +421,14 @@ def kernel(
         by the selftests in order to run.
     """
 
-    for selftests in (False, True,):
+    for selftests in SelftestsType.values():
         gen_kernel(
             arch=arch,
             flavor=flavor,
             headers_rpm=headers_rpm,
             devel_rpm=devel_rpm,
             build_modules=build_modules,
-            selftests=selftests,
+            selftests=SelftestsType(selftests),
             extra_srcs=extra_srcs,
             labels=labels,
         )

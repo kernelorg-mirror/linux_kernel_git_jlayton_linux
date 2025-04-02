@@ -13,6 +13,8 @@ CLANG_TRAIN_DATA_SHA256="5f2293c5550094f609045056357d2ef34b6360ced418ba531671a20
 HARDENED_TRAIN_DATA_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/clang_train_data/v69/profdata.6.9.0-0_fbk0_clangtrain_rc14_882_g0454ed39ffdd.7200s.yhs.2024-06-23-13-54-38"
 HARDENED_TRAIN_DATA_SHA256="5f2293c5550094f609045056357d2ef34b6360ced418ba531671a20b99eb34f1"
 
+SelftestsType = enum("none", "all", "bpf")
+
 SELFTESTS = [
     # Currently bpf selftests do not build in a way which is meaningful, plus
     # they rely on enabling `CONFIG_PROVE_LOCKING`, which in turn clashes with
