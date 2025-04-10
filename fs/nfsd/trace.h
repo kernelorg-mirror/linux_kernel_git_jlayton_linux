@@ -2439,6 +2439,30 @@ TRACE_EVENT(nfsd_vfs_symlink,
 		  __entry->xid, __entry->fh_hash,
 		  __get_str(name), __get_str(tgt))
 );
+
+TRACE_EVENT(nfsd_vfs_link,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh *sfhp,
+		 struct svc_fh *tfhp,
+		 const char *name,
+		 unsigned int namelen),
+	TP_ARGS(rqstp, sfhp, tfhp, name, namelen),
+	TP_STRUCT__entry(
+		SVC_RQST_ENDPOINT_FIELDS(rqstp)
+		__field(u32, sfh_hash)
+		__field(u32, tfh_hash)
+		__string_len(name, name, namelen)
+	),
+	TP_fast_assign(
+		SVC_RQST_ENDPOINT_ASSIGNMENTS(rqstp);
+		__entry->sfh_hash = knfsd_fh_hash(&sfhp->fh_handle);
+		__entry->tfh_hash = knfsd_fh_hash(&tfhp->fh_handle);
+		__assign_str(name);
+	),
+	TP_printk("xid=0x%08x src_fh=0x%08x tgt_fh=0x%08x name=%s",
+		  __entry->xid, __entry->sfh_hash, __entry->tfh_hash,
+		  __get_str(name))
+);
 #endif /* _NFSD_TRACE_H */
 
 #undef TRACE_INCLUDE_PATH
