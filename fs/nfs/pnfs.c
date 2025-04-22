@@ -302,6 +302,22 @@ pnfs_detach_layout_hdr(struct pnfs_layout_hdr *lo)
 	nfsi->read_io = 0;
 }
 
+static void
+pnfs_warn_dangling_lsegs(struct list_head *list, const char *name)
+{
+	struct pnfs_layout_segment *lseg;
+
+	if (list_empty(list))
+		return;
+
+	pr_warn("NFS: BUG unfreed layout segments on %s\n", name);
+	list_for_each_entry(lseg, list, pls_list)
+		pr_warn("%p: refs=%d flags=0x%lx seq=%u\n", lseg,
+			refcount_read(&lseg->pls_refcount), lseg->pls_flags,
+			lseg->pls_seq);
+	dump_stack();
+}
+
 void
 pnfs_put_layout_hdr(struct pnfs_layout_hdr *lo)
 {
@@ -315,8 +331,8 @@ pnfs_put_layout_hdr(struct pnfs_layout_hdr *lo)
 	pnfs_layoutreturn_before_put_layout_hdr(lo);
 
 	if (refcount_dec_and_lock(&lo->plh_refcount, &inode->i_lock)) {
-		if (!list_empty(&lo->plh_segs))
-			WARN_ONCE(1, "NFS: BUG unfreed layout segments.\n");
+		pnfs_warn_dangling_lsegs(&lo->plh_segs, "plh_segs");
+		pnfs_warn_dangling_lsegs(&lo->plh_return_segs, "plh_return_segs");
 		pnfs_mark_layout_stateid_invalid(lo, &tmp_list);
 		pnfs_detach_layout_hdr(lo);
 		i_state = inode->i_state;
