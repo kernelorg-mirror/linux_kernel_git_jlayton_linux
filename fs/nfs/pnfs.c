@@ -562,12 +562,15 @@ pnfs_init_lseg(struct pnfs_layout_hdr *lo, struct pnfs_layout_segment *lseg,
 	lseg->pls_layout = lo;
 	lseg->pls_range = *range;
 	lseg->pls_seq = be32_to_cpu(stateid->seqid);
+	ref_tracker_dir_init(&lseg->pls_tracker, 128, "pnfs_layout_segment");
 }
 
 static void pnfs_free_lseg(struct pnfs_layout_segment *lseg)
 {
 	if (lseg != NULL) {
 		struct inode *inode = lseg->pls_layout->plh_inode;
+
+		ref_tracker_dir_exit(&lseg->pls_tracker);
 		NFS_SERVER(inode)->pnfs_curr_ld->free_lseg(lseg);
 	}
 }
@@ -2593,6 +2596,7 @@ pnfs_layout_process(struct nfs4_layoutget *lgp)
 out_forget:
 	spin_unlock(&ino->i_lock);
 	lseg->pls_layout = lo;
+	ref_tracker_dir_exit(&lseg->pls_tracker);
 	NFS_SERVER(ino)->pnfs_curr_ld->free_lseg(lseg);
 	return ERR_PTR(-EAGAIN);
 }

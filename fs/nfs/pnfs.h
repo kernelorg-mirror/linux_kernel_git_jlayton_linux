@@ -75,6 +75,9 @@ struct pnfs_layout_segment {
 	u32 pls_seq;
 	unsigned long pls_flags;
 	struct pnfs_layout_hdr *pls_layout;
+#ifdef CONFIG_NFS_REFCNT_TRACKER
+	struct ref_tracker_dir pls_tracker;
+#endif
 };
 
 enum pnfs_try_status {
