@@ -214,3 +214,11 @@ config NFS_V4_2_READ_PLUS
 	default y
 	help
 	 Choose Y here to enable use of the NFS v4.2 READ_PLUS operation.
+
+config NFS_REFCNT_TRACKER
+	bool "NFS: Enable refcount tracking"
+	depends on NFS_DEBUG
+	default n
+	help
+	  Choose Y here to enable extra tracking of references of
+	  internally held objects. This is mostly of use to NFS developers.
