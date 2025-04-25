@@ -3063,7 +3063,7 @@ pnfs_do_write(struct nfs_pageio_descriptor *desc,
 
 static void pnfs_writehdr_free(struct nfs_pgio_header *hdr)
 {
-	pnfs_put_lseg(hdr->lseg);
+	pnfs_put_lseg_track(hdr->lseg, &hdr->tracker);
 	nfs_pgio_header_free(hdr);
 }
 
@@ -3080,7 +3080,7 @@ pnfs_generic_pg_writepages(struct nfs_pageio_descriptor *desc)
 	}
 	nfs_pgheader_init(desc, hdr, pnfs_writehdr_free);
 
-	hdr->lseg = pnfs_get_lseg(desc->pg_lseg);
+	hdr->lseg = pnfs_get_lseg_track(desc->pg_lseg, &hdr->tracker);
 	ret = nfs_generic_pgio(desc, hdr);
 	if (!ret)
 		pnfs_do_write(desc, hdr, desc->pg_ioflags);
@@ -3170,7 +3170,7 @@ void pnfs_read_resend_pnfs(struct nfs_pgio_header *hdr,
 
 	if (!test_and_set_bit(NFS_IOHDR_REDO, &hdr->flags)) {
 		/* Prevent deadlocks with layoutreturn! */
-		pnfs_put_lseg(hdr->lseg);
+		pnfs_put_lseg_track(hdr->lseg, &hdr->tracker);
 		hdr->lseg = NULL;
 
 		nfs_pageio_init_read(&pgio, hdr->inode, false,
@@ -3208,7 +3208,7 @@ pnfs_do_read(struct nfs_pageio_descriptor *desc, struct nfs_pgio_header *hdr)
 
 static void pnfs_readhdr_free(struct nfs_pgio_header *hdr)
 {
-	pnfs_put_lseg(hdr->lseg);
+	pnfs_put_lseg_track(hdr->lseg, &hdr->tracker);
 	nfs_pgio_header_free(hdr);
 }
 
@@ -3224,7 +3224,7 @@ pnfs_generic_pg_readpages(struct nfs_pageio_descriptor *desc)
 		return desc->pg_error;
 	}
 	nfs_pgheader_init(desc, hdr, pnfs_readhdr_free);
-	hdr->lseg = pnfs_get_lseg(desc->pg_lseg);
+	hdr->lseg = pnfs_get_lseg_track(desc->pg_lseg, &hdr->tracker);
 	ret = nfs_generic_pgio(desc, hdr);
 	if (!ret)
 		pnfs_do_read(desc, hdr);

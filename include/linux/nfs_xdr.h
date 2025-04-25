@@ -1646,6 +1646,7 @@ struct nfs_pgio_header {
 	struct nfs_writeverf	verf;		/* Used for writes */
 	fmode_t			rw_mode;
 	struct pnfs_layout_segment *lseg;
+	struct ref_tracker	*tracker;
 	loff_t			io_start;
 	const struct rpc_call_ops *mds_ops;
 	void (*release) (struct nfs_pgio_header *hdr);
