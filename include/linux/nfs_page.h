@@ -103,6 +103,7 @@ struct nfs_pageio_descriptor {
 	const struct rpc_call_ops *pg_rpc_callops;
 	const struct nfs_pgio_completion_ops *pg_completion_ops;
 	struct pnfs_layout_segment *pg_lseg;
+	struct ref_tracker	*pg_tracker;
 	struct nfs_io_completion *pg_io_completion;
 	struct nfs_direct_req	*pg_dreq;
 #ifdef CONFIG_NFS_FSCACHE

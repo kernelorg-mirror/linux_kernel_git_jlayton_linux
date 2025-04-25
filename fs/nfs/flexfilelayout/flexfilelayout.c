@@ -828,7 +828,7 @@ ff_layout_pg_get_read(struct nfs_pageio_descriptor *pgio,
 		      struct nfs_page *req,
 		      bool strict_iomode)
 {
-	pnfs_put_lseg(pgio->pg_lseg);
+	pnfs_put_lseg_track(pgio->pg_lseg, &pgio->pg_tracker);
 	pgio->pg_lseg =
 		pnfs_update_layout(pgio->pg_inode, nfs_req_openctx(req),
 				   req_offset(req), req->wb_bytes, IOMODE_READ,
@@ -836,7 +836,9 @@ ff_layout_pg_get_read(struct nfs_pageio_descriptor *pgio,
 	if (IS_ERR(pgio->pg_lseg)) {
 		pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 		pgio->pg_lseg = NULL;
-	}
+	} else if (pgio->pg_lseg)
+		ref_tracker_alloc(&pgio->pg_lseg->pls_tracker,
+				  &pgio->pg_tracker, GFP_KERNEL);
 }
 
 static void
@@ -929,7 +931,9 @@ retry:
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
 			return;
-		}
+		} else if (pgio->pg_lseg)
+			ref_tracker_alloc(&pgio->pg_lseg->pls_tracker,
+					  &pgio->pg_tracker, GFP_KERNEL);
 	}
 	/* If no lseg, fall back to write through mds */
 	if (pgio->pg_lseg == NULL)
@@ -985,7 +989,9 @@ ff_layout_pg_get_mirror_count_write(struct nfs_pageio_descriptor *pgio,
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
 			goto out;
-		}
+		} else if (pgio->pg_lseg)
+			ref_tracker_alloc(&pgio->pg_lseg->pls_tracker,
+					  &pgio->pg_tracker, GFP_KERNEL);
 	}
 	if (pgio->pg_lseg)
 		return FF_LAYOUT_MIRROR_COUNT(pgio->pg_lseg);

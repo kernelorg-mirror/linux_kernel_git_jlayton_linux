@@ -880,6 +880,9 @@ filelayout_pg_init_read(struct nfs_pageio_descriptor *pgio,
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
 			return;
+		} else if (pgio->pg_lseg) {
+			ref_tracker_alloc(&pgio->pg_lseg->pls_tracker,
+					  &pgio->pg_tracker, GFP_KERNEL);
 		}
 	}
 	/* If no lseg, fall back to read through mds */
@@ -905,6 +908,7 @@ filelayout_pg_init_write(struct nfs_pageio_descriptor *pgio,
 			pgio->pg_lseg = NULL;
 			return;
 		}
+		ref_tracker_alloc(&pgio->pg_lseg->pls_tracker, &pgio->pg_tracker, GFP_KERNEL);
 	}
 
 	/* If no lseg, fall back to write through mds */

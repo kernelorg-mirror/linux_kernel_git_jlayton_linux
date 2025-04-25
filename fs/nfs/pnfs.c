@@ -2842,7 +2842,7 @@ pnfs_generic_pg_check_layout(struct nfs_pageio_descriptor *pgio,
 	    (test_bit(NFS_LSEG_VALID, &pgio->pg_lseg->pls_flags) &&
 	    pnfs_lseg_request_intersecting(pgio->pg_lseg, req)))
 		return;
-	pnfs_put_lseg(pgio->pg_lseg);
+	pnfs_put_lseg_track(pgio->pg_lseg, &pgio->pg_tracker);
 	pgio->pg_lseg = NULL;
 }
 EXPORT_SYMBOL_GPL(pnfs_generic_pg_check_layout);
@@ -2869,7 +2869,9 @@ pnfs_generic_pg_init_read(struct nfs_pageio_descriptor *pgio, struct nfs_page *r
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
 			return;
-		}
+		} else if (pgio->pg_lseg)
+			ref_tracker_alloc(&pgio->pg_lseg->pls_tracker,
+					  &pgio->pg_tracker, GFP_KERNEL);
 	}
 	/* If no lseg, fall back to read through mds */
 	if (pgio->pg_lseg == NULL)
@@ -2892,7 +2894,9 @@ pnfs_generic_pg_init_write(struct nfs_pageio_descriptor *pgio,
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
 			return;
-		}
+		} else if (pgio->pg_lseg)
+			ref_tracker_alloc(&pgio->pg_lseg->pls_tracker,
+					  &pgio->pg_tracker, GFP_KERNEL);
 	}
 	/* If no lseg, fall back to write through mds */
 	if (pgio->pg_lseg == NULL)
@@ -2904,7 +2908,7 @@ void
 pnfs_generic_pg_cleanup(struct nfs_pageio_descriptor *desc)
 {
 	if (desc->pg_lseg) {
-		pnfs_put_lseg(desc->pg_lseg);
+		pnfs_put_lseg_track(desc->pg_lseg, &desc->pg_tracker);
 		desc->pg_lseg = NULL;
 	}
 }
