@@ -307,6 +307,7 @@ pnfs_put_layout_hdr(struct pnfs_layout_hdr *lo)
 {
 	struct inode *inode;
 	unsigned long i_state;
+	LIST_HEAD(tmp_list);
 
 	if (!lo)
 		return;
@@ -316,9 +317,11 @@ pnfs_put_layout_hdr(struct pnfs_layout_hdr *lo)
 	if (refcount_dec_and_lock(&lo->plh_refcount, &inode->i_lock)) {
 		if (!list_empty(&lo->plh_segs))
 			WARN_ONCE(1, "NFS: BUG unfreed layout segments.\n");
+		pnfs_mark_layout_stateid_invalid(lo, &tmp_list);
 		pnfs_detach_layout_hdr(lo);
 		i_state = inode->i_state;
 		spin_unlock(&inode->i_lock);
+		pnfs_free_lseg_list(&tmp_list);
 		pnfs_free_layout_hdr(lo);
 		/* Notify pnfs_destroy_layout_final() that we're done */
 		if (i_state & (I_FREEING | I_CLEAR))
