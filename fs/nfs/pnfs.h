@@ -265,6 +265,15 @@ extern int nfs4_proc_layoutreturn(struct nfs4_layoutreturn *lrp,
 void pnfs_get_layout_hdr(struct pnfs_layout_hdr *lo);
 void pnfs_put_lseg(struct pnfs_layout_segment *lseg);
 
+static inline void
+pnfs_put_lseg_track(struct pnfs_layout_segment *lseg, struct ref_tracker **tracker)
+{
+	if (lseg) {
+		ref_tracker_free(&lseg->pls_tracker, tracker);
+		pnfs_put_lseg(lseg);
+	}
+}
+
 void set_pnfs_layoutdriver(struct nfs_server *, const struct nfs_fh *, struct nfs_fsinfo *);
 void unset_pnfs_layoutdriver(struct nfs_server *);
 void pnfs_generic_pg_check_layout(struct nfs_pageio_descriptor *pgio, struct nfs_page *req);
@@ -461,6 +470,15 @@ pnfs_get_lseg(struct pnfs_layout_segment *lseg)
 		refcount_inc(&lseg->pls_refcount);
 		smp_mb__after_atomic();
 	}
+	return lseg;
+}
+
+static inline struct pnfs_layout_segment *
+pnfs_get_lseg_track(struct pnfs_layout_segment *lseg, struct ref_tracker **tracker)
+{
+	lseg = pnfs_get_lseg(lseg);
+	if (lseg)
+		ref_tracker_alloc(&lseg->pls_tracker, tracker, GFP_KERNEL);
 	return lseg;
 }
 
@@ -736,7 +754,18 @@ pnfs_get_lseg(struct pnfs_layout_segment *lseg)
 	return NULL;
 }
 
+static inline struct pnfs_layout_segment *
+pnfs_get_lseg_track(struct pnfs_layout_segment *lseg, struct ref_tracker **tracker)
+{
+	return NULL;
+}
+
 static inline void pnfs_put_lseg(struct pnfs_layout_segment *lseg)
+{
+}
+
+static inline void
+pnfs_put_lseg_track(struct pnfs_layout_segment *lseg, struct ref_tracker **tracker)
 {
 }
 
