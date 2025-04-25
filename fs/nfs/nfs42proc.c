@@ -1040,7 +1040,7 @@ nfs42_alloc_layouterror_data(struct pnfs_layout_segment *lseg, gfp_t gfp_flags)
 	if (data) {
 		data->args.inode = data->inode = nfs_igrab_and_active(inode);
 		if (data->inode) {
-			data->lseg = pnfs_get_lseg(lseg);
+			data->lseg = pnfs_get_lseg_track(lseg, &data->tracker);
 			if (data->lseg)
 				return data;
 			nfs_iput_and_deactive(data->inode);
@@ -1053,7 +1053,7 @@ nfs42_alloc_layouterror_data(struct pnfs_layout_segment *lseg, gfp_t gfp_flags)
 static void
 nfs42_free_layouterror_data(struct nfs42_layouterror_data *data)
 {
-	pnfs_put_lseg(data->lseg);
+	pnfs_put_lseg_track(data->lseg, &data->tracker);
 	nfs_iput_and_deactive(data->inode);
 	kfree(data);
 }
