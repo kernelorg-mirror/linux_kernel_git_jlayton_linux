@@ -1711,7 +1711,6 @@ void pnfs_roc_release(struct nfs4_layoutreturn_args *args,
 		      struct nfs4_layoutreturn_res *res, int ret)
 {
 	struct pnfs_layout_hdr *lo = args->layout;
-	struct inode *inode = args->inode;
 	const nfs4_stateid *res_stateid = NULL;
 	struct nfs4_xdr_opaque_data *ld_private = args->ld_private;
 
@@ -1720,11 +1719,7 @@ void pnfs_roc_release(struct nfs4_layoutreturn_args *args,
 	case -NFS4ERR_DEADSESSION:
 	case -NFS4ERR_CONN_NOT_BOUND_TO_SESSION:
 	case -NFS4ERR_NOMATCHING_LAYOUT:
-		spin_lock(&inode->i_lock);
-		pnfs_layoutreturn_retry_later_locked(lo, &args->stateid,
-						     &args->range);
-		pnfs_clear_layoutreturn_waitbit(lo);
-		spin_unlock(&inode->i_lock);
+		pnfs_layoutreturn_retry_later(lo, &args->stateid, &args->range);
 		break;
 	case 0:
 		if (res->lrs_present)
