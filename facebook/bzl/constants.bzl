@@ -1,4 +1,4 @@
-BUILD_IMAGE_X86_64_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/build_images/D74477580.c9.llvm19.x86_64"
+BUILD_IMAGE_X86_64_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/build_images/D72321848.c9.llvm19.x86_64"
 BUILD_IMAGE_X86_64_SHA256="f0529462148f1d71bc92d4292cfe96f727ad7fd88a0646bda05877c05c8250c2"
 
 BUILD_IMAGE_AARCH64_URI="https://interncache-all.fbcdn.net/manifold/linux_kernel/tree/build_images/D68645928.c9.llvm19.aarch64"
