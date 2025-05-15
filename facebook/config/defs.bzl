@@ -56,7 +56,8 @@ SELFTESTS = [
     "sched",
     "seccomp",
     "sgx",
-    "sigaltstack",
+    # 6.13 renamed "sigaltstack" to "signal"
+    "signal",
     "size",
     "splice",
     "static_keys",
@@ -65,7 +66,7 @@ SELFTESTS = [
     "timers",
     "tmpfs",
     "uevent",
-    "user",
+    # 6.12 removed "user" selftest
     "x86",
 ]
 
