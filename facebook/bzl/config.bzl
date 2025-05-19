@@ -88,6 +88,7 @@ def _bpf_selftests_config(ctx: AnalysisContext) -> Artifact:
             "-c",
             cmd_args(
                 "cat",
+                "tools/testing/selftests/bpf/config",
                 "tools/testing/selftests/bpf/config.vm",
                 "tools/testing/selftests/bpf/config.x86_64",
                 ">",
