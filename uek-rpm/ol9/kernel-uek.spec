@@ -69,7 +69,7 @@ Summary: Oracle Unbreakable Enterprise Kernel Release
 %define stable_base %(echo $((%{stable_update} - 1)))
 %endif
 %endif
-%define rpmversion 6.14.%{base_sublevel}%{?stablerev}
+%define specrpmversion 6.14.%{base_sublevel}%{?stablerev}
 
 ## The not-released-kernel case ##
 %else
@@ -80,7 +80,7 @@ Summary: Oracle Unbreakable Enterprise Kernel Release
 # The git snapshot level
 %define gitrev 0
 # Set rpm version accordingly
-%define rpmversion 6.14.%{upstream_sublevel}
+%define specrpmversion 6.14.%{upstream_sublevel}
 %endif
 # Nb: The above rcrev and gitrev values automagically define Patch00 and Patch01 below.
 
@@ -96,9 +96,9 @@ Summary: Oracle Unbreakable Enterprise Kernel Release
 # standard kernel
 %define with_up        1
 # kernel-container
-%define with_container 1
+%define with_container 0
 # kernel-debug
-%define with_debug     1
+%define with_debug     0
 # kernel-doc
 %define with_doc       1
 # kernel-headers
@@ -195,7 +195,7 @@ Summary: Oracle Unbreakable Enterprise Kernel Release
 
 %define pkg_release 1%{?dist}uek%{?buildid}
 
-%define KVERREL %{rpmversion}-%{pkg_release}.%{_target_cpu}
+%define KVERREL %{specrpmversion}-%{pkg_release}.%{_target_cpu}
 
 %if !%{debugbuildsenabled}
 %define with_debug 0
@@ -370,7 +370,7 @@ Name: kernel%{?variant}
 Group: System Environment/Kernel
 License: GPLv2
 URL: http://www.kernel.org/
-Version: %{rpmversion}
+Version: %{specrpmversion}
 Release: %{pkg_release}
 # DO NOT CHANGE THE 'ExclusiveArch' LINE TO TEMPORARILY EXCLUDE AN ARCHITECTURE BUILD.
 # SET %%nobuildarches (ABOVE) INSTEAD
@@ -406,10 +406,10 @@ BuildRequires: hostname
 BuildRequires: openssl, openssl-devel
 BuildRequires: rsync
 BuildRequires: numactl-devel
-BuildRequires: dwarves >= 1.25
+BuildRequires: dwarves
 BuildRequires: elfutils-devel
 BuildRequires: elfutils-libelf-devel
-BuildRequires: kernel-rpm-macros >= 185-11
+BuildRequires: redhat-rpm-config
 BuildRequires: slang-devel
 %if %{with_sparse}
 BuildRequires: sparse >= 0.4.1
@@ -641,16 +641,16 @@ This package contains some of tools/ directory binaries from the kernel source.
 # macros defined above.
 #
 %define kernel_reqprovconf \
-Provides: %{name} = %{rpmversion}-%{pkg_release}\
-Provides: %{variant_name} = %{rpmversion}-%{pkg_release}\
-Provides: %{variant_name}-%{_target_cpu} = %{rpmversion}-%{pkg_release}%{?1:.%{1}}\
+Provides: %{name} = %{specrpmversion}-%{pkg_release}\
+Provides: %{variant_name} = %{specrpmversion}-%{pkg_release}\
+Provides: %{variant_name}-%{_target_cpu} = %{specrpmversion}-%{pkg_release}%{?1:.%{1}}\
 Provides: %{variant_name}-uname-r = %{KVERREL}%{?1:.%{1}}\
 Provides: %{name}-drm = 4.3.0\
 Provides: %{name}-drm-nouveau = 12\
 Provides: %{name}-modeset = 1\
 Provides: oracleasm = 2.0.5\
 %ifarch aarch64\
-Provides: kernel = %{rpmversion}-%{pkg_release}\
+Provides: kernel = %{specrpmversion}-%{pkg_release}\
 Provides: kernel-uname-r = %{KVERREL}%{?1:.%{1}}\
 %endif\
 Requires: %{variant_name}-modules-core-uname-r = %{KVERREL}%{?1:.%{1}}\
@@ -1682,7 +1682,7 @@ cd linux-%{version}-%{release}
 
 %if %{with_doc}
 # copy the output files
-docdir=$RPM_BUILD_ROOT%{_datadir}/doc/kernel%{variant}-doc-%{rpmversion}
+docdir=$RPM_BUILD_ROOT%{_datadir}/doc/kernel%{variant}-doc-%{specrpmversion}
 mkdir -p $docdir
 cp -a Documentation/output/* $docdir
 %endif
@@ -2059,8 +2059,8 @@ fi
 %if %{with_doc}
 %files doc
 %defattr(-,root,root)
-%{_datadir}/doc/kernel%{variant}-doc-%{rpmversion}/*
-%dir %{_datadir}/doc/kernel%{variant}-doc-%{rpmversion}
+%{_datadir}/doc/kernel%{variant}-doc-%{specrpmversion}/*
+%dir %{_datadir}/doc/kernel%{variant}-doc-%{specrpmversion}
 %endif
 
 # This is image_install_path on an arch where that includes ELF files,
