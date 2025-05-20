@@ -312,6 +312,7 @@ modules-core:
 - nfs_acl
 - nfs_layout_flexfiles
 - nfs_layout_nfsv41_files
+- nfs_localio
 - nfsd
 - nfsv3
 - nfsv4
