@@ -9,7 +9,7 @@ SKYCASTLE_WORKFLOW_FLAGS = "//tools/skycastle/workflows2/kernel/build/flags.sky"
 ONCALL = "kernel_infra"
 GLOBAL_PREFIX="schedule-build"
 SLP_PROVIDER_ID = "257456667334183"  # kernel_root
-
+BPF_SELFTESTS_ARCH = "x86_64" # for now the only suported arch for bpf selftests
 
 # This is a copy-paste from https://www.internalfb.com/code/fbsource/tools/utd/migrated_nbtd_jobs/extensions/skycastle.td.bzl
 # I don't have a good understanding of what's going on here, but I assume we can use these values as a safe defaults
@@ -28,7 +28,7 @@ def _skycastle_impl(
     alias,
     arch,
     build_only = False,
-    selftests = False,
+    selftests = "none",
     flavor = None,
     continuous = False,
     affected_files = None,
@@ -112,7 +112,7 @@ def _skycastle_impl(
                     "run_context": source.run_context(),
                     "user_input": source.user_input(),
                     "arch": arch,
-                    "selftests": True,
+                    "selftests": "all",
                     "affected_files": source.affected_files(),
                 },
             )
@@ -137,7 +137,23 @@ def _skycastle_impl(
         for flavor in ARCH_FLAVORS[arch]
     ]
     for arch in ARCHITECTURES
-]
+] + [
+    td_rule(
+        name = "{}-{}-bpf-selftests".format(GLOBAL_PREFIX, BPF_SELFTESTS_ARCH),
+        predicate = schedule_type_is("diff"),
+        output = derive(
+            impl = _skycastle_impl,
+            args = {
+                "alias": "{}-{}-bpf-selftests".format(GLOBAL_PREFIX, BPF_SELFTESTS_ARCH),
+                "run_context": source.run_context(),
+                "user_input": source.user_input(),
+                "arch": BPF_SELFTESTS_ARCH,
+                "selftests": "bpf",
+                "affected_files": source.affected_files(),
+            },
+        )
+    ),
+] if BPF_SELFTESTS_ARCH in ARCHITECTURES else []
 
 # For continuous runs we run default x86_64 build
 def _suffix(flavor):
