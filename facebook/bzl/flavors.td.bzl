@@ -54,9 +54,7 @@ ARCHITECTURE_TO_RPMBUILD_TARGET = {
 ARCH_FLAVORS = {
     ARCH_X86_64: [
         "clangtrain",
-        "crackerjackguest",
         "crackerjackhost",
-        "cvmguest",
         "cvmhost",
         "debug",
         "debugnightly",

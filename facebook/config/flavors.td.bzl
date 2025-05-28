@@ -59,7 +59,6 @@ ARCH_FLAVORS = {
         "zion",
         "clangtrain",
         "hardenedtrain",
-        "crackerjackguest",
         "crackerjackhost",
         "debug",
     ],
