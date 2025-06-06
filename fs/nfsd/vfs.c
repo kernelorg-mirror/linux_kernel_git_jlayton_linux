@@ -19,6 +19,7 @@
 #include <linux/splice.h>
 #include <linux/falloc.h>
 #include <linux/fcntl.h>
+#include <linux/math.h>
 #include <linux/namei.h>
 #include <linux/delay.h>
 #include <linux/fsnotify.h>
@@ -1087,17 +1088,45 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		      unsigned int base, u32 *eof)
 {
 	struct file *file = nf->nf_file;
-	unsigned long v, total;
+	unsigned long v, total, in_count = *count;
+	loff_t start_extra = 0, end_extra = 0;
 	struct iov_iter iter;
 	struct kiocb kiocb;
 	ssize_t host_err;
 	size_t len;
 
 	init_sync_kiocb(&kiocb, file);
+
+	/*
+	 * If NFSD_IO_DIRECT enabled, expand any misaligned READ to
+	 * the next DIO-aligned block (on either end of the READ).
+	 */
+	if ((nfsd_io_cache_read == NFSD_IO_DIRECT) &&
+	    nf->nf_dio_mem_align && (base & (nf->nf_dio_mem_align-1)) == 0) {
+		const u32 dio_blocksize = nf->nf_dio_read_offset_align;
+		loff_t orig_end = offset + *count;
+		loff_t start = round_down(offset, dio_blocksize);
+		loff_t end = round_up(orig_end, dio_blocksize);
+
+		WARN_ON_ONCE(dio_blocksize > PAGE_SIZE);
+		start_extra = offset - start;
+		end_extra = end - orig_end;
+
+		/* Show original offset and count, and how it was expanded for DIO */
+		trace_nfsd_read_vector_dio(rqstp, fhp, offset, *count,
+					   start, start_extra, end, end_extra);
+
+		/* trace_nfsd_read_vector() will reflect larger DIO-aligned READ */
+		offset = start;
+		in_count = end - start;
+		kiocb.ki_flags = IOCB_DIRECT;
+	} else if (nfsd_io_cache_read == NFSD_IO_DONTCACHE)
+		kiocb.ki_flags = IOCB_DONTCACHE;
+
 	kiocb.ki_pos = offset;
 
 	v = 0;
-	total = *count;
+	total = in_count;
 	while (total) {
 		len = min_t(size_t, total, PAGE_SIZE - base);
 		bvec_set_page(&rqstp->rq_bvec[v], *(rqstp->rq_next_page++),
@@ -1108,23 +1137,25 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	}
 	WARN_ON_ONCE(v > rqstp->rq_maxpages);
 
-	trace_nfsd_read_vector(rqstp, fhp, offset, *count);
-	iov_iter_bvec(&iter, ITER_DEST, rqstp->rq_bvec, v, *count);
-
-	switch (nsfd_io_cache_read) {
-	case NFSD_IO_DIRECT:
-		if (iov_iter_is_aligned(&iter, nf->nf_dio_mem_align - 1,
-					nf->nf_dio_read_offset_align - 1))
-			kiocb.ki_flags = IOCB_DIRECT;
-		break;
-	case NFSD_IO_DONTCACHE:
-		kiocb.ki_flags = IOCB_DONTCACHE;
-		break;
-	case NFSD_IO_BUFFERED:
-		break;
-	}
-
+	trace_nfsd_read_vector(rqstp, fhp, offset, in_count);
+	iov_iter_bvec(&iter, ITER_DEST, rqstp->rq_bvec, v, in_count);
 	host_err = vfs_iocb_iter_read(file, &kiocb, &iter);
+
+	if ((start_extra || end_extra) && host_err >= 0) {
+		rqstp->rq_bvec[0].bv_offset += start_extra;
+		rqstp->rq_bvec[0].bv_len -= start_extra;
+		rqstp->rq_bvec[v].bv_len -= end_extra;
+		/* Must adjust returned read size to reflect original extent */
+		offset += start_extra;
+		if (likely(host_err >= start_extra)) {
+			host_err -= start_extra;
+			if (host_err > *count)
+				host_err = *count;
+		} else {
+			/* Short read that didn't read any of requested data */
+			host_err = 0;
+		}
+	}
 	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
 }
 
