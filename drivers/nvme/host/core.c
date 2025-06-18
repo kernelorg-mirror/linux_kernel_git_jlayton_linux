@@ -1500,7 +1500,8 @@ static int nvme_process_ns_desc(struct nvme_ctrl *ctrl, struct nvme_ns_ids *ids,
 				 warn_str, cur->nidl);
 			return -1;
 		}
-		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
+		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID ||
+		    ctrl->subsys->quirks & NVME_SUBSYS_BAD_EUI64)
 			return NVME_NIDT_EUI64_LEN;
 		memcpy(ids->eui64, data + sizeof(*cur), NVME_NIDT_EUI64_LEN);
 		return NVME_NIDT_EUI64_LEN;
@@ -1510,7 +1511,8 @@ static int nvme_process_ns_desc(struct nvme_ctrl *ctrl, struct nvme_ns_ids *ids,
 				 warn_str, cur->nidl);
 			return -1;
 		}
-		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
+		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID ||
+		    ctrl->subsys->quirks & NVME_SUBSYS_BAD_NGUID)
 			return NVME_NIDT_NGUID_LEN;
 		memcpy(ids->nguid, data + sizeof(*cur), NVME_NIDT_NGUID_LEN);
 		return NVME_NIDT_NGUID_LEN;
@@ -1645,10 +1647,12 @@ static int nvme_ns_info_from_identify(struct nvme_ctrl *ctrl,
 			 "Ignoring bogus Namespace Identifiers\n");
 	} else {
 		if (ctrl->vs >= NVME_VS(1, 1, 0) &&
-		    !memchr_inv(ids->eui64, 0, sizeof(ids->eui64)))
+		    !memchr_inv(ids->eui64, 0, sizeof(ids->eui64)) &&
+		    !(ctrl->subsys->quirks & NVME_SUBSYS_BAD_EUI64))
 			memcpy(ids->eui64, id->eui64, sizeof(ids->eui64));
 		if (ctrl->vs >= NVME_VS(1, 2, 0) &&
-		    !memchr_inv(ids->nguid, 0, sizeof(ids->nguid)))
+		    !memchr_inv(ids->nguid, 0, sizeof(ids->nguid)) &&
+		    !(ctrl->subsys->quirks & NVME_SUBSYS_BAD_NGUID))
 			memcpy(ids->nguid, id->nguid, sizeof(ids->nguid));
 	}
 
@@ -3828,7 +3832,7 @@ static struct nvme_ns_head *nvme_find_ns_head(struct nvme_ctrl *ctrl,
 }
 
 static int nvme_subsys_check_duplicate_ids(struct nvme_subsystem *subsys,
-		struct nvme_ns_ids *ids)
+		struct nvme_ns_ids *ids, bool global)
 {
 	bool has_uuid = !uuid_is_null(&ids->uuid);
 	bool has_nguid = memchr_inv(ids->nguid, 0, sizeof(ids->nguid));
@@ -3838,14 +3842,39 @@ static int nvme_subsys_check_duplicate_ids(struct nvme_subsystem *subsys,
 	lockdep_assert_held(&subsys->lock);
 
 	list_for_each_entry(h, &subsys->nsheads, entry) {
+		bool changed = false;
+
 		if (has_uuid && uuid_equal(&ids->uuid, &h->ids.uuid))
 			return -EINVAL;
 		if (has_nguid &&
-		    memcmp(&ids->nguid, &h->ids.nguid, sizeof(ids->nguid)) == 0)
-			return -EINVAL;
+		    memcmp(&ids->nguid, &h->ids.nguid, sizeof(ids->nguid)) == 0) {
+			if (!has_uuid || global)
+				return -EINVAL;
+
+			dev_warn(&subsys->dev, "duplicate nguid:%16phN\n",
+				ids->nguid);
+			memset(ids->nguid, 0, sizeof(ids->nguid));
+			memset(h->ids.nguid, 0, sizeof(h->ids.nguid));
+			subsys->quirks |= NVME_SUBSYS_BAD_NGUID;
+			has_nguid = false;
+			changed = true;
+		}
 		if (has_eui64 &&
-		    memcmp(&ids->eui64, &h->ids.eui64, sizeof(ids->eui64)) == 0)
-			return -EINVAL;
+		    memcmp(&ids->eui64, &h->ids.eui64, sizeof(ids->eui64)) == 0) {
+			if ((!has_uuid && !has_nguid) || global)
+				return -EINVAL;
+
+			dev_warn(&subsys->dev, "duplicate eui64:%8phN\n",
+				ids->eui64);
+			memset(ids->eui64, 0, sizeof(ids->eui64));
+			memset(h->ids.eui64, 0, sizeof(h->ids.eui64));
+			subsys->quirks |= NVME_SUBSYS_BAD_EUI64;
+			has_eui64 = false;
+			changed = true;
+		}
+
+		if (changed)
+			nvme_update_ns_attrs(h);
 	}
 
 	return 0;
@@ -3993,7 +4022,7 @@ static int nvme_global_check_duplicate_ids(struct nvme_subsystem *this,
 		if (s == this)
 			continue;
 		mutex_lock(&s->lock);
-		ret = nvme_subsys_check_duplicate_ids(s, ids);
+		ret = nvme_subsys_check_duplicate_ids(s, ids, true);
 		mutex_unlock(&s->lock);
 		if (ret)
 			break;
@@ -4050,7 +4079,7 @@ static int nvme_init_ns_head(struct nvme_ns *ns, struct nvme_ns_info *info)
 	mutex_lock(&ctrl->subsys->lock);
 	head = nvme_find_ns_head(ctrl, info->nsid);
 	if (!head) {
-		ret = nvme_subsys_check_duplicate_ids(ctrl->subsys, &info->ids);
+		ret = nvme_subsys_check_duplicate_ids(ctrl->subsys, &info->ids, false);
 		if (ret) {
 			dev_err(ctrl->device,
 				"duplicate IDs in subsystem for nsid %d\n",

@@ -502,6 +502,10 @@ struct nvme_subsystem {
 #ifdef CONFIG_NVME_MULTIPATH
 	enum nvme_iopolicy	iopolicy;
 #endif
+
+#define NVME_SUBSYS_BAD_NGUID	(1 << 0)
+#define NVME_SUBSYS_BAD_EUI64	(1 << 1)
+	unsigned long		quirks;
 };
 
 /*
@@ -1280,6 +1284,7 @@ struct nvme_ctrl *nvme_ctrl_from_file(struct file *file);
 struct nvme_ns *nvme_find_get_ns(struct nvme_ctrl *ctrl, unsigned nsid);
 bool nvme_get_ns(struct nvme_ns *ns);
 void nvme_put_ns(struct nvme_ns *ns);
+void nvme_update_ns_attrs(struct nvme_ns_head *head);
 
 static inline bool nvme_multi_css(struct nvme_ctrl *ctrl)
 {

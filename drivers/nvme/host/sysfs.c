@@ -351,6 +351,18 @@ const struct attribute_group nvme_ns_mpath_attr_group = {
 };
 #endif
 
+void nvme_update_ns_attrs(struct nvme_ns_head *head)
+{
+	struct gendisk *disk;
+
+	if (nvme_ns_head_multipath(head))
+		disk = head->disk;
+	else
+		disk = list_first_entry(&head->list, struct nvme_ns,
+					siblings)->disk;
+	sysfs_update_group(&disk_to_dev(disk)->kobj, &nvme_ns_attr_group);
+}
+
 const struct attribute_group *nvme_ns_attr_groups[] = {
 	&nvme_ns_attr_group,
 #ifdef CONFIG_NVME_MULTIPATH
