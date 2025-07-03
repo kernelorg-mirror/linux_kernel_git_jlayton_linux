@@ -1,5 +1,6 @@
 load("//facebook/bzl:flavors.td.bzl", "ARCHITECTURES", "ARCH_FLAVORS")
 load("//facebook/bzl:config.bzl", "kernel_config")
+load("//facebook/bzl:bootconfig.bzl", "kernel_bootconfig")
 
 filegroup(
     name = "files",
@@ -12,11 +13,22 @@ filegroup(
             arch = arch,
             srcs = glob(["*.config"]),
         ),
+        kernel_bootconfig(
+            arch = arch,
+            srcs = glob(["*.bootconfig"]),
+        ),
         [
-            kernel_config(
+            (
+                kernel_config(
                 arch = arch,
                 flavor = flavor,
                 srcs = glob(["*.config"]),
+            ),
+                kernel_bootconfig(
+                arch = arch,
+                flavor = flavor,
+                srcs = glob(["*.bootconfig"]),
+            ),
             )
             for flavor in ARCH_FLAVORS[arch]
         ],

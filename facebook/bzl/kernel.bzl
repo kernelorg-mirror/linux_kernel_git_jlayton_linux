@@ -1,5 +1,6 @@
 load(":flavors.td.bzl", "ARCHITECTURE_TO_KERNEL_ARCH", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_RPMBUILD_TARGET")
 load(":config.bzl", "config_name")
+load(":bootconfig.bzl", "bootconfig_name")
 load(":constants.bzl", "SELFTESTS", "SelftestsType")
 load(":container.bzl", "container_genrule")
 load(":modules.bzl", "module")
@@ -113,7 +114,10 @@ def gen_kernel(
         flavor = flavor,
         selftests = selftests,
     )
-
+    bootconfig_target = "//facebook/config:" + bootconfig_name(
+        arch = arch,
+        flavor = flavor,
+    )
     if not labels:
         labels = []
     if not "linux_kernel" in labels:
@@ -182,6 +186,7 @@ def gen_kernel(
         cmd = """cd /rw/compile
         # there needs to be a writable .config
         cp /tmp/config /rw/compile/.config
+        cp /tmp/bootconfig /rw/compile/.bootconfig
         cp -r /ro/source/. .
         make EXTRAVERSION=-{extra_version} {fb_makeflags} olddefconfig
         make EXTRAVERSION=-{extra_version} {fb_makeflags} -s -j`nproc`
@@ -192,6 +197,7 @@ def gen_kernel(
         bind_ro = [
             ("//:sources", "/ro/source"),
             (config_target, "/tmp/config"),
+            (bootconfig_target, "/tmp/bootconfig"),
             # copy in the uname target to enforce that necessary pieces get
             # re-built when the release name changes
             (":{}-uname".format(name), "/tmp/uname"),

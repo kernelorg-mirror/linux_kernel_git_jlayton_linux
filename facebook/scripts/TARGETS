@@ -3,3 +3,6 @@ sh_binary(name = "prepareconfig", main = "prepareconfig", visibility = ["PUBLIC"
 
 # Script used to create a .config file containing configs required by selftests.
 sh_binary(name = "selftestsconfig", main = "selftestsconfig", visibility = ["PUBLIC"])
+
+# Script used to create a .bootconfig file
+sh_binary(name = "bootconfig", main = "bootconfig", visibility = ["PUBLIC"])
