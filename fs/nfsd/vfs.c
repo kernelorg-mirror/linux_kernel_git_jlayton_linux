@@ -1271,6 +1271,9 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	case NFSD_IO_DONTCACHE:
 		kiocb.ki_flags = IOCB_DONTCACHE;
 		break;
+	case NFSD_IO_FADVISE:
+		if (stable)
+			kiocb.ki_flags = IOCB_DONTCACHE;
 	case NFSD_IO_BUFFERED:
 		break;
 	}

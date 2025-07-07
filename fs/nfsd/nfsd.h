@@ -156,7 +156,8 @@ extern bool nfsd_disable_splice_read __read_mostly;
 enum {
 	NFSD_IO_BUFFERED = 0,
 	NFSD_IO_DONTCACHE,
-	NFSD_IO_DIRECT
+	NFSD_IO_DIRECT,
+	NFSD_IO_FADVISE
 };
 
 extern u64 nfsd_io_cache_read __read_mostly;

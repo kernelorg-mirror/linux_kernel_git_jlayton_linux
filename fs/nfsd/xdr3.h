@@ -217,6 +217,7 @@ struct nfsd3_commitres {
 	__be32			status;
 	struct svc_fh		fh;
 	__be32			verf[2];
+	struct nfsd_file	*nf;
 };
 
 struct nfsd3_getaclres {

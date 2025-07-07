@@ -89,6 +89,7 @@ DEFINE_DEBUGFS_ATTRIBUTE(nfsd_io_cache_read_fops, nfsd_io_cache_read_get,
  *   %0: NFS WRITE will use buffered IO (default)
  *   %1: NFS WRITE will use dontcache (buffered IO w/ dropbehind)
  *   %2: NFS WRITE will use direct IO
+ *   %3: NFS stable WRITE will use dontcache + fadvise DONTNEED after COMMIT
  *
  * The default value of this setting is zero (buffered IO is
  * used). This setting takes immediate effect for all NFS
@@ -107,6 +108,7 @@ static int nfsd_io_cache_write_set(void *data, u64 val)
 	case NFSD_IO_BUFFERED:
 	case NFSD_IO_DONTCACHE:
 	case NFSD_IO_DIRECT:
+	case NFSD_IO_FADVISE:
 		nfsd_io_cache_write = val;
 		break;
 	default:
