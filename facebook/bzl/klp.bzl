@@ -1,4 +1,4 @@
-load(":flavors.td.bzl", "ARCH_X86_64", "ARCHITECTURE_TO_KERNEL_ARCH")
+load(":flavors.td.bzl", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_KERNEL_ARCH")
 load(":container.bzl", "container_genrule", "target_container_image")
 load(":kernel.bzl", "buildinfo")
 load(":constants.bzl", "CLANG_TRAIN_DATA_URI", "CLANG_TRAIN_DATA_SHA256", "KPATCH_BUILD_RPM_URI")
@@ -28,9 +28,10 @@ def klp():
     label=native.read_config("klp", "label", None)
     sign = native.read_config('kernel', 'sign_mod', 'false')
     sign_key = native.read_config('kernel', 'sign_mod_key', 'hsm-test-key')
+    # If no `klp.arch` passed, uses x86
     arch = native.read_config("klp", "arch", ARCH_X86_64)
-    if arch != ARCH_X86_64:
-      fail("Only {} is supported for klp".format(ARCH_X86_64))
+    if arch != ARCH_X86_64 and arch != ARCH_AARCH64:
+      fail("Only {} and {} is supported for klp. You have {}".format(ARCH_X86_64, ARCH_AARCH64, arch))
 
     # Generate targets for the commit being patched to. The commit *must* have a
     # tag that is suffixed with -hotfix<num>, regardless of whether the patch_to
