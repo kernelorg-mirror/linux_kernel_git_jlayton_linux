@@ -1,4 +1,4 @@
-load(":flavors.td.bzl", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_KERNEL_ARCH")
+load(":flavors.td.bzl", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_KERNEL_ARCH", "ARCHITECTURE_TO_CONFIG_ARCH")
 load(":container.bzl", "container_genrule", "target_container_image")
 load(":kernel.bzl", "buildinfo")
 load(":constants.bzl", "CLANG_TRAIN_DATA_URI", "CLANG_TRAIN_DATA_SHA256", "KPATCH_BUILD_RPM_URI")
@@ -171,11 +171,16 @@ def klp():
     )
 
     cfg_flavor = flavor
-    if not flavor:
-        cfg_flavor = "x86_64"
 
-    if not cfg_flavor.startswith("x86_64"):
-        cfg_flavor = "x86_64-%s" % cfg_flavor
+    # when dealing with config, uses ARCHITECTURE_TO_CONFIG_ARCH
+    # i.e, arm64 is called arm64 not aarch64.
+    _arch = ARCHITECTURE_TO_CONFIG_ARCH[arch]
+    if not flavor:
+        cfg_flavor = _arch
+
+    if not cfg_flavor.startswith(_arch):
+        # the config names aarch64 as arm64 instead of aarch64
+        cfg_flavor = "%s-%s" % (_arch, cfg_flavor)
 
     native.genrule(
       name = "config",
