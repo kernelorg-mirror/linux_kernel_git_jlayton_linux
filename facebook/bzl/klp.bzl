@@ -194,7 +194,7 @@ def klp():
     )
 
     train_data_args = ""
-    compiler_args = "LLVM=1 ARCH={}".format(ARCHITECTURE_TO_KERNEL_ARCH[ARCH_X86_64])
+    compiler_args = "LLVM=1 ARCH={}".format(ARCHITECTURE_TO_KERNEL_ARCH[arch])
 
     if "lol" not in cfg_flavor:
         native.http_file(
