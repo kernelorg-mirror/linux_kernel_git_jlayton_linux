@@ -281,7 +281,7 @@ def klp():
         bind_ro=bind_ros,
         bind_rw=bind_rws,
         cacheable=False,
-        image_override="$(location {})".format(target_container_image(ARCH_X86_64)),
+        image_override="$(location {})".format(target_container_image(arch)),
     )
     # prepare packaging
     bind_ros.append(("$(location :klp-spec)", "/tmp/klp.spec"))
