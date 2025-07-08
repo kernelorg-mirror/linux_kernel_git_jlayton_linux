@@ -2,16 +2,12 @@
 
 #
 # If you're working on PGO, which sends warnings to stdout rather than stderr,
-# you're going to want to specify both `--verbose N` _and_ the custom config
-# option `-c build_info.container_output=true` so that you can see the output
-# you need for iterating on PGO.  For example:
-#  buck2 build $(facebook/build/buck-config) \
-#    -c build_info.container_output=true \
-#    --verbose 3 \
-#   //:x86_64-hardened
-# This gets noisy, so keep a large scollback buffer or redirect to a file as
-# you see fit.
+# you're going to want to specify both DEBUG=1. so that you can see the output
+# you need for iterating on PGO.
 #
+# For example: buck2 build $(DEBUG=1 facebook/build/buck-config)
+# //:x86_64-hardened This gets noisy, so keep a large scollback buffer or
+# redirect to a file as you see fit.
 
 set -oe pipefail
 
@@ -100,6 +96,12 @@ if [ x"${DISABLE_KMOD}" = x"1" ]; then
   DISABLE_KMOD="True"
 fi
 
+DEBUG_PARAM=""
+if [ x"${DEBUG}" = x"1" ]; then
+  log "Debugging mode enabled. The container will not be unmounted"
+  DEBUG_PARAM=" --verbose 3 -c build_info.container_output=true"
+fi
+
 # buck cache is broken by all means in this repo
 # buck is not aware of dependecy between his targets and soruce code
 # and even if it would be aware caching entire kernel tree takes forever
@@ -118,5 +120,6 @@ cat << EOF
 -c build_info.gittish=${gittish} \
 -c build_info.disable_kmod=${DISABLE_KMOD} \
 -c build_info.fbk_tag=${fbk_tag} \
--c build_info.use_aarch64_emul=${USE_AARCH64_EMUL}
+-c build_info.use_aarch64_emul=${USE_AARCH64_EMUL} \
+${DEBUG_PARAM}
 EOF
