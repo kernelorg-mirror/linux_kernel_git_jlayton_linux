@@ -92,17 +92,20 @@ def klp():
         cacheable=False,
         labels = ["linux_kernel"],
     )
+
+    # for download, we need to take in consideration the architecture.
+    kerctl_download = "kerctl download --arch {} ".format(arch)
     # download published rpms for baseline
     native.genrule(
         name="kernel-devel-klp",
-        cmd="mkdir -p $OUT && kerctl download --devel --out-dir $OUT `cat $(location :baseline-rpm-version)` && mv $OUT/*.rpm $OUT/kernel-devel.rpm",
+        cmd="mkdir -p $OUT && " + kerctl_download + "--devel --out-dir $OUT `cat $(location :baseline-rpm-version)` && mv $OUT/*.rpm $OUT/kernel-devel.rpm",
         out="kernel-devel-klp",
         cacheable=False,
         labels = ["linux_kernel"],
     )
     native.genrule(
         name="kernel-bin-klp",
-        cmd="mkdir -p $OUT && kerctl download --kernel --out-dir $OUT `cat $(location :baseline-rpm-version)` && mv $OUT/*.rpm $OUT/kernel-bin.rpm",
+        cmd="mkdir -p $OUT && " + kerctl_download + "--kernel --out-dir $OUT `cat $(location :baseline-rpm-version)` && mv $OUT/*.rpm $OUT/kernel-bin.rpm",
         out="kernel-bin-klp",
         cacheable=False,
         labels = ["linux_kernel"],
