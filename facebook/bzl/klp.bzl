@@ -1,5 +1,6 @@
+# vim: set expandtab tabstop=4 shiftwidth=4 softtabstop=4 :
 load(":flavors.td.bzl", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_KERNEL_ARCH", "ARCHITECTURE_TO_CONFIG_ARCH")
-load(":container.bzl", "container_genrule", "target_container_image")
+load(":container.bzl", "container_genrule", "default_container_image")
 load(":kernel.bzl", "buildinfo")
 load(":constants.bzl", "CLANG_TRAIN_DATA_URI", "CLANG_TRAIN_DATA_SHA256", "KPATCH_BUILD_RPM_URI")
 
@@ -284,7 +285,7 @@ def klp():
         bind_ro=bind_ros,
         bind_rw=bind_rws,
         cacheable=False,
-        image_override="$(location {})".format(target_container_image(arch)),
+        image_override="$(location {})".format(default_container_image(arch)),
     )
     # prepare packaging
     bind_ros.append(("$(location :klp-spec)", "/tmp/klp.spec"))
@@ -327,5 +328,5 @@ def klp():
         bind_ro=bind_ros,
         bind_rw=bind_rws,
         cacheable=False,
-        image_override="$(location {})".format(target_container_image(arch)),
+        image_override="$(location {})".format(default_container_image(arch)),
     )
