@@ -226,7 +226,7 @@ def klp():
       out = "kpatch-rpm-dir",
       labels = ["linux_kernel"],
     )
-    bind_ros.append(("$(location :kpatch-rpm-dir)", "/tmp/kptach-build-rpm"))
+    bind_ros.append(("$(location :kpatch-rpm-dir)", "/tmp/kpatch-build-rpm"))
 
     #feed artifacts to kpatch-build in a container
     bind_rws = [(":baseline-sources", "/rw/compile"), ("$OUT", "/rw/output"), (":target-sources", "/rw/target")]
@@ -235,7 +235,7 @@ def klp():
         arch=arch,
         cmd="""
             rpm -ivh /tmp/kernel-bin/*.rpm /tmp/kernel-devel/*.rpm
-            test -f /tmp/kptach-build-rpm/*.rpm && rpm -Uvh /tmp/kptach-build-rpm/*.rpm
+            test -f /tmp/kpatch-build-rpm/*.rpm && rpm -Uvh /tmp/kpatch-build-rpm/*.rpm
             pushd /rw/compile
             cp /tmp/config .config
             make {compiler_args} olddefconfig
