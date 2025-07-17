@@ -246,8 +246,6 @@ def klp():
             cp /tmp/bootconfig .bootconfig
             make {compiler_args} olddefconfig
             if grep -q CONFIG_LTO_CLANG=y /rw/compile/.config ; then
-                # create a dependence on uname-klp so we can get base kernel version string
-                cat $(location :uname-klp)
                 ver=`cat /tmp/uname`
                 # e.g., 6.4.3-0_fbk2_rc7_778_g4b661353af47 => -0_fbk2_rc7_778_g4b661353af47
                 extraver=-`echo $ver | cut -d '-' -f 2`
