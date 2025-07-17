@@ -3,7 +3,7 @@ load(":flavors.td.bzl", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_KERNEL_A
 load(":container.bzl", "container_genrule", "default_container_image")
 load(":kernel.bzl", "buildinfo")
 load(":constants.bzl", "CLANG_TRAIN_DATA_URI", "CLANG_TRAIN_DATA_SHA256", "KPATCH_BUILD_RPM_URI")
-
+load(":bootconfig.bzl", "bootconfig_name")
 
 def klp():
     """
@@ -111,6 +111,10 @@ def klp():
         cacheable=False,
         labels = ["linux_kernel"],
     )
+    bootconfig_target = "//facebook/config:" + bootconfig_name(
+        arch = arch,
+        flavor = flavor,
+    )
     bind_ros = [
         ("$(location :kernel-devel-klp)", "/tmp/kernel-devel"),
         ("$(location :kernel-bin-klp)", "/tmp/kernel-bin"),
@@ -119,7 +123,8 @@ def klp():
         ("$(location :config)", "/tmp/config"),
         ("$(location :uname-klp)", "/tmp/uname"),
         ("$(location :hotfix)", "/tmp/hotfix"),
-        ("$(location :baseline-rpm-version)", "/tmp/baseline_rpm_version")
+        ("$(location :baseline-rpm-version)", "/tmp/baseline_rpm_version"),
+        (bootconfig_target, "/tmp/bootconfig"),
     ]
 
     #checkout baseline
@@ -238,6 +243,7 @@ def klp():
             test -f /tmp/kpatch-build-rpm/*.rpm && rpm -Uvh /tmp/kpatch-build-rpm/*.rpm
             pushd /rw/compile
             cp /tmp/config .config
+            cp /tmp/bootconfig .bootconfig
             make {compiler_args} olddefconfig
             if grep -q CONFIG_LTO_CLANG=y /rw/compile/.config ; then
                 # create a dependence on uname-klp so we can get base kernel version string
