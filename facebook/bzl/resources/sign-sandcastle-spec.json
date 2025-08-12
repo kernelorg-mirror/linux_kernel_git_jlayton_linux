@@ -1,0 +1,17 @@
+{
+    "command": "SandcastleKernelBuildCommand",
+    "args": {
+        "build_mode": "signing",
+        "everstore_handle": "$EVERSTORE_HANDLE",
+        "sign_modules_key": "$SIGN_KEY"
+    },
+    "capabilities": {
+        "type": "lego",
+        "vcs": "linux-kernel-git",
+        "tenant": "kernel"
+    },
+    "nonce": "$SANDCASTLE_NONCE",
+    "alias": "kernel-module-signing",
+    "oncall": "kernel_infra",
+    "hash": "$KERNEL_COMMIT"
+}

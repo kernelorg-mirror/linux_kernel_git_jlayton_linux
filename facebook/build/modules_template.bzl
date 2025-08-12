@@ -164,7 +164,12 @@ EOF
          ! -e "$(location :{name}-shared-build-dir)" ]; then
         exit
     fi
-    sudo autograph_client.par kmod --sign-key {sign_key} --kernel-tree "$(location :{name}-shared-build-dir)"
+    # /failed-signature is a signal file to the build process to signify that
+    # the signature failed.  If it exists then the build process will fail.
+    sudo autograph_client.par kmod --sign-key {sign_key} \
+        --kernel-tree "$(location :{name}-shared-build-dir)" || \
+        touch "$(location :{name}-shared-build-dir)/failed-signature"
+
     rm "$(location :{name}-shared-build-dir)/do-signature"
 ) &
 EOF
@@ -219,6 +224,10 @@ EOF
             --define "kernel_version {uname}" \
             --define "using_clang 1" \
             --with llvm_cross || touch /rw/BUILDROOT/abort-signature
+            if [ -f /rw/BUILDROOT/failed-signature ]; then
+                echo "Failed to sign module"
+                exit 1
+            fi
             cp -R /root/rpmbuild/RPMS/{arch}/*.rpm /rw/rpms
         """.format(uname = "\$(cat /tmp/uname)", build_prep = build_prep, arch = arch),
         bind_ro = bind_ro,

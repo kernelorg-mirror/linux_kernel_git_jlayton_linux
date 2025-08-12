@@ -134,6 +134,7 @@ def module(name, arch, module, kernel_devel, uname=None, dependencies=None, loca
 %{__os_install_post}\\\\
 touch /rw/BUILDROOT/do-signature\\\\
 while [ -e /rw/BUILDROOT/do-signature ]; do sleep 10; done\\\\
+
 %{nil}
 EOF
 """,
@@ -148,7 +149,7 @@ EOF
         native.genrule(
             name = name + "-sign-wrapper",
             cmd = """
-                cat > "$OUT" <<EOF
+                cat > "$OUT" <<'SIGNEOF'
 #!/bin/sh
 
 # Start the signature waiter in a background subshell
@@ -164,10 +165,34 @@ EOF
          ! -e "$(location :{name}-shared-build-dir)" ]; then
         exit
     fi
-    sudo autograph_client.par kmod --sign-key {sign_key} --kernel-tree "$(location :{name}-shared-build-dir)"
-    rm "$(location :{name}-shared-build-dir)/do-signature"
+
+    KERNEL_TREE=$(location :{name}-shared-build-dir)
+
+    # /failed-signature is a signal file to the build process to signify that
+    # the signature failed. If it exists then the build process will fail.
+    # Sign modules via SandcastleKernelBuildCommand (Autograph-whitelisted)
+    SIGN_TMPDIR=\$(mktemp -d)
+    SIGN_LOG=$SIGN_TMPDIR/signing.log
+    (
+        set -xe
+        tar -cf $SIGN_TMPDIR/unsigned_modules.tar -C "$KERNEL_TREE" .
+        EVERSTORE_HANDLE=\$(clowder put $SIGN_TMPDIR/unsigned_modules.tar --fbtype EVERSTORE_LINUX_KERNEL)
+        SCUTIL_OUTPUT=\$(scutil create '{{"command":"SandcastleKernelBuildCommand","args":{{"build_mode":"signing","everstore_handle":"'$EVERSTORE_HANDLE'","sign_modules_key":"{sign_key}"}},"capabilities":{{"type":"lego","vcs":"linux-kernel-git","tenant":"kernel"}},"nonce":"'$SANDCASTLE_NONCE'","alias":"kernel-module-signing","oncall":"kernel_infra","hash":"master"}}' --await --follow-retries -v json 2>&1)
+        INSTANCE_ID=\$(echo "$SCUTIL_OUTPUT" | jq -r '.id')
+        STEP_LOG_HANDLE=\$(scutil get-log-info $INSTANCE_ID | grep 'handle:' | tail -1 | awk '{{print $2}}')
+        SIGNED_HANDLE=\$(clowder get $STEP_LOG_HANDLE | grep -oP 'Signed Everstore handle: \K\S+')
+        clowder get $SIGNED_HANDLE > $SIGN_TMPDIR/signed_modules.tar
+        tar -xf $SIGN_TMPDIR/signed_modules.tar -C "$KERNEL_TREE"
+    ) > "$SIGN_LOG" 2>&1 || touch "$KERNEL_TREE/failed-signature"
+
+    echo "=== Signing log ===" >&2
+    cat "$SIGN_LOG" >&2
+    echo "=== End signing log ===" >&2
+    rm -rf "$SIGN_TMPDIR"
+
+    rm "$KERNEL_TREE/do-signature"
 ) &
-EOF
+SIGNEOF
                 chmod +x "$OUT"
 """.format(name = name, sign_key = sign_key),
             out = "signature-wrapper.sh",
@@ -220,6 +245,10 @@ EOF
             --define "kernel_version {uname}" \
             --define "using_clang 1" \
             --with llvm_cross || touch /rw/BUILDROOT/abort-signature
+            if [ -f /rw/BUILDROOT/failed-signature ]; then
+                echo "Failed to sign module"
+                exit 1
+            fi
             cp -R /root/rpmbuild/RPMS/{arch}/*.rpm /rw/rpms
         """.format(uname = "\$(cat /tmp/uname)", build_prep = build_prep, arch = arch),
         bind_ro = bind_ro,
@@ -631,4 +660,3 @@ modules = [
         archs = ["x86_64"],
     )
 ]
-

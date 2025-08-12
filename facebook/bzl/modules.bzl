@@ -157,43 +157,22 @@ EOF
 
     sign = native.read_config('kernel', 'sign_mod', 'false')
     sign_key = native.read_config('kernel', 'sign_mod_key', 'hsm-test-key')
-
+    native.export_file(
+        name = name + "-sign-sandcastle-spec",
+        src = "facebook/bzl/resources/sign-sandcastle-spec.json",
+        labels = ["linux_kernel"],
+    ) 
     if sign != "false":
-        native.genrule(
-            name = name + "-sign-wrapper",
-            cmd = """
-                cat > "$OUT" <<EOF
-#!/bin/sh
-
-# Start the signature waiter in a background subshell
-(
-    while [ ! -e "$(location :{name}-shared-build-dir)/do-signature" -a \
-            ! -e "$(location :{name}-shared-build-dir)/abort-signature" -a \
-            -e "$(location :{name}-shared-build-dir)" ]; do
-        sleep 10
-    done
-    # If the build dir doesn't exist any more then assume we're cleaning up.
-    # If the abort touch file is set then just exit the subshell.
-    if [ -e "$(location :{name}-shared-build-dir)/abort-signature" -o \
-         ! -e "$(location :{name}-shared-build-dir)" ]; then
-        exit
-    fi
-    sudo autograph_client.par kmod --sign-key {sign_key} --kernel-tree "$(location :{name}-shared-build-dir)"
-    rm "$(location :{name}-shared-build-dir)/do-signature"
-) &
-EOF
-                chmod +x "$OUT"
-""".format(name = name, sign_key = sign_key),
-            out = "signature-wrapper.sh",
-            labels = ["linux_kernel", "uses_sudo"],
+        native.export_file(
+            name = name + "-sign-wrapper-script",
+            src = "facebook/bzl/resources/sign-wrapper.sh",
+            labels = ["linux_kernel"],
         )
-
         bind_ro.append((":{}-rpmmacros".format(name), "/tmp/rpmmacros"))
     else:
         native.genrule(
-            name = name + "-sign-wrapper",
+            name = name + "-sign-wrapper-script",
             cmd = "ln -s /bin/true \"$OUT\"",
-            out = "signature-wrapper.sh",
             labels = ["linux_kernel"],
         )
 
@@ -225,7 +204,12 @@ EOF
     container_genrule(
         name = name + "-rpmbuild",
         arch = arch,
-        pre_cmd = "$(location :{}-sign-wrapper)".format(name),
+        pre_cmd = """
+            $(location :{name}-sign-wrapper-script) \
+            $(location :{name}-shared-build-dir) \
+            {sign_key} \
+            $(location :{name}-sign-sandcastle-spec)
+        """.format(name = name, sign_key = sign_key),
         cmd = """
             {build_prep}
             rpmbuild -rb /tmp/module.src.rpm \
@@ -234,6 +218,10 @@ EOF
             --define "kernel_version {uname}" \
             --define "using_clang 1" \
             --with llvm_cross || touch /rw/BUILDROOT/abort-signature
+            if [ -f /rw/BUILDROOT/failed-signature ]; then
+                echo "Failed to sign module"
+                exit 1
+            fi
             cp -R /root/rpmbuild/RPMS/{arch}/*.rpm /rw/rpms
         """.format(uname = "\$(cat /tmp/uname)", build_prep = build_prep, arch = arch),
         bind_ro = bind_ro,
