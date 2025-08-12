@@ -98,7 +98,10 @@ rm -f $RPM_BUILD_ROOT/lib/modules/%{_uname}/{build,source}
 # are building modules, as kernel selftests require modules to be installed.
 %if %{defined _selftests}
 mkdir -p $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
-make %{makeopts} %{?_smp_mflags} -C tools/testing/selftests SKIP_TARGETS= install TARGETS="%{_selftest_suites}" SKIP_DOCS=1 feature-llvm=
+make %{makeopts} %{?_smp_mflags} -C tools/testing/selftests SKIP_TARGETS= install TARGETS="%{_selftest_suites}" SKIP_DOCS=1 SKIP_LLVM=1
+%if "%{_selftest_suites}" == "bpf"
+cp tools/testing/selftests/bpf/test_kmods/*.ko tools/testing/selftests/kselftest_install/bpf/
+%endif
 cp -a --parents tools/testing/selftests/kselftest_install $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
 %endif
 
