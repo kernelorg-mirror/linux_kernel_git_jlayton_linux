@@ -1,8 +1,9 @@
 # vim: set expandtab tabstop=4 shiftwidth=4 softtabstop=4 :
-load(":flavors.td.bzl", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_KERNEL_ARCH", "ARCHITECTURE_TO_CONFIG_ARCH")
+load(":flavors.td.bzl", "ARCH_X86_64", "ARCH_AARCH64", "ARCHITECTURE_TO_KERNEL_ARCH", "ARCHITECTURE_TO_CONFIG_ARCH", "ARCHITECTURE_TO_RPMBUILD_TARGET")
 load(":container.bzl", "container_genrule", "default_container_image")
 load(":kernel.bzl", "buildinfo")
 load(":constants.bzl", "CLANG_TRAIN_DATA_URI", "CLANG_TRAIN_DATA_SHA256", "KPATCH_BUILD_RPM_URI")
+load(":constants.bzl", "AARCH64_TRAIN_DATA_URI", "AARCH64_TRAIN_DATA_SHA256")
 load(":bootconfig.bzl", "bootconfig_name")
 
 def klp():
@@ -211,11 +212,19 @@ def klp():
     compiler_args = "LLVM=1 ARCH={}".format(ARCHITECTURE_TO_KERNEL_ARCH[arch])
 
     if "lol" not in cfg_flavor:
-        native.http_file(
-            name = "target-train-data",
-            urls = [CLANG_TRAIN_DATA_URI],
-            sha256 = CLANG_TRAIN_DATA_SHA256,
-        )
+        if arch == ARCH_X86_64:
+            native.http_file(
+                name = "target-train-data",
+                urls = [CLANG_TRAIN_DATA_URI],
+                sha256 = CLANG_TRAIN_DATA_SHA256,
+            )
+        else:
+            native.http_file(
+                name = "target-train-data",
+                urls = [AARCH64_TRAIN_DATA_URI],
+                sha256 = AARCH64_TRAIN_DATA_SHA256,
+            )
+
         bind_ros.append(("$(location :target-train-data)", "/tmp/vmlinux.profdata"))
         train_data_args = "-p /tmp/vmlinux.profdata"
 
@@ -239,7 +248,7 @@ def klp():
         name="klp-build",
         arch=arch,
         cmd="""
-            rpm -ivh /tmp/kernel-bin/*.rpm /tmp/kernel-devel/*.rpm
+            rpm -ivh /tmp/kernel-bin/*.rpm /tmp/kernel-devel/*.rpm --ignorearch
             test -f /tmp/kpatch-build-rpm/*.rpm && rpm -Uvh /tmp/kpatch-build-rpm/*.rpm
             pushd /rw/compile
             cp /tmp/config .config
@@ -326,9 +335,9 @@ def klp():
         arch=arch,
         cmd="""
             cat /tmp/to_tag
-            rpmbuild -ba /tmp/klp.spec --define "short_kernel_version `cat /tmp/baseline_rpm_version`" --define "rpm_kernel_version `cat /tmp/uname`" --define "module_path /tmp/module" --define "hf_name `cat /tmp/hotfix`"
-            cp -vR /root/rpmbuild/RPMS/x86_64/*.rpm /rw/output/
-        """,
+            rpmbuild --target={target} -ba /tmp/klp.spec --define "short_kernel_version `cat /tmp/baseline_rpm_version`" --define "rpm_kernel_version `cat /tmp/uname`" --define "module_path /tmp/module" --define "hf_name `cat /tmp/hotfix`"
+            cp -vR /root/rpmbuild/RPMS/*/*.rpm /rw/output/
+        """.format(target=ARCHITECTURE_TO_RPMBUILD_TARGET[arch]),
         bind_ro=bind_ros,
         bind_rw=bind_rws,
         cacheable=False,
