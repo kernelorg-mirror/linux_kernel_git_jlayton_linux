@@ -293,8 +293,8 @@ def klp():
             popd
 
             export PATH=$PATH:/usr/libexec/git-core/
-            kpatch-build {train_data_args} -s /rw/compile -c /rw/compile/.config -v /boot/vmlinux* -o /rw/output -n klp_`cat /tmp/baseline_rpm_version`_`cat /tmp/hotfix` /tmp/patches/* || (cp /root/.kpatch/build.log /rw/output/ && exit 1)
-        """.format(train_data_args = train_data_args, compiler_args = compiler_args),
+            TARGET_ARCH={arch} kpatch-build {train_data_args} -s /rw/compile -c /rw/compile/.config -v /boot/vmlinux* -o /rw/output -n klp_`cat /tmp/baseline_rpm_version`_`cat /tmp/hotfix` /tmp/patches/* || (cp /root/.kpatch/build.log /rw/output/ && exit 1)
+        """.format(train_data_args = train_data_args, compiler_args = compiler_args, arch = arch),
         bind_ro=bind_ros,
         bind_rw=bind_rws,
         cacheable=False,
