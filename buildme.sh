@@ -1,7 +1,7 @@
 #!/bin/sh
 
 KERNEL=6.12.0
-MOCKROOT=oraclelinux-8-x86_64
+MOCKROOT=oraclelinux-9-x86_64
 
 if [ ! -d uek-rpm ]; then
 	echo "please run in a linux-uek checkout on your expected branch"
@@ -24,6 +24,6 @@ rm -vf ~/rpmbuild/SOURCES/linux-${KERNEL}*
 git archive --prefix=linux-${KERNEL}/ -o ~/rpmbuild/SOURCES/linux-${KERNEL}.tar HEAD
 ( cd ~/rpmbuild/SOURCES && bzip2 linux-${KERNEL}.tar )
 
-rpmbuild --define 'dist .el9' --define 'buildid .local' -bs ~/rpmbuild/SPECS/kernel-uek.spec
+rpmbuild --define 'source_date_epoch_from_changelog 0' --define 'dist .el9' --define 'buildid .ocids20250826' -bs ~/rpmbuild/SPECS/kernel-uek.spec
 
-echo Run \"mock -r ${MOCKROOT} --define \'buildid .local\' --rebuild '${SRPM}'\" on the .src.rpm from above.
+echo Run \"mock -r ${MOCKROOT} --define \'buildid .ocids20250826\' --rebuild '${SRPM}'\" on the .src.rpm from above.
