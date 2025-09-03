@@ -9767,6 +9767,8 @@ nfsd_handle_dir_event(u32 mask, const struct inode *dir, const void *data,
 	struct file_lock_core *flc;
 	struct nfsd_notify_event *evt;
 
+	trace_nfsd_file_fsnotify_handle_dir_event(mask, dir, name);
+
 	/* Don't do anything if this is not an expected event */
 	if (!(mask & (FS_CREATE|FS_DELETE|FS_RENAME)))
 		return 0;
