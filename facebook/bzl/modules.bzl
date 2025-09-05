@@ -1,7 +1,7 @@
 load(":container.bzl", "container_genrule")
 load(":modules_list.bzl", MODULES="modules")
 
-# This file is concated with the modules coming from configerator
+# This file is concatenated with the modules coming from configerator
 # before being used
 
 def standalone_module():
@@ -10,8 +10,22 @@ def standalone_module():
     name = native.read_config("kernel", "module")
     module_srpm = native.read_config("kernel", "module_srpm", None)
     kernel_devel = native.read_config("kernel", "devel_rpm", None)
+    is_locally_defined_module = (native.read_config("kernel", "locally_defined_module", "false")
+        .lower() in ["true", "1", "yes", "y", "on", "enable", "enabled"]) and name and module_srpm
+    local_module_url = ""
+    if module_srpm and module_srpm.startswith("http"):
+        local_module_url = module_srpm
+        module_srpm = None
 
-
+    locally_defined_module = struct(
+        name = name,
+        url = local_module_url,
+        sha256 = "",
+        kernels = [],
+        flavors = [],
+        depends = [],
+        archs = [],
+    )
     if kernel_devel:
         native.genrule(
             name = "kernel-devel",
@@ -26,8 +40,7 @@ def standalone_module():
             out = "kernel-devel",
             labels = ["linux_kernel"],
         )
-
-    for mod in MODULES:
+    for mod in (MODULES if not is_locally_defined_module else [locally_defined_module]):
         if mod.name != name:
             continue
         deps = []
@@ -122,7 +135,7 @@ def module(name, arch, module, kernel_devel, uname=None, dependencies=None, loca
         for dep in dependencies:
             bind_ro.append(dep)
 
-    # Build an rpmmacro config that uses a do-signature semaphore file inside
+    # Build an rpm macro config that uses a do-signature semaphore file inside
     # the container to trigger autograph outside the container.
     # Yay escaping backslashes all the way down.
     native.genrule(
