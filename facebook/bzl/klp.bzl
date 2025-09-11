@@ -259,9 +259,6 @@ def klp():
                 # e.g., 6.4.3-0_fbk2_rc7_778_g4b661353af47 => -0_fbk2_rc7_778_g4b661353af47
                 extraver=-`echo $ver | cut -d '-' -f 2`
                 sed "s|EXTRAVERSION =|EXTRAVERSION = $extraver|g" -i Makefile
-                make {compiler_args} CFLAGS_PGO_CLANG=-fprofile-use=/tmp/vmlinux.profdata -j
-                rm /boot/vmlinux*
-                cp vmlinux.o /boot/
             fi
             popd
 
