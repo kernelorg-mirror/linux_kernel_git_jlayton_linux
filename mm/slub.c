@@ -4201,6 +4201,15 @@ bool slab_post_alloc_hook(struct kmem_cache *s, struct list_lru *lru,
 	return memcg_slab_post_alloc_hook(s, lru, flags, size, p);
 }
 
+static void *slab_kfence_alloc(struct kmem_cache *s, size_t orig_size, gfp_t gfpflags)
+{
+#ifdef CONFIG_KFENCE
+	if (s->flags & SLAB_ALWAYS_KFENCE)
+		return __kfence_alloc(s, orig_size, gfpflags);
+#endif
+	return kfence_alloc(s, orig_size, gfpflags);
+}
+
 /*
  * Inlined fastpath so that allocation functions (kmalloc, kmem_cache_alloc)
  * have the fastpath folded into their functions. So no function call
@@ -4221,7 +4230,7 @@ static __fastpath_inline void *slab_alloc_node(struct kmem_cache *s, struct list
 	if (unlikely(!s))
 		return NULL;
 
-	object = kfence_alloc(s, orig_size, gfpflags);
+	object = slab_kfence_alloc(s, orig_size, gfpflags);
 	if (unlikely(object))
 		goto out;
 
@@ -5319,7 +5328,7 @@ int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 	local_lock_irqsave(&s->cpu_slab->lock, irqflags);
 
 	for (i = 0; i < size; i++) {
-		void *object = kfence_alloc(s, s->object_size, flags);
+		void *object = slab_kfence_alloc(s, s->object_size, flags);
 
 		if (unlikely(object)) {
 			p[i] = object;
@@ -5379,7 +5388,7 @@ static int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags,
 	int i;
 
 	for (i = 0; i < size; i++) {
-		void *object = kfence_alloc(s, s->object_size, flags);
+		void *object = slab_kfence_alloc(s, s->object_size, flags);
 
 		if (unlikely(object)) {
 			p[i] = object;
@@ -7320,7 +7329,28 @@ static ssize_t skip_kfence_store(struct kmem_cache *s,
 
 	return ret;
 }
+
+static ssize_t always_kfence_show(struct kmem_cache *s, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", !!(s->flags & SLAB_ALWAYS_KFENCE));
+}
+
+static ssize_t always_kfence_store(struct kmem_cache *s,
+			const char *buf, size_t length)
+{
+	int ret = length;
+
+	if (buf[0] == '0')
+		s->flags &= ~SLAB_ALWAYS_KFENCE;
+	else if (buf[0] == '1')
+		s->flags |= SLAB_ALWAYS_KFENCE;
+	else
+		ret = -EINVAL;
+
+	return ret;
+}
 SLAB_ATTR(skip_kfence);
+SLAB_ATTR(always_kfence);
 #endif
 
 static struct attribute *slab_attrs[] = {
@@ -7393,6 +7423,7 @@ static struct attribute *slab_attrs[] = {
 	&usersize_attr.attr,
 #endif
 #ifdef CONFIG_KFENCE
+	&always_kfence_attr.attr,
 	&skip_kfence_attr.attr,
 #endif
 
