@@ -159,8 +159,6 @@ int fcntl_setlk64(unsigned int, struct file *, unsigned int,
 
 int fcntl_setlease(unsigned int fd, struct file *filp, int arg);
 int fcntl_getlease(struct file *filp);
-int fcntl_setdeleg(unsigned int fd, struct file *filp, struct delegation *deleg);
-int fcntl_getdeleg(struct file *filp, struct delegation *deleg);
 
 static inline bool lock_is_unlock(struct file_lock *fl)
 {
@@ -278,16 +276,6 @@ static inline int fcntl_setlease(unsigned int fd, struct file *filp, int arg)
 static inline int fcntl_getlease(struct file *filp)
 {
 	return F_UNLCK;
-}
-
-static inline int fcntl_setdeleg(unsigned int fd, struct file *filp, struct delegation *deleg)
-{
-	return -EINVAL;
-}
-
-static inline int fcntl_getdeleg(struct file *filp, struct delegation *deleg)
-{
-	return -EINVAL;
 }
 
 static inline bool lock_is_unlock(struct file_lock *fl)
