@@ -764,9 +764,16 @@ nfsd4_layout_lm_change(struct file_lease *onlist, int arg,
 	return lease_modify(onlist, arg, dispose);
 }
 
+static int
+nfsd4_layout_lm_open_conflict(struct file *filp, int arg)
+{
+	return 0;
+}
+
 static const struct lease_manager_operations nfsd4_layouts_lm_ops = {
-	.lm_break	= nfsd4_layout_lm_break,
-	.lm_change	= nfsd4_layout_lm_change,
+	.lm_break		= nfsd4_layout_lm_break,
+	.lm_change		= nfsd4_layout_lm_change,
+	.lm_open_conflict	= nfsd4_layout_lm_open_conflict,
 };
 
 int
