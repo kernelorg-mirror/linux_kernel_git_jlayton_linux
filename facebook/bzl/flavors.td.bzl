@@ -69,6 +69,7 @@ ARCH_FLAVORS = {
         "kdump",
         "debug",
         "debugnightly",
+        "crackerjackhost", # upstream (crackerjack)  
     ],
 }
 
