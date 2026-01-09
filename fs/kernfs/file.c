@@ -15,6 +15,7 @@
 #include <linux/sched/mm.h>
 #include <linux/fsnotify.h>
 #include <linux/uio.h>
+#include <linux/filelock.h>
 
 #include "kernfs-internal.h"
 
@@ -1023,6 +1024,7 @@ const struct file_operations kernfs_file_fops = {
 	.fsync		= noop_fsync,
 	.splice_read	= copy_splice_read,
 	.splice_write	= iter_file_splice_write,
+	.setlease	= generic_setlease_warn,
 };
 
 /**

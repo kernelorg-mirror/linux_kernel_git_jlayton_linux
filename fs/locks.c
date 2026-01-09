@@ -1976,6 +1976,20 @@ int generic_setlease(struct file *filp, int arg, struct file_lease **flp,
 EXPORT_SYMBOL(generic_setlease);
 
 /*
+ * This is intended as a temporary measure. Leases were allowed on a broad
+ * range of filesystems in older kernels, even on filesystems where they make
+ * no sense. Filesystems that have this set and that have seen no warnings
+ * for some time should consider setting ->setlease() to NULL.
+ */
+int generic_setlease_warn(struct file *filp, int arg, struct file_lease **flp, void **priv)
+{
+	WARN_ONCE(arg != F_UNLCK, "filelock: lease being set on %s",
+		  filp->f_path.dentry->d_sb->s_type->name);
+	return generic_setlease(filp, arg, flp, priv);
+}
+EXPORT_SYMBOL(generic_setlease_warn);
+
+/*
  * Kernel subsystems can register to be notified on any attempt to set
  * a new lease with the lease_notifier_chain. This is used by (e.g.) nfsd
  * to close files that it may have cached when there is an attempt to set a
