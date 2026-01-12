@@ -21,7 +21,7 @@ for config in os.listdir("."):
     allconfigs[config] = set()
 
     for line in open(config):
-        m = re.match("#*\s*CONFIG_(\w+)[\s=](.*)$", line)
+        m = re.match(r"#*\s*CONFIG_(\w+)[\s=](.*)$", line)
         if not m:
             continue
         option, value = m.groups()
