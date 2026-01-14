@@ -422,13 +422,15 @@ static int check_export(const struct path *path, int *flags, unsigned char *uuid
 	if (*flags & NFSEXP_V4ROOT)
 		*flags |= NFSEXP_READONLY;
 
-	/* There are two requirements on a filesystem to be exportable.
-	 * 1:  We must be able to identify the filesystem from a number.
+	/* There are four requirements on a filesystem to be exportable:
+	 * 1: The filehandle must identify a filesystem by number.
 	 *       either a device number (so FS_REQUIRES_DEV needed)
 	 *       or an FSID number (so NFSEXP_FSID or ->uuid is needed).
-	 * 2:  We must be able to find an inode from a filehandle.
+	 * 2: The filehandle must uniquely identify an inode.
 	 *       This means that s_export_op must be set.
-	 * 3: We must not currently be on an idmapped mount.
+	 * 3: The exported filesystem must provide stable filehandles.
+	 *       This means that EXPORT_OP_STABLE_HANDLES is set
+	 * 4: The requested file must not reside on an idmapped mount.
 	 */
 	if (!(inode->i_sb->s_type->fs_flags & FS_REQUIRES_DEV) &&
 	    !(*flags & NFSEXP_FSID) &&
@@ -439,6 +441,11 @@ static int check_export(const struct path *path, int *flags, unsigned char *uuid
 
 	if (!exportfs_can_decode_fh(inode->i_sb->s_export_op)) {
 		dprintk("exp_export: export of invalid fs type.\n");
+		return -EINVAL;
+	}
+
+	if (!(inode->i_sb->s_export_op->flags & EXPORT_OP_STABLE_HANDLES)) {
+		dprintk("%s: fs does not provide stable filehandles!\n", __func__);
 		return -EINVAL;
 	}
 
