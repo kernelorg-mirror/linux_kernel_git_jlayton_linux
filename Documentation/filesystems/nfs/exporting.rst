@@ -249,3 +249,16 @@ following flags are defined:
     clustered filesystems usually need special handling to do this properly.
     Set this flag on filesystems that can't guarantee the proper semantics
     (e.g. reexported NFS).
+
+  EXPORT_OP_STABLE_HANDLES - This filesystem provides filehandles that are
+    stable across the lifetime of a file.  A file in this context is an
+    instantiated inode reachable by one or more file names, or still open after
+    the last name has been unlinked.  Reuses of the same on-disk inode structure
+    are considered new files and must provide different file handles from the
+    previous incarnation.  Most file systems designed to store user data
+    naturally provide this capability.  Pseudofilesystems that are for local
+    reporting and control (e.g. kernfs, pidfs, nsfs) usually can't support this.
+
+    This flag is a hard requirement for export via nfsd. Any filesystem that
+    is eligible to be exported via nfsd must indicate this guarantee by
+    setting this flag.
