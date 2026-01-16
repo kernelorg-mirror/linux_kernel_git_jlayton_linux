@@ -238,3 +238,14 @@ following flags are defined:
     all of an inode's dirty data on last close. Exports that behave this
     way should set EXPORT_OP_FLUSH_ON_CLOSE so that NFSD knows to skip
     waiting for writeback when closing such files.
+
+  EXPORT_OP_NOLOCKS - Disable file locking on this filesystem. Filesystems
+    that want to support locking over NFS must support POSIX file locking
+    semantics. When the server reboots, the clients will issue requests to
+    recover their locks, which nfsd will issue to the filesystem as new lock
+    requests. Those must succeed in order for lock recovery to work. Most
+    local disk, RAM, or pseudo-filesystems use the generic POSIX locking
+    support in the kernel and naturally provide this capability. Network or
+    clustered filesystems usually need special handling to do this properly.
+    Set this flag on filesystems that can't guarantee the proper semantics
+    (e.g. reexported NFS).
