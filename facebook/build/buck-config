@@ -85,8 +85,12 @@ fi
 # modules definitions come from configerator because they need to be built on
 # older kernels and without editing code in the kernel tree, so replace
 # facebook/modules/modules.bzl now with contents from configerator
-configeratorc -minloglevel=2 getConfig kernel/build/just_modules \
-  > "$root/facebook/bzl/modules_list.bzl"
+if [ x"${SKIP_CONFIGERATOR_MODULES}" = x"1" ]; then
+  log "Skipping just_modules fetch from configerator"
+else
+  configeratorc -minloglevel=2 getConfig kernel/build/just_modules \
+    > "$root/facebook/bzl/modules_list.bzl"
+fi
 
 
 # If this option is set, we do not compile external modules, as in:
