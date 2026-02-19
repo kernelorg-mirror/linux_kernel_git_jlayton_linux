@@ -239,12 +239,13 @@ static void nfsd_net_free(struct percpu_ref *ref)
 
 int nfsd_nrthreads(struct net *net)
 {
-	int rv = 0;
+	int i, rv = 0;
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
 	mutex_lock(&nfsd_mutex);
 	if (nn->nfsd_serv)
-		rv = nn->nfsd_serv->sv_nrthreads;
+		for (i = 0; i < nn->nfsd_serv->sv_nrpools; ++i)
+			rv += nn->nfsd_serv->sv_pools[i].sp_nrthrmax;
 	mutex_unlock(&nfsd_mutex);
 	return rv;
 }
@@ -572,10 +573,24 @@ void nfsd_shutdown_threads(struct net *net)
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 	struct svc_serv *serv;
 
+	pr_info("nfsd: %s[%d] attempting to acquire nfsd_mutex for shutdown\n",
+		current->comm, current->pid);
+
 	mutex_lock(&nfsd_mutex);
+
+	pr_info("nfsd: %s[%d] acquired nfsd_mutex for shutdown\n",
+		current->comm, current->pid);
+
 	serv = nn->nfsd_serv;
+
+	pr_info("nfsd: shutdown_threads: nn=%p, serv=%p, net=%p\n",
+		nn, serv, net);
+
 	if (serv == NULL) {
+		pr_info("nfsd: shutdown_threads: no service running, unlocking\n");
 		mutex_unlock(&nfsd_mutex);
+		pr_info("nfsd: %s[%d] released nfsd_mutex (no service)\n",
+			current->comm, current->pid);
 		return;
 	}
 
@@ -659,7 +674,7 @@ int nfsd_get_nrthreads(int n, int *nthreads, struct net *net)
 
 	if (serv)
 		for (i = 0; i < serv->sv_nrpools && i < n; i++)
-			nthreads[i] = serv->sv_pools[i].sp_nrthreads;
+			nthreads[i] = serv->sv_pools[i].sp_nrthrmax;
 	return 0;
 }
 
