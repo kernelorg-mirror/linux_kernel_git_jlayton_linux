@@ -57,7 +57,7 @@ ARCH_FLAVORS = {
         "clangtrain",
         "crackerjackhost",
         "cvmhost",
-	"vm2",
+        "vm2",
         "debug",
         "debugnightly",
         "hardened",
@@ -71,7 +71,7 @@ ARCH_FLAVORS = {
         "debug",
         "debugnightly",
         "crackerjackhost", # upstream (crackerjack)  
-	"vm2",
+        "vm2",
     ],
 }
 
