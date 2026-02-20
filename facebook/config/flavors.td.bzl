@@ -61,6 +61,7 @@ ARCH_FLAVORS = {
         "clangtrain",
         "hardenedtrain",
         "crackerjackhost",
+	"vm2",
         "debug",
     ],
     ARCH_AARCH64: [
