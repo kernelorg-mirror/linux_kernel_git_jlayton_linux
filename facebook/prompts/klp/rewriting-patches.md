@@ -243,6 +243,89 @@ Example (fuse readahead UAF fix):
 - During transition, old `fuse_readahead` + new `fuse_readpages_end`
   causes an extra `folio_put()` on a ref that was already dropped
 
+### 16. Replace uaccess functions on hardened x86_64 kernels
+
+On x86_64 hardened kernels, `access_ok()` uses `runtime_const_ptr(USER_PTR_MAX)`
+(from `arch/x86/include/asm/uaccess_64.h`), which generates entries in a
+`.runtime_ptr_USER_PTR_MAX` section. `create-diff-object` does **not** support
+this section type, so any changed or new function that calls `copy_from_user()`,
+`copy_to_user()`, `copy_struct_to_user()`, `clear_user()`, `put_user()`, or
+`get_user()` will fail the hardened build:
+
+```
+ERROR: changed section .relaruntime_ptr_USER_PTR_MAX not selected for inclusion
+```
+
+This only affects x86_64 **hardened** flavor. Regular and aarch64 builds are
+not affected (the generic `runtime_const_ptr(sym)` fallback is a plain variable
+dereference with no special section).
+
+**Fix**: replace the standard uaccess calls with `__` prefixed variants
+directly in the patched function. The `__` variants skip `access_ok()` and
+do not reference `runtime_const_ptr(USER_PTR_MAX)`:
+
+| Standard function | KLP-safe alternative |
+|---|---|
+| `copy_from_user()` | `__copy_from_user()` |
+| `copy_to_user()` | `__copy_to_user()` |
+| `clear_user()` | `__clear_user()` |
+| `copy_struct_to_user()` | Open-code with `__copy_to_user()` + `__clear_user()` |
+
+SMAP (Supervisor Mode Access Prevention) is enabled on hardened kernels and
+provides hardware-level protection against invalid user accesses regardless
+of the `access_ok()` check, so skipping it is safe.
+
+**In-place replacement works.** Even when the original (unpatched) function
+already has `copy_from_user`/`copy_struct_to_user` calls that generate
+runtime_ptr entries, replacing them with `__` variants directly in the
+patched function succeeds -- `create-diff-object` handles the removal of
+runtime_ptr entries from a changed function correctly. There is no need
+to create a separate `_klp` copy of the function just to avoid touching
+the runtime_ptr section. Simply edit the function in place and swap the
+uaccess calls.
+
+**Open-coding `copy_struct_to_user()`** -- `copy_struct_to_user` is a
+`static __always_inline` in `include/linux/uaccess.h` that calls
+`copy_to_user()` + `clear_user()`. Replace it with equivalent logic using
+the `__` variants:
+
+```c
+/* Replace: copy_struct_to_user(&kinfo, sizeof(kinfo), uinfo, usize) */
+/* With: */
+{
+    size_t size = min(sizeof(kinfo), usize);
+    size_t rest = max(sizeof(kinfo), usize) - size;
+
+    if (usize > sizeof(kinfo)) {
+        if (__clear_user(((void __user *)uinfo) + size, rest))
+            return -EFAULT;
+    }
+    if (__copy_to_user(uinfo, &kinfo, size))
+        return -EFAULT;
+}
+```
+
+**`__LINE__` impact**: the open-coded `copy_struct_to_user` replacement
+adds lines compared to the original single-line call. Compensate by
+shortening or removing comments within the patched function to maintain
+net-zero line change (see trick #7).
+
+### 17. `__free()` cleanup annotations work with kpatch-build
+
+Upstream patches increasingly use `__free(put_task)`, `__free(kfree)`, and
+similar `__attribute__((cleanup))` annotations to fix resource leaks. These
+annotations **do work** with kpatch-build and ThinLTO -- the compiler
+generates cleanup calls that produce detectable code changes.
+
+When the patched function is `static` with a single caller, ThinLTO will
+typically inline it. The `.ko` will contain the **caller** rather than
+the patched function itself. This is expected.
+
+**Always verify** the function (or its caller) appears in the `.ko`:
+```bash
+nm klp-out/<arch>-<flavor>/*.ko | grep '<function_name>'
+```
+
 ## Workflow
 
 1. `git cherry-pick -x <commit-hash>` to preserve author and record the

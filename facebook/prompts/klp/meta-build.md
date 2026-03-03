@@ -135,9 +135,12 @@ invoking kpatch-build. Profile data URIs are in `facebook/bzl/constants.bzl`.
 - Baseline tag matches the release branch name: branch `release-v6.16-fbk1` has baseline tag `v6.16-fbk1`
 - Hotfix tag: append `-hotfix<N>` to the baseline tag, e.g. `v6.16-fbk1-hotfix1`
 - For test KLP builds, use a big hotfix number (e.g. `hotfix123`) to make it obvious it's a test
-- **Use a different number for each test build** within the same session
-  (e.g. `hotfix271`, `hotfix282`, `hotfix293`) -- do not always start at 123
-- To redo a test build, delete the old tag and recreate it: `git tag -d <tag> && git tag <tag>`
+- **Use a different number for each test build**, even when rebuilding the
+  same patch after changes (e.g. `hotfix271`, `hotfix282`, `hotfix293`).
+  Reusing the same hotfix number across rebuilds makes it hard to tell
+  which `.ko`/`.rpm` corresponds to which version of the code
+- To redo a test build, delete the old tag and create a new one with a
+  **different** number: `git tag -d <old-tag> && git tag <new-tag>`
 - The hotfix number is extracted and used in module naming and the dummy version-bump patch
 - **Only use big hotfix numbers** (e.g. `hotfix123`, `hotfix271`) for test
   builds. Do NOT create official small-number tags like `hotfix2`, `hotfix3`.
@@ -247,14 +250,14 @@ cp buck-out/v2/gen/linux/*/__klp-build__/out/*.ko klp-out/x86_64-regular/
 cp buck-out/v2/gen/linux/*/__klp-rpm__/out/*.rpm klp-out/x86_64-regular/
 ```
 
-To redo a test build after changes:
+To redo a test build after changes (use a **new** hotfix number):
 ```bash
-# Amend/add commits, then recreate the tag
-git tag -d v6.16-fbk1-hotfix123 && git tag v6.16-fbk1-hotfix123
-git checkout v6.16-fbk1-hotfix123
+# Amend/add commits, then create a NEW tag with a different number
+git tag v6.16-fbk1-hotfix282
+git checkout v6.16-fbk1-hotfix282
 sudo rm -rf buck-out/v2/
 buck2 build $(facebook/build/buck-config) \
-  -c klp.patch_to=v6.16-fbk1-hotfix123 //:klp-rpm
+  -c klp.patch_to=v6.16-fbk1-hotfix282 //:klp-rpm
 ```
 
 ## Debugging Build Failures
@@ -281,6 +284,35 @@ Common failure patterns:
   many extra changed functions beyond what the patch touches (e.g., shmem,
   tlb, btrfs functions from a small mm patch). This is expected due to LTO
   cross-module optimization and does not prevent a successful build.
+- **`runtime_ptr_USER_PTR_MAX` section error (hardened x86_64 only)** --
+  on hardened kernels, any changed or new function that calls `copy_from_user`,
+  `copy_to_user`, `copy_struct_to_user`, `clear_user`, `put_user`, or
+  `get_user` generates entries in a `.runtime_ptr_USER_PTR_MAX` section that
+  `create-diff-object` does not support:
+  ```
+  ERROR: changed section .relaruntime_ptr_USER_PTR_MAX not selected for inclusion
+  ```
+  **Fix**: rewrite the patch to use `__copy_from_user`, `__copy_to_user`,
+  `__clear_user` (which skip `access_ok()` and don't generate runtime_ptr
+  entries). Open-code `copy_struct_to_user` with the `__` variants. SMAP
+  provides hardware protection regardless. See `patch-authoring-guide.md`
+  "Runtime Constant Pointers" and `rewriting-patches.md` trick #16 for
+  full details and rewrite patterns. **Important**: although the error only
+  manifests on hardened, the uaccess rewrite must be applied to the shared
+  source tree used by all flavors (regular, hardened, aarch64). Do NOT
+  maintain separate source branches per flavor.
+- **Patch glob drops patches numbered 0010+** -- the `klp.bzl` kpatch-build
+  command historically used a glob like `000[3-9]-*.patch` that only matched
+  patches 0003-0009. If the hotfix has more than ~7 commits (after the 2
+  infrastructure patches), later patches are silently dropped. The fix
+  (using `` `ls /tmp/patches/0*.patch | sort | tail -n +3` ``) is in newer
+  branches; cherry-pick it if needed.
+- **Always verify the `.ko` contains the expected functions** after a
+  successful build. A build can succeed without including the fix if
+  kpatch-build doesn't detect the function as changed:
+  ```bash
+  nm klp-out/<arch>-<flavor>/*.ko | grep '<expected_function>'
+  ```
 
 ## Testing
 

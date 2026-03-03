@@ -161,6 +161,70 @@ Found a jump label at foo()+0x10a, using key bar, which is defined in a module.
 **Fix**: replace `static_branch_likely()` / `static_branch_unlikely()` /
 `static_key_true()` / `static_key_false()` with `static_key_enabled()`.
 
+## `__free()` / Cleanup Attributes (`__attribute__((cleanup))`)
+
+Patches that use `__free(put_task)`, `__free(kfree)`, or other
+`__attribute__((cleanup))` annotations **do work** with kpatch-build and
+ThinLTO. The compiler generates cleanup calls that produce detectable
+code changes.
+
+Note: when the patched function is `static` and has a single caller, ThinLTO
+will typically inline it into the caller. The `.ko` will contain the
+**caller** (not the patched function itself). For example, a fix to
+`pidfd_info()` may appear as `pidfd_ioctl` in the `.ko` because
+`pidfd_info` is inlined into `pidfd_ioctl`.
+
+**Always verify the `.ko` contains the expected function** (or its caller)
+after building:
+```bash
+nm klp-out/<arch>-<flavor>/*.ko | grep '<function_name>'
+```
+
+## Runtime Constant Pointers (Hardened Kernel)
+
+On x86_64 hardened kernels, `access_ok()` uses `runtime_const_ptr(USER_PTR_MAX)`
+(defined in `arch/x86/include/asm/uaccess_64.h`) for user pointer bounds
+checking. This generates entries in a special `.runtime_ptr_USER_PTR_MAX`
+section (with relocations in `.relaruntime_ptr_USER_PTR_MAX`).
+
+`create-diff-object` does **not** support `runtime_ptr_*` sections. Any
+code change to a function that calls `copy_from_user()`, `copy_to_user()`,
+`copy_struct_to_user()`, `clear_user()`, `put_user()`, `get_user()`, or
+any other function that invokes `access_ok()` will change the
+`.relaruntime_ptr_USER_PTR_MAX` section and cause `create-diff-object`
+to fail:
+
+```
+ERROR: changed section .relaruntime_ptr_USER_PTR_MAX not selected for inclusion
+ERROR: vmlinux.o.thinlto.o683: 1 unsupported section change(s)
+create-diff-object: unreconcilable difference
+```
+
+This only affects the **hardened** flavor on x86_64. Regular and aarch64
+builds are not affected (the generic fallback `runtime_const_ptr(sym)`
+is a plain variable dereference that doesn't generate special sections).
+
+**Fix**: use the `__` prefixed uaccess variants which skip `access_ok()`
+and do not reference `runtime_const_ptr(USER_PTR_MAX)`:
+
+| Standard function | No-runtime_ptr alternative |
+|---|---|
+| `copy_from_user()` | `__copy_from_user()` |
+| `copy_to_user()` | `__copy_to_user()` |
+| `clear_user()` | `__clear_user()` |
+| `copy_struct_to_user()` | Open-code with `__copy_to_user()` + `__clear_user()` |
+
+SMAP (Supervisor Mode Access Prevention) is enabled on hardened kernels
+and provides hardware-level protection against invalid user accesses
+regardless of the `access_ok()` check.
+
+The replacement can be done directly in the patched function -- there is
+no need to create a separate copy of the function. Even when the original
+function already has uaccess calls generating runtime_ptr entries,
+`create-diff-object` handles their removal correctly.
+
+See rewriting-patches.md trick #16 for the full rewrite pattern.
+
 ## Static Calls
 
 Same module-boundary limitation as jump labels.
