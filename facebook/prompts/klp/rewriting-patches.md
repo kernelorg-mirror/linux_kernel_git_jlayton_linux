@@ -310,12 +310,24 @@ adds lines compared to the original single-line call. Compensate by
 shortening or removing comments within the patched function to maintain
 net-zero line change (see trick #7).
 
-### 17. `__free()` cleanup annotations work with kpatch-build
+### 17. `__free()` cleanup annotations work with kpatch-build (x86_64 only)
 
 Upstream patches increasingly use `__free(put_task)`, `__free(kfree)`, and
 similar `__attribute__((cleanup))` annotations to fix resource leaks. These
-annotations **do work** with kpatch-build and ThinLTO -- the compiler
-generates cleanup calls that produce detectable code changes.
+annotations **do work** with kpatch-build and ThinLTO on x86_64 -- the
+compiler generates cleanup calls that produce detectable code changes.
+
+**Warning (aarch64):** `__free()` annotations can cause `create-diff-object`
+failures on aarch64 LTO builds with errors like `symbol changed sections:
+.Ltmp<N>`. The cleanup code generation interacts with ThinLTO partitioning
+differently on aarch64, causing symbols to land in different ELF sections
+between original and patched builds.
+
+**Fix:** replace `__free()` with explicit resource-release calls at each
+return path. For example, replace `__free(put_task)` with explicit
+`put_task_struct(task)` calls before each `return`. This avoids the cleanup
+attribute while preserving the same fix semantics. Apply this rewrite to the
+shared source tree (it works on all architectures, not just aarch64).
 
 When the patched function is `static` with a single caller, ThinLTO will
 typically inline it. The `.ko` will contain the **caller** rather than

@@ -165,8 +165,19 @@ Found a jump label at foo()+0x10a, using key bar, which is defined in a module.
 
 Patches that use `__free(put_task)`, `__free(kfree)`, or other
 `__attribute__((cleanup))` annotations **do work** with kpatch-build and
-ThinLTO. The compiler generates cleanup calls that produce detectable
-code changes.
+ThinLTO on x86_64. The compiler generates cleanup calls that produce
+detectable code changes.
+
+**Warning (aarch64):** `__free()` annotations can cause `create-diff-object`
+failures on aarch64 LTO builds. The cleanup code generation interacts with
+ThinLTO partitioning differently on aarch64, producing errors like:
+```
+ERROR: vmlinux.o.thinlto.o573: symbol changed sections: .Ltmp158
+create-diff-object: unreconcilable difference
+```
+**Fix:** replace `__free()` with explicit resource-release calls (e.g.,
+`put_task_struct(task)`) at each return path. This avoids the cleanup
+attribute while preserving the same fix semantics.
 
 Note: when the patched function is `static` and has a single caller, ThinLTO
 will typically inline it into the caller. The `.ko` will contain the
