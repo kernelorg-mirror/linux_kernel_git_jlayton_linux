@@ -26,6 +26,10 @@ module_param(threaded_isr_poll, bool, 0444);
 MODULE_PARM_DESC(threaded_isr_poll,
 			"Enablement of IRQ polling thread (default=true)");
 
+static int smp_affinity_enable = 1;
+module_param(smp_affinity_enable, int, 0444);
+MODULE_PARM_DESC(smp_affinity_enable, "SMP affinity feature enable/disable Default: enable(1)");
+
 #if defined(writeq) && defined(CONFIG_64BIT)
 static inline void mpi3mr_writeq(__u64 b, void __iomem *addr,
 	spinlock_t *write_queue_lock)
@@ -831,6 +835,7 @@ static int mpi3mr_setup_isr(struct mpi3mr_ioc *mrioc, u8 setup_one)
 	int retval;
 	int i;
 	struct irq_affinity desc = { .pre_vectors =  1, .post_vectors = 1 };
+	struct irq_affinity *descp = &desc;
 
 	if (mrioc->is_intr_info_set)
 		return 0;
@@ -862,10 +867,13 @@ static int mpi3mr_setup_isr(struct mpi3mr_ioc *mrioc, u8 setup_one)
 
 		desc.post_vectors = mrioc->requested_poll_qcount;
 		min_vec = desc.pre_vectors + desc.post_vectors;
-		irq_flags |= PCI_IRQ_AFFINITY | PCI_IRQ_ALL_TYPES;
+		if (mrioc->smp_affinity_enable)
+			irq_flags |= PCI_IRQ_AFFINITY | PCI_IRQ_ALL_TYPES;
+		else
+			descp = NULL;
 
 		retval = pci_alloc_irq_vectors_affinity(mrioc->pdev,
-			min_vec, max_vectors, irq_flags, &desc);
+			min_vec, max_vectors, irq_flags, descp);
 
 		if (retval < 0) {
 			ioc_err(mrioc, "cannot allocate irq vectors, ret %d\n",
@@ -4384,6 +4392,8 @@ retry_init:
 		    retval);
 		goto out_failed_noretry;
 	}
+
+	mrioc->smp_affinity_enable = smp_affinity_enable;
 
 	retval = mpi3mr_setup_isr(mrioc, 1);
 	if (retval) {
