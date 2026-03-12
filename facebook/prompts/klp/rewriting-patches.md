@@ -243,22 +243,25 @@ Example (fuse readahead UAF fix):
 - During transition, old `fuse_readahead` + new `fuse_readpages_end`
   causes an extra `folio_put()` on a ref that was already dropped
 
-### 16. Replace uaccess functions on hardened x86_64 kernels
+### 16. Replace uaccess functions on x86_64 kernels
 
-On x86_64 hardened kernels, `access_ok()` uses `runtime_const_ptr(USER_PTR_MAX)`
-(from `arch/x86/include/asm/uaccess_64.h`), which generates entries in a
-`.runtime_ptr_USER_PTR_MAX` section. `create-diff-object` does **not** support
-this section type, so any changed or new function that calls `copy_from_user()`,
-`copy_to_user()`, `copy_struct_to_user()`, `clear_user()`, `put_user()`, or
-`get_user()` will fail the hardened build:
+On x86_64 (both regular and hardened), `access_ok()` uses
+`runtime_const_ptr(USER_PTR_MAX)` (from
+`arch/x86/include/asm/uaccess_64.h`), which generates entries in a
+`.runtime_ptr_USER_PTR_MAX` section. The call chain is: `access_ok()` →
+`__access_ok()` → `valid_user_address()` →
+`runtime_const_ptr(USER_PTR_MAX)`. `create-diff-object` does **not**
+support this section type, so any changed or new function that calls
+`copy_from_user()`, `copy_to_user()`, `copy_struct_to_user()`,
+`clear_user()`, `put_user()`, or `get_user()` will fail the build:
 
 ```
 ERROR: changed section .relaruntime_ptr_USER_PTR_MAX not selected for inclusion
 ```
 
-This only affects x86_64 **hardened** flavor. Regular and aarch64 builds are
-not affected (the generic `runtime_const_ptr(sym)` fallback is a plain variable
-dereference with no special section).
+This affects **all x86_64 flavors** (regular and hardened). aarch64 builds
+are not affected because aarch64's `access_ok()` uses `TASK_SIZE_MAX`
+directly and does not call `runtime_const_ptr(USER_PTR_MAX)`.
 
 **Fix**: replace the standard uaccess calls with `__` prefixed variants
 directly in the patched function. The `__` variants skip `access_ok()` and
@@ -271,18 +274,33 @@ do not reference `runtime_const_ptr(USER_PTR_MAX)`:
 | `clear_user()` | `__clear_user()` |
 | `copy_struct_to_user()` | Open-code with `__copy_to_user()` + `__clear_user()` |
 
-SMAP (Supervisor Mode Access Prevention) is enabled on hardened kernels and
-provides hardware-level protection against invalid user accesses regardless
-of the `access_ok()` check, so skipping it is safe.
+**Do NOT use `access_ok()` as a standalone guard.** A common mistake is to
+add an explicit `access_ok()` check before `__copy_from_user()`. This
+defeats the purpose: `access_ok()` itself calls `valid_user_address()` →
+`runtime_const_ptr(USER_PTR_MAX)`, so it generates the same runtime_ptr
+section entries that cause the build failure. Just use `__copy_from_user()`
+directly without any `access_ok()` guard.
+
+**All runtime_ptr entries must be removed.** `create-diff-object` cannot
+handle a *changed* `.relaruntime_ptr_USER_PTR_MAX` section -- partial
+removal (e.g., reducing from 3 entries to 1) still fails. You must replace
+**every** uaccess call in the changed function with its `__` variant to
+fully eliminate the section.
+
+Dropping `access_ok()` is safe on both x86_64 (SMAP) and aarch64 (PAN).
+These hardware features provide protection against invalid user accesses
+regardless of the software check. A bad user pointer triggers a hardware
+fault caught by the kernel's fault handler, returning `-EFAULT` to
+userspace.
 
 **In-place replacement works.** Even when the original (unpatched) function
 already has `copy_from_user`/`copy_struct_to_user` calls that generate
 runtime_ptr entries, replacing them with `__` variants directly in the
-patched function succeeds -- `create-diff-object` handles the removal of
-runtime_ptr entries from a changed function correctly. There is no need
-to create a separate `_klp` copy of the function just to avoid touching
-the runtime_ptr section. Simply edit the function in place and swap the
-uaccess calls.
+patched function succeeds -- `create-diff-object` handles the complete
+removal of runtime_ptr entries from a changed function correctly. There is
+no need to create a separate `_klp` copy of the function just to avoid
+touching the runtime_ptr section. Simply edit the function in place and
+swap the uaccess calls.
 
 **Open-coding `copy_struct_to_user()`** -- `copy_struct_to_user` is a
 `static __always_inline` in `include/linux/uaccess.h` that calls

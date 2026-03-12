@@ -191,12 +191,15 @@ after building:
 nm klp-out/<arch>-<flavor>/*.ko | grep '<function_name>'
 ```
 
-## Runtime Constant Pointers (Hardened Kernel)
+## Runtime Constant Pointers (x86_64)
 
-On x86_64 hardened kernels, `access_ok()` uses `runtime_const_ptr(USER_PTR_MAX)`
-(defined in `arch/x86/include/asm/uaccess_64.h`) for user pointer bounds
-checking. This generates entries in a special `.runtime_ptr_USER_PTR_MAX`
-section (with relocations in `.relaruntime_ptr_USER_PTR_MAX`).
+On x86_64 (both regular and hardened), `access_ok()` uses
+`runtime_const_ptr(USER_PTR_MAX)` (defined in
+`arch/x86/include/asm/uaccess_64.h`) for user pointer bounds checking.
+This generates entries in a special `.runtime_ptr_USER_PTR_MAX` section
+(with relocations in `.relaruntime_ptr_USER_PTR_MAX`). The call chain is:
+`access_ok()` → `__access_ok()` → `valid_user_address()` →
+`runtime_const_ptr(USER_PTR_MAX)`.
 
 `create-diff-object` does **not** support `runtime_ptr_*` sections. Any
 code change to a function that calls `copy_from_user()`, `copy_to_user()`,
@@ -211,9 +214,14 @@ ERROR: vmlinux.o.thinlto.o683: 1 unsupported section change(s)
 create-diff-object: unreconcilable difference
 ```
 
-This only affects the **hardened** flavor on x86_64. Regular and aarch64
-builds are not affected (the generic fallback `runtime_const_ptr(sym)`
-is a plain variable dereference that doesn't generate special sections).
+This affects **all x86_64 flavors** (regular and hardened). Both
+`arch/x86/include/asm/runtime-const.h` and
+`arch/arm64/include/asm/runtime-const.h` define `runtime_const_ptr()` with
+inline asm that generates special section entries. However, only x86_64's
+`access_ok()` uses `runtime_const_ptr(USER_PTR_MAX)` (via
+`valid_user_address()`). On aarch64, `access_ok()` uses `TASK_SIZE_MAX`
+directly and does not generate runtime_ptr entries, so aarch64 builds are
+not affected.
 
 **Fix**: use the `__` prefixed uaccess variants which skip `access_ok()`
 and do not reference `runtime_const_ptr(USER_PTR_MAX)`:
@@ -225,14 +233,32 @@ and do not reference `runtime_const_ptr(USER_PTR_MAX)`:
 | `clear_user()` | `__clear_user()` |
 | `copy_struct_to_user()` | Open-code with `__copy_to_user()` + `__clear_user()` |
 
-SMAP (Supervisor Mode Access Prevention) is enabled on hardened kernels
-and provides hardware-level protection against invalid user accesses
-regardless of the `access_ok()` check.
+**Do NOT use `access_ok()` as a standalone check before `__copy_from_user()`.**
+`access_ok()` itself generates runtime_ptr entries (it calls
+`valid_user_address()` → `runtime_const_ptr(USER_PTR_MAX)`), so adding an
+explicit `access_ok()` check defeats the purpose of switching to `__`
+variants. Just use `__copy_from_user()` directly without any `access_ok()`
+guard.
+
+**Partial removal of runtime_ptr entries fails.** `create-diff-object`
+cannot handle a *changed* `.relaruntime_ptr_USER_PTR_MAX` section -- the
+runtime_ptr entries must either be completely unchanged or completely
+removed from the changed function. For example, if the original function
+has 3 runtime_ptr entries (from `copy_from_user` + `copy_struct_to_user`)
+and the patched function has 1 entry (from an explicit `access_ok`), the
+build will fail because the section changed. Remove **all** runtime_ptr
+entries by replacing every uaccess call with its `__` variant.
+
+Dropping `access_ok()` is safe on both x86_64 (SMAP) and aarch64 (PAN).
+These hardware features provide protection against invalid user accesses
+regardless of the software check. A bad user pointer will trigger a
+hardware fault caught by the kernel's fault handler, returning `-EFAULT`
+to userspace -- functionally identical to the `access_ok()` path.
 
 The replacement can be done directly in the patched function -- there is
 no need to create a separate copy of the function. Even when the original
 function already has uaccess calls generating runtime_ptr entries,
-`create-diff-object` handles their removal correctly.
+`create-diff-object` handles their complete removal correctly.
 
 See rewriting-patches.md trick #16 for the full rewrite pattern.
 

@@ -284,23 +284,23 @@ Common failure patterns:
   many extra changed functions beyond what the patch touches (e.g., shmem,
   tlb, btrfs functions from a small mm patch). This is expected due to LTO
   cross-module optimization and does not prevent a successful build.
-- **`runtime_ptr_USER_PTR_MAX` section error (hardened x86_64 only)** --
-  on hardened kernels, any changed or new function that calls `copy_from_user`,
-  `copy_to_user`, `copy_struct_to_user`, `clear_user`, `put_user`, or
-  `get_user` generates entries in a `.runtime_ptr_USER_PTR_MAX` section that
-  `create-diff-object` does not support:
+- **`runtime_ptr_USER_PTR_MAX` section error (all x86_64 flavors)** --
+  on x86_64 (both regular and hardened), any changed or new function that
+  calls `copy_from_user`, `copy_to_user`, `copy_struct_to_user`,
+  `clear_user`, `put_user`, or `get_user` generates entries in a
+  `.runtime_ptr_USER_PTR_MAX` section that `create-diff-object` does not
+  support:
   ```
   ERROR: changed section .relaruntime_ptr_USER_PTR_MAX not selected for inclusion
   ```
   **Fix**: rewrite the patch to use `__copy_from_user`, `__copy_to_user`,
   `__clear_user` (which skip `access_ok()` and don't generate runtime_ptr
-  entries). Open-code `copy_struct_to_user` with the `__` variants. SMAP
-  provides hardware protection regardless. See `patch-authoring-guide.md`
-  "Runtime Constant Pointers" and `rewriting-patches.md` trick #16 for
-  full details and rewrite patterns. **Important**: although the error only
-  manifests on hardened, the uaccess rewrite must be applied to the shared
-  source tree used by all flavors (regular, hardened, aarch64). Do NOT
-  maintain separate source branches per flavor.
+  entries). Open-code `copy_struct_to_user` with the `__` variants. Do NOT
+  add an explicit `access_ok()` check -- it generates the same runtime_ptr
+  entries. All runtime_ptr entries must be completely removed (partial
+  removal fails). SMAP/PAN provides hardware protection regardless. See
+  `patch-authoring-guide.md` "Runtime Constant Pointers" and
+  `rewriting-patches.md` trick #16 for full details and rewrite patterns.
 - **Patch glob drops patches numbered 0010+** -- the `klp.bzl` kpatch-build
   command historically used a glob like `000[3-9]-*.patch` that only matched
   patches 0003-0009. If the hotfix has more than ~7 commits (after the 2
