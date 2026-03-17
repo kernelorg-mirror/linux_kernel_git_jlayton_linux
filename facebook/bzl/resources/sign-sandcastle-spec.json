@@ -1,5 +1,5 @@
 {
-    "command": "SandcastleKernelBuildCommand",
+    "command": "SandcastleKernelSignCommand",
     "args": {
         "build_mode": "signing",
         "everstore_handle": "$EVERSTORE_HANDLE",
@@ -10,8 +10,9 @@
         "vcs": "linux-kernel-git",
         "tenant": "kernel"
     },
+    "required_tag_identities": ["kernel_kannery_ci"],
     "nonce": "$SANDCASTLE_NONCE",
-    "alias": "kernel-module-signing",
+    "alias": "kernel-kernel-signing",
     "oncall": "kernel_infra",
     "hash": "$KERNEL_COMMIT"
 }

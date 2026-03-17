@@ -9,6 +9,10 @@ KERNEL_TREE="$1"
 SIGN_KEY="$2"
 SPEC_TEMPLATE="$3"
 
+# Buck's genrule context strips PATH. Ensure common tool locations are present.
+export PATH="/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
+
+
 # Start the signature waiter in a background subshell
 (
     while [ ! -e "$KERNEL_TREE/do-signature" -a \
@@ -34,9 +38,12 @@ SPEC_TEMPLATE="$3"
         EVERSTORE_HANDLE=$(clowder put --fbtype EVERSTORE_LINUX_KERNEL $SIGN_TMPDIR/unsigned_modules.tar)
         KERNEL_COMMIT=$(git rev-parse HEAD)
 
-        # Build the scutil job spec from the JSON template
-        export EVERSTORE_HANDLE SIGN_KEY SANDCASTLE_NONCE KERNEL_COMMIT
-        SPEC=$(envsubst < "$SPEC_TEMPLATE")
+        # Build the scutil job spec from the JSON template (no envsubst on aarch64)
+        SPEC=$(sed -e "s|\$EVERSTORE_HANDLE|$EVERSTORE_HANDLE|g" \
+                   -e "s|\$SIGN_KEY|$SIGN_KEY|g" \
+                   -e "s|\$SANDCASTLE_NONCE|$SANDCASTLE_NONCE|g" \
+                   -e "s|\$KERNEL_COMMIT|$KERNEL_COMMIT|g" \
+                   "$SPEC_TEMPLATE")
 
         SCUTIL_OUTPUT=$(scutil create "$SPEC" --await --follow-retries -v json 2>&1)
         INSTANCE_ID=$(echo "$SCUTIL_OUTPUT" | jq -r '.id')
