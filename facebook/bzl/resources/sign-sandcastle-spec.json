@@ -10,7 +10,6 @@
         "vcs": "linux-kernel-git",
         "tenant": "kernel"
     },
-    "required_tag_identities": ["kernel_kannery_ci"],
     "nonce": "$SANDCASTLE_NONCE",
     "alias": "kernel-kernel-signing",
     "oncall": "kernel_3m",
