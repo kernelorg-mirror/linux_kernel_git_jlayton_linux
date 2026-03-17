@@ -1,7 +1,7 @@
 {
     "command": "SandcastleKernelSignCommand",
     "args": {
-        "build_mode": "signing",
+        "run_mode": "signing",
         "everstore_handle": "$EVERSTORE_HANDLE",
         "sign_modules_key": "$SIGN_KEY"
     },
@@ -13,6 +13,6 @@
     "required_tag_identities": ["kernel_kannery_ci"],
     "nonce": "$SANDCASTLE_NONCE",
     "alias": "kernel-kernel-signing",
-    "oncall": "kernel_infra",
+    "oncall": "kernel_3m",
     "hash": "$KERNEL_COMMIT"
 }
