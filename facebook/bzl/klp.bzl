@@ -313,18 +313,31 @@ def klp():
         labels = ["linux_kernel"],
     )
 
-    native.genrule(
-        name = "klp",
-        cmd = """
-        if [ "{sign}" == "true" ]; then
-          autograph_client.par kmod --sign-key {sign_key} --kernel-tree $(location :klp-build)
-        fi
-        cp -a $(location :klp-build)/* $OUT
-        """.format(sign = sign, sign_key = sign_key),
-        out = "klp.ko",
-        cacheable=False,
-        labels = ["linux_kernel"],
-    )
+    if sign == "true":
+        native.genrule(
+            name = "klp",
+            cmd = """
+            chmod +x $(location //facebook:sign-kernel-build-sh)
+            $(location //facebook:sign-kernel-build-sh) \
+                $(location :klp-build) \
+                {sign_key} \
+                $(location //facebook:sign-sandcastle-spec) \
+                $OUT
+            """.format(sign_key = sign_key),
+            out = "klp.ko",
+            cacheable = False,
+            labels = ["linux_kernel"],
+        )
+    else:
+        native.genrule(
+            name = "klp",
+            cmd = """
+            cp -a $(location :klp-build)/* $OUT
+            """,
+            out = "klp.ko",
+            cacheable = False,
+            labels = ["linux_kernel"],
+        )
 
 
     container_genrule(

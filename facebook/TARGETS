@@ -1,3 +1,21 @@
+export_file(
+    name = "sign-sandcastle-spec",
+    src = "bzl/resources/sign-sandcastle-spec.json",
+    visibility = ["PUBLIC"],
+)
+
+export_file(
+    name = "sign-hook-wrapper-sh",
+    src = "bzl/resources/sign-hook-wrapper.sh",
+    visibility = ["PUBLIC"],
+)
+
+export_file(
+    name = "sign-kernel-build-sh",
+    src = "bzl/resources/sign-kernel-build.sh",
+    visibility = ["PUBLIC"],
+)
+
 genrule(
     name = "lol2-initramfs",
     out = "initramfs.cpio.zst",

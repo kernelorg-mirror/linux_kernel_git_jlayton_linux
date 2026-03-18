@@ -147,7 +147,7 @@ EOF
 
     if sign != "false":
         native.genrule(
-            name = name + "-sign-wrapper",
+            name = name + "-sign-hook-wrapper",
             cmd = """
                 cat > "$OUT" <<'SIGNEOF'
 #!/bin/sh
@@ -202,7 +202,7 @@ SIGNEOF
         bind_ro.append((":{}-rpmmacros".format(name), "/tmp/rpmmacros"))
     else:
         native.genrule(
-            name = name + "-sign-wrapper",
+            name = name + "-sign-hook-wrapper",
             cmd = "ln -s /bin/true \"$OUT\"",
             out = "signature-wrapper.sh",
             labels = ["linux_kernel"],
@@ -236,7 +236,7 @@ SIGNEOF
     container_genrule(
         name = name + "-rpmbuild",
         arch = arch,
-        pre_cmd = "$(location :{}-sign-wrapper)".format(name),
+        pre_cmd = "$(location :{}-sign-hook-wrapper)".format(name),
         cmd = """
             {build_prep}
             rpmbuild -rb /tmp/module.src.rpm \

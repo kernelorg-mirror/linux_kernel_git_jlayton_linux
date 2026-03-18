@@ -157,24 +157,8 @@ EOF
 
     sign = native.read_config('kernel', 'sign_mod', 'false')
     sign_key = native.read_config('kernel', 'sign_mod_key', 'hsm-test-key')
-    native.export_file(
-        name = name + "-sign-sandcastle-spec",
-        src = "facebook/bzl/resources/sign-sandcastle-spec.json",
-        labels = ["linux_kernel"],
-    ) 
     if sign != "false":
-        native.export_file(
-            name = name + "-sign-wrapper-script",
-            src = "facebook/bzl/resources/sign-wrapper.sh",
-            labels = ["linux_kernel"],
-        )
         bind_ro.append((":{}-rpmmacros".format(name), "/tmp/rpmmacros"))
-    else:
-        native.genrule(
-            name = name + "-sign-wrapper-script",
-            cmd = "ln -s /bin/true \"$OUT\"",
-            labels = ["linux_kernel"],
-        )
 
     build_prep = """
         rm -rf /root/rpmbuild/BUILDROOT
@@ -205,11 +189,11 @@ EOF
         name = name + "-rpmbuild",
         arch = arch,
         pre_cmd = """
-            $(location :{name}-sign-wrapper-script) \
+            $(location //facebook:sign-hook-wrapper-sh) \
             $(location :{name}-shared-build-dir) \
             {sign_key} \
-            $(location :{name}-sign-sandcastle-spec)
-        """.format(name = name, sign_key = sign_key),
+            $(location //facebook:sign-sandcastle-spec)
+        """.format(name = name, sign_key = sign_key) if sign != "false" else "",
         cmd = """
             {build_prep}
             rpmbuild -rb /tmp/module.src.rpm \

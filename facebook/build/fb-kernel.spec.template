@@ -67,6 +67,7 @@ the kernel was compiled.
 %endif
 
 %define makeopts EXTRAVERSION=-%{_release} %{?_fb_makeopts}
+%define _smp_mflags -j%(nproc)
 
 %define _enable_debug_packages 0
 %define debug_package %{nil}
