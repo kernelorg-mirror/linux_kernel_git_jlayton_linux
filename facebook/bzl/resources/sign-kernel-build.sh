@@ -61,7 +61,12 @@ echo "=== Invoking SandcastleKernelSignCommand via scutil ==="
 SCUTIL_OUTPUT=$(scutil create "$SPEC" --await --follow-retries -v json)
 echo "scutil output: $SCUTIL_OUTPUT"
 
+# This will be the first instance ID. If it was retried, `scutil create` will
+# follow the retries but return the **original** instance ID.
 INSTANCE_ID=$(echo "$SCUTIL_OUTPUT" | jq -r '.id')
+# So get the final instance id from await. Because await will return the latest instance
+INSTANCE_ID=$(scutil await --follow-retries -v json $INSTANCE_ID | jq -r '.[0].id')
+
 echo "Instance ID: $INSTANCE_ID"
 
 SIGNED_HANDLE=$(scutil get-log "$INSTANCE_ID" | awk '/==OUTPUT MARKER 0==/{print $NF}')
