@@ -1367,6 +1367,8 @@ const char * const vmstat_text[] = {
 	[I(THP_MIGRATION_SUCCESS)]		= "thp_migration_success",
 	[I(THP_MIGRATION_FAIL)]			= "thp_migration_fail",
 	[I(THP_MIGRATION_SPLIT)]		= "thp_migration_split",
+	[I(PGDEMOTE_SECOND_CHANCE)]		= "pgdemote_second_chance",
+	[I(PGDEMOTE_SWAP_FALLBACK)]		= "pgdemote_swap_fallback",
 #endif
 #ifdef CONFIG_COMPACTION
 	[I(COMPACTMIGRATE_SCANNED)]		= "compact_migrate_scanned",
