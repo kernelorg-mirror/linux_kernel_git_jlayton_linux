@@ -72,7 +72,7 @@ ARCH_FLAVORS = {
         "debugnightly",
         "crackerjackhost", # upstream (crackerjack)  
         "cvmhost",
-		],
+    ],
 }
 
 #
