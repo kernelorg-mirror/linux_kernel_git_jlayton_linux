@@ -53,25 +53,16 @@ ARCHITECTURE_TO_RPMBUILD_TARGET = {
 #
 ARCH_FLAVORS = {
     ARCH_X86_64: [
-        "asicedk",
-        "clangtrain",
-        "crackerjackhost",
-        "cvmhost",
-        "vm2",
         "debug",
         "debugnightly",
         "hardened",
-        "hardenedtrain",
         "kdump",
         "lol2",
-        "npi",
     ],
     ARCH_AARCH64: [
         "kdump",
         "debug",
         "debugnightly",
-        "crackerjackhost", # upstream (crackerjack)  
-        "cvmhost",
     ],
 }
 
