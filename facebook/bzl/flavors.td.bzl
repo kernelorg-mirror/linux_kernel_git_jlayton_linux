@@ -10,9 +10,6 @@
 #
 # We also need arch->rpm target mappings so that we produce sensible RPMs.
 #
-# These two concepts are mashed together because target determinator cannot
-# resolve relative loads and has a different cell to that used in buck load.
-#
 ARCH_X86_64 = "x86_64"
 ARCH_AARCH64 = "aarch64"
 
@@ -53,16 +50,26 @@ ARCHITECTURE_TO_RPMBUILD_TARGET = {
 #
 ARCH_FLAVORS = {
     ARCH_X86_64: [
+        "asicedk",
+        "clangtrain",
+        "crackerjackhost",
+        "cvmhost",
         "debug",
         "debugnightly",
         "hardened",
+        "hardenedtrain",
         "kdump",
         "lol2",
+        "npi",
+        "vm2",
     ],
     ARCH_AARCH64: [
-        "kdump",
+        "crackerjackhost",
+        "cvmhost",
         "debug",
         "debugnightly",
+        "kdump",
+        "lol2",
     ],
 }
 
@@ -70,6 +77,13 @@ ARCH_FLAVORS = {
 # Flavors we only want to build and not extensively test
 #
 BUILD_ONLY_FLAVORS = [
-    "lol2",
+    "asicedk",
+    "clangtrain",
+    "crackerjackhost",
+    "cvhost",
+    "hardenedtrain",
     "kdump",
+    "lol2",
+    "npi",
+    "vm2",
 ]

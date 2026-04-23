@@ -1,6 +1,5 @@
-load(":flavors.td.bzl", "ARCH_X86_64", "ARCHITECTURE_TO_CONFIG_ARCH")
+load("//facebook/bzl:flavors.td.bzl", "ARCH_X86_64", "ARCHITECTURE_TO_CONFIG_ARCH", "ARCH_FLAVORS")
 load(":debug.td.bzl", "COMMON_DEBUG_OPTS", "DEBUG_OPTIONS_DEF")
-load(":flavors.td.bzl", "ARCH_FLAVORS")
 
 # TODO(vmagro): we should probably follow the fs_image and others style of
 # exporting a `struct` in each .bzl file that contains just the members we want

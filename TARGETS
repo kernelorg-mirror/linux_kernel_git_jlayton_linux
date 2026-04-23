@@ -41,35 +41,16 @@ make mrproper
             kernel(
                 arch = arch,
                 flavor = flavor,
+                build_modules = flavor not in ["lol2", "kdump"],
+                headers_rpm = flavor not in ["lol2", "kdump"],
+                devel_rpm = flavor not in ["lol2", "kdump"],
+                extra_srcs = [("//facebook:lol2-initramfs", "/ro/lol2-initramfs.cpio.zst")] if flavor == "lol2" else None,
             )
             for flavor in ARCH_FLAVORS[arch]
-            if flavor != "lol2" and flavor != "kdump"
-        ],
-
-        # build kdump kernels
-        [
-            kernel(
-                arch = arch,
-                flavor = "kdump",
-                build_modules = False,
-                headers_rpm = False,
-                devel_rpm = False,
-            ),
         ],
     )
     for arch in ARCHITECTURES
 ]
-
-# fblol2 is on available for x86_64 at the moment
-# once fixed this block should move into the list comprehension above
-kernel(
-    arch = ARCH_X86_64,
-    flavor = "lol2",
-    build_modules = False,
-    extra_srcs = [("//facebook:lol2-initramfs", "/ro/lol2-initramfs.cpio.zst")],
-    headers_rpm = False,
-    devel_rpm = False,
-)
 
 
 # eg 5.2.9

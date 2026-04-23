@@ -3,6 +3,11 @@ load("@builtins//:schedule_type.td.bzl", "schedule_type_is")
 load("@builtins//:skycastle.td.bzl", "skycastle")
 load("//bzl:flavors.td.bzl", "ARCH_FLAVORS", "ARCHITECTURES", "BUILD_ONLY_FLAVORS", "ARCH_X86_64")
 
+TD_FLAVORS = {
+    "x86_64": ["debug", "hardened", "kdump", "lol2"],
+    "aarch64": ["debug", "kdump", "lol2"],
+}
+
 
 SKYCASTLE_WORKFLOW = "//tools/skycastle/workflows2/kernel/build/kernel-build.sky"
 SKYCASTLE_WORKFLOW_FLAGS = "//tools/skycastle/workflows2/kernel/build/flags.sky"
@@ -134,7 +139,7 @@ def _skycastle_impl(
                 },
             )
         )
-        for flavor in ARCH_FLAVORS[arch]
+        for flavor in TD_FLAVORS.get(arch, [])
     ]
     for arch in ARCHITECTURES
 ] + [
