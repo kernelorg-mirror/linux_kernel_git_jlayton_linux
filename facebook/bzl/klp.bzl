@@ -291,6 +291,14 @@ def klp():
 
             export PATH=$PATH:/usr/libexec/git-core/
             TARGET_ARCH={arch} kpatch-build {train_data_args} -s /rw/compile -c /rw/compile/.config -v /boot/vmlinux* -o /rw/output -n klp_`cat /tmp/baseline_rpm_version`_`cat /tmp/hotfix` /tmp/patches/* || (cp /root/.kpatch/build.log /rw/output/ && exit 1)
+            if readelf -S -W /rw/output/*.ko | grep -q '.klp.rela.vmlinux.__jump_table'; then
+                echo "ERROR: .klp.rela.vmlinux.__jump_table found in KLP module." | tee -a /root/.kpatch/build.log
+                echo "Patched functions reference static keys via static_branch_*()." | tee -a /root/.kpatch/build.log
+                echo "Rewrite to use static_key_enabled() instead." | tee -a /root/.kpatch/build.log
+                cp /root/.kpatch/build.log /rw/output/
+                rm /rw/output/*.ko
+                exit 1
+            fi
         """.format(train_data_args = train_data_args, compiler_args = compiler_args, arch = arch),
         bind_ro=bind_ros,
         bind_rw=bind_rws,
