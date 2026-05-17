@@ -1215,6 +1215,7 @@ nfsd4_cld_check_v2(struct nfs4_client *clp)
 	struct cld_net *cn = nn->cld_net;
 #endif
 	struct nfs4_client_reclaim *crp;
+	unsigned int princhashlen;
 	char *principal = NULL;
 
 	/* did we already find that this client is stable? */
@@ -1249,8 +1250,17 @@ nfsd4_cld_check_v2(struct nfs4_client *clp)
 #endif
 	return -ENOENT;
 found:
-	if (crp->cr_princhash.len) {
+	/*
+	 * nfs4_client_to_reclaim() may fold a princhash into an
+	 * already-listed reclaim record concurrently with this read.
+	 * Pair with the smp_store_release() on cr_princhash.len there:
+	 * if we observe a non-zero len we must also observe the
+	 * matching .data pointer.
+	 */
+	princhashlen = smp_load_acquire(&crp->cr_princhash.len);
+	if (princhashlen) {
 		u8 digest[SHA256_DIGEST_SIZE];
+		u8 *pdata;
 
 		if (clp->cl_cred.cr_raw_principal)
 			principal = clp->cl_cred.cr_raw_principal;
@@ -1259,8 +1269,8 @@ found:
 		if (principal == NULL)
 			return -ENOENT;
 		sha256(principal, strlen(principal), digest);
-		if (memcmp(crp->cr_princhash.data, digest,
-				crp->cr_princhash.len))
+		pdata = READ_ONCE(crp->cr_princhash.data);
+		if (memcmp(pdata, digest, princhashlen))
 			return -ENOENT;
 	}
 	crp->cr_clp = clp;

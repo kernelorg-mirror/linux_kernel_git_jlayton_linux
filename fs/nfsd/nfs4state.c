@@ -9285,6 +9285,41 @@ nfs4_client_to_reclaim(struct xdr_netobj name, struct xdr_netobj princhash,
 	unsigned int strhashval;
 	struct nfs4_client_reclaim *crp;
 
+	/*
+	 * A reclaim record for this client name may already exist (for
+	 * example, populated at boot from the recovery directory before
+	 * an in-grace RECLAIM_COMPLETE or an nfsdcld downcall delivers
+	 * the same name). Dedup here so reclaim_str_hashtbl_size stays
+	 * equal to the number of distinct client names; inc_reclaim_complete
+	 * relies on that equality to end the grace period via the fast path.
+	 */
+	crp = nfsd4_find_reclaim_client(name, nn);
+	if (crp) {
+		if (princhash.len && crp->cr_princhash.len == 0) {
+			void *pdata = kmemdup(princhash.data, princhash.len,
+					      GFP_KERNEL);
+			if (pdata) {
+				/*
+				 * crp is already linked into reclaim_str_hashtbl[]
+				 * and may be examined concurrently by
+				 * nfsd4_cld_check_v2(). Publish .data before .len
+				 * with release semantics so any reader that
+				 * observes a non-zero len via the paired
+				 * smp_load_acquire() also observes the new
+				 * data pointer.
+				 */
+				WRITE_ONCE(crp->cr_princhash.data, pdata);
+				smp_store_release(&crp->cr_princhash.len,
+						  princhash.len);
+			} else {
+				dprintk("%s: failed to allocate memory for princhash.data!\n",
+					__func__);
+				return NULL;
+			}
+		}
+		return crp;
+	}
+
 	name.data = kmemdup(name.data, name.len, GFP_KERNEL);
 	if (!name.data) {
 		dprintk("%s: failed to allocate memory for name.data!\n",
