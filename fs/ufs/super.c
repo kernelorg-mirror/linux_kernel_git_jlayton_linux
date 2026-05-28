@@ -1464,7 +1464,7 @@ static struct file_system_type ufs_fs_type = {
 	.kill_sb	= kill_block_super,
 	.init_fs_context = ufs_init_fs_context,
 	.parameters	= ufs_param_spec,
-	.fs_flags	= FS_REQUIRES_DEV,
+	.fs_flags	= FS_REQUIRES_DEV | FS_MGTIME,
 };
 MODULE_ALIAS_FS("ufs");
 
