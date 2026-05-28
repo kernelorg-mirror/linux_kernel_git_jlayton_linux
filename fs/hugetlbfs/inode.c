@@ -1470,7 +1470,7 @@ static struct file_system_type hugetlbfs_fs_type = {
 	.init_fs_context	= hugetlbfs_init_fs_context,
 	.parameters		= hugetlb_fs_parameters,
 	.kill_sb		= kill_anon_super,
-	.fs_flags               = FS_ALLOW_IDMAP,
+	.fs_flags               = FS_ALLOW_IDMAP | FS_MGTIME,
 };
 
 static struct vfsmount *hugetlbfs_vfsmount[HUGE_MAX_HSTATE];
