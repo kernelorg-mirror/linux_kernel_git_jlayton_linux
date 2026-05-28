@@ -1046,24 +1046,20 @@ int f2fs_getattr(struct mnt_idmap *idmap, const struct path *path,
 
 #ifdef CONFIG_F2FS_FS_POSIX_ACL
 static void __setattr_copy(struct mnt_idmap *idmap,
-			   struct inode *inode, const struct iattr *attr)
+			   struct inode *inode, struct iattr *attr)
 {
 	unsigned int ia_valid = attr->ia_valid;
 
-	i_uid_update(idmap, attr, inode);
-	i_gid_update(idmap, attr, inode);
-	if (ia_valid & ATTR_ATIME)
-		inode_set_atime_to_ts(inode, attr->ia_atime);
-	if (ia_valid & ATTR_MTIME)
-		inode_set_mtime_to_ts(inode, attr->ia_mtime);
-	if (ia_valid & ATTR_CTIME)
-		inode_set_ctime_to_ts(inode, attr->ia_ctime);
+	attr->ia_valid &= ~ATTR_MODE;
+
+	setattr_copy(idmap, inode, attr);
 	if (ia_valid & ATTR_MODE) {
 		umode_t mode = attr->ia_mode;
 
 		if (!in_group_or_capable(idmap, inode, i_gid_into_vfsgid(idmap, inode)))
 			mode &= ~S_ISGID;
 		set_acl_inode(inode, mode);
+		attr->ia_valid |= ATTR_MODE;
 	}
 }
 #else
