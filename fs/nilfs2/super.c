@@ -1305,7 +1305,7 @@ struct file_system_type nilfs_fs_type = {
 	.owner    = THIS_MODULE,
 	.name     = "nilfs2",
 	.kill_sb  = kill_block_super,
-	.fs_flags = FS_REQUIRES_DEV,
+	.fs_flags = FS_REQUIRES_DEV | FS_MGTIME,
 	.init_fs_context = nilfs_init_fs_context,
 	.parameters = nilfs_param_spec,
 };
