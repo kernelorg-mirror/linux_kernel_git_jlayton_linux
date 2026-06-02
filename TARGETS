@@ -1,0 +1,63 @@
+load("//facebook/bzl:kernel.bzl", "buildinfo", "kernel", "validate_config")
+load("//facebook/bzl:flavors.td.bzl", "ARCH_X86_64", "ARCHITECTURES", "ARCH_FLAVORS")
+load("//facebook/bzl:modules.bzl", "standalone_module")
+load("//facebook/bzl:klp.bzl", "klp")
+
+validate_config()
+standalone_module()
+
+# hack to just bind the repo root into the container - this is somewhat
+# against buck's idea of explicit dependencies, but we can reasonably
+# treat the entire tree as one dependency for the purpose of being able
+# to simply invoke `make`, and it is mounted readonly, so nothing bad
+# can really happen
+genrule(
+    name = "sources",
+    cmd = """set -e
+OUT="`realpath $OUT`"
+mkdir $OUT
+cd `git rev-parse --show-toplevel`
+git ls-files | awk -F'/' '{ print $1 }' | grep -v .bzl | sort -u | xargs -I '{}' cp -R --reflink=auto '{}' $OUT
+cd $OUT
+make mrproper
+""",
+    # it is faster to simply re-copy than for buck to check what changed
+    cacheable = False,
+    out = "kernel",
+    labels = ["uses_local_filesystem_abspaths", "uses_make", "linux_kernel"],
+    within_view = None,
+)
+
+[
+    (
+        # build flavorless, no debug
+        kernel(
+            arch = arch,
+            flavor = None,
+        ),
+
+        # build flavored kernels
+        [
+            kernel(
+                arch = arch,
+                flavor = flavor,
+                build_modules = flavor not in ["lol2", "kdump"],
+                headers_rpm = flavor not in ["lol2", "kdump"],
+                devel_rpm = flavor not in ["lol2", "kdump"],
+                extra_srcs = [("//facebook:lol2-initramfs", "/ro/lol2-initramfs.cpio.zst")] if flavor == "lol2" else None,
+            )
+            for flavor in ARCH_FLAVORS[arch]
+        ],
+    )
+    for arch in ARCHITECTURES
+]
+
+
+# eg 5.2.9
+genrule(
+    name = "kernelversion",
+    cmd = "echo {} > $OUT".format(buildinfo().kernelversion),
+    out = "kernelversion",
+)
+
+klp()

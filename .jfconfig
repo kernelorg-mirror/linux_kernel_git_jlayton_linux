@@ -1,0 +1,78 @@
+{
+  "capabilities": [
+    "submit",
+  ],
+  "commit_message_labels": [
+    "Title",
+    "Summary",
+    "Test Plan",
+    "Reviewers",
+    "Reviewed By",
+    "Subscribers",
+    "Differential Revision",
+    "Tasks",
+    "Signature",
+    "Blame Revision",
+  ],
+  "postponed_linters": {
+    "determinator-lint": [
+      {
+        "type": "any_regex_matches",
+        "value": [
+          "^.*$"
+        ]
+      }
+    ]
+  },
+  "sandcastle_job_specs": [
+    {
+      "command": "SandcastleUniversalCommand",
+      "oncall": "kernel_infra",
+      "alias": "linter",
+      "capabilities": {
+        "type": "lego",
+        "vcs": "linux-kernel-git",
+      },
+      "scheduleType": "diff",
+      "priority": 0,
+      "args": {
+        "steps": [
+          {
+            "name": "Async lint",
+            "shell": "arc lint --trace --never-apply-patches --output json",
+            "report_lint": "determinator-lint",
+          }
+        ]
+      }
+    },
+    {
+      "command": "SandcastleKernelDeterminatorCommand",
+      "oncall": "kernel_infra",
+      "alias": "linux-kernel-determinator",
+      "capabilities": {
+          "type": "lego",
+          "vcs": "linux-kernel-git",
+          "tenant": "kernel",
+      },
+      "args": {"disable_secondary_checkouts": True},
+      "description": "UTD for linux-kernel",
+      "scheduleType": "diff",
+      "priority": 0,
+    }
+  ],
+  "ule_land_enabled": true,
+  "land_modes": {
+    "default": {
+      "description": "Default land mode for kernel",
+      "landStyle": "wait_for_all",
+      "skipSanityChecks": false,
+      "checkDiffSuccess": true,
+      "checks": {
+        "verifyNoMerges": false,
+        "verifyDiffsAccepted": true,
+        "verifyDiffsOnCommits": true,
+        "verifyDiffLocalCommitsMatch": true
+      }
+    }
+	}
+}

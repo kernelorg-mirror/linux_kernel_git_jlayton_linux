@@ -1,0 +1,58 @@
+#!/bin/bash
+#
+# Script that iterates over a set of in-source selftest suites, and outputs all
+# of the config options required by each test.
+#
+# Usage: selftestconfig <suite1> [<suite2> ...]]
+
+ARCH=$(uname -m)
+
+usage() {
+  echo "usage: $0 [-a arch]"
+  echo ""
+  echo "-a  ARCH    The architecture to generate the selftest config for. Default: ${ARCH}"
+}
+
+
+while getopts "ha:" arg; do
+  case "${arg}" in
+    a)
+      ARCH=${OPTARG}
+      ;;
+    h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+shift $((OPTIND - 1))
+
+SRCROOT="$(git rev-parse --show-toplevel)"
+SELFTESTS_DIR="$SRCROOT/tools/testing/selftests"
+
+if [ ! -d "$SELFTESTS_DIR" ]; then
+  echo "Selftests directory $SELFTESTS_DIR was not found"
+  exit 1
+fi
+
+# Iterate over all the selftests we support, and print all of their required
+# configs to stdout.
+for selftest in "$@"; do
+  selftest_dir="$SELFTESTS_DIR/$selftest"
+  if [ ! -d "$selftest_dir" ]; then
+      echo "Selftest directory $selftest_dir was not found"
+      exit 1
+  fi
+
+  if [ -f "$selftest_dir/config" ]; then
+      cat "$selftest_dir/config"
+  fi
+  if [ -f "$selftest_dir/config.${ARCH}" ]; then
+    cat  "$selftest_dir/config.${ARCH}"
+  fi
+done

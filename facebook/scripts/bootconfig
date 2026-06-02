@@ -1,0 +1,59 @@
+#!/bin/bash
+
+set -e
+
+usage() {
+  echo "usage: $0 [-a arch] [-f flavor] [-p configs_path]"
+}
+
+arch="x86_64"
+flavor="default"
+configs_path=""
+
+while getopts "a:f:p:h" arg; do
+  case "${arg}" in
+    a)
+      arch="${OPTARG}"
+      ;;
+    f)
+      flavor="${OPTARG}"
+      ;;
+    p)
+      configs_path="${OPTARG}"
+      ;;
+    h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+cd "${configs_path}"
+
+arch_conf="arch-${arch}.bootconfig"
+if [ ! -f "${arch_conf}" ]; then
+  arch_conf=/dev/null
+fi
+
+if [ "${flavor}" == "default" ]; then
+  cat "common.bootconfig"
+  cat "${arch_conf}"
+else
+  flavor_conf="flavor-${flavor}-${arch}.bootconfig"
+
+  if [ ! -f "${flavor_conf}" ]; then
+    flavor_conf=/dev/null
+  fi
+
+  if [ "$flavor" == "lol2" ]; then
+    cat "${flavor_conf}"
+  else
+    cat "common.bootconfig"
+    cat "${arch_conf}"
+    cat "${flavor_conf}"
+  fi
+fi

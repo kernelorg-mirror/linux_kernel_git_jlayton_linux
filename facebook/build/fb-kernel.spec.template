@@ -1,0 +1,216 @@
+%if %{defined _kdump}
+Name: kernel-kdump
+Summary: The Linux Kernel (kdump variant)
+Version: %{_version}
+Release: %{_release}
+License: GPL
+Packager: kernel_infra
+Group: System Environment/Kernel
+Vendor: The Linux Community
+URL: http://www.kernel.org
+Provides:  kernel-kdump-%{_uname}
+%description
+The Linux Kernel, used for crashdumping.
+%else
+Name: kernel
+Summary: The Linux Kernel
+Version: %{_version}
+Release: %{_release}
+License: GPL
+Group: System Environment/Kernel
+Packager: kernel_infra
+Vendor: The Linux Community
+URL: http://www.kernel.org
+Provides:  kernel-%{_uname}
+%description
+The Linux Kernel, the operating system core itself
+%endif
+
+%if %{undefined _no_parallel_compress}
+%define _binary_payload w3T.xzdio
+%endif
+
+BuildRequires: sed tar m4 bison flex make bc rsync openssl openssl-devel elfutils-libelf-devel kmod dwarves
+
+%if %{defined _headers_rpm}
+%package headers
+Summary: Header files for the Linux kernel for use by glibc
+Group: Development/System
+Obsoletes: kernel-headers < %{version}
+Provides: kernel-headers = %{version}
+%description headers
+Kernel-headers includes the C header files that specify the interface
+between the Linux kernel and userspace libraries and programs.  The
+header files define structures and constants that are needed for
+building most standard programs and are also needed for rebuilding the
+glibc package.
+%endif
+
+%if %{defined _devel_rpm}
+%package devel
+Summary: Development package for building kernel modules to match the %{_uname} kernel
+Group: System Environment/Kernel
+AutoReqProv: no
+%description -n kernel-devel
+This package provides kernel headers and makefiles sufficient to build modules
+against the %{_uname} kernel package.
+%endif
+
+%if %{defined _selftests}
+%package selftests
+Summary: Test package selftests suites for validating the Linux kernel.
+AutoReqProv: no
+%description selftests
+Kernel selftests include tests that are used to validate the Linux kernel
+itself. The tests rely on the appropriate configuration options to be set when
+the kernel was compiled.
+%endif
+
+%define makeopts EXTRAVERSION=-%{_release} %{?_fb_makeopts}
+%define _smp_mflags -j%(nproc)
+
+%define _enable_debug_packages 0
+%define debug_package %{nil}
+%define _build_id_links none
+%define __spec_install_post \
+  %{__arch_install_post} \
+  /usr/lib/rpm/brp-compress \
+%{nil}
+
+%install
+cd /rw/kernel
+KBUILD_IMAGE=$(make -s %{?makeopts} image_name)
+if [ ! -f "$KBUILD_IMAGE" ]; then
+	echo "vmlinuz \"$KBUILD_IMAGE\" missing, wtf."
+	exit 1
+fi
+mkdir -p $RPM_BUILD_ROOT/boot $RPM_BUILD_ROOT/lib/modules
+mkdir -p $RPM_BUILD_ROOT/lib/firmware/%{_uname}
+cp ./$KBUILD_IMAGE $RPM_BUILD_ROOT/boot/vmlinuz-%{_uname}
+cp System.map $RPM_BUILD_ROOT/boot/System.map-%{_uname}
+cp .config $RPM_BUILD_ROOT/boot/config-%{_uname}
+%if %{defined _modules}
+make %{makeopts} %{?_smp_mflags} INSTALL_MOD_PATH=$RPM_BUILD_ROOT KBUILD_SRC= mod-fw= modules_install
+cp vmlinux $RPM_BUILD_ROOT/lib/modules/%{_uname}/vmlinux-%{_uname}
+ln -sf /lib/modules/%{_uname}/vmlinux-%{_uname} $RPM_BUILD_ROOT/boot/vmlinux-%{_uname}
+rm -f $RPM_BUILD_ROOT/lib/modules/%{_uname}/{build,source}
+
+# Install the selftest suites, when enabled. Only bother installing them when we
+# are building modules, as kernel selftests require modules to be installed.
+%if %{defined _selftests}
+mkdir -p $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+make %{makeopts} %{?_smp_mflags} -C tools/testing/selftests SKIP_TARGETS= install TARGETS="%{_selftest_suites}" SKIP_DOCS=1 SKIP_LLVM=1
+%if "%{_selftest_suites}" == "bpf"
+cp tools/testing/selftests/bpf/test_kmods/*.ko tools/testing/selftests/kselftest_install/bpf/
+%endif
+cp -a --parents tools/testing/selftests/kselftest_install $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+%endif
+
+%endif
+
+%if %{defined _headers_rpm}
+make %{makeopts} %{?_smp_mflags} INSTALL_HDR_PATH=${RPM_BUILD_ROOT}/usr KBUILD_SRC= headers_install
+%endif
+%if %{defined _devel_rpm}
+mkdir -p $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+cp --parents $(find  -type f -name "Makefile*" -o -name "Kconfig*") $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+cp .config Module.symvers System.map $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+rm -rf $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}/{Documentation,scripts,include}
+cp -a scripts include $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+rm -f $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}/scripts/*.o
+rm -f $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}/scripts/*/*.o
+%ifarch x86_64
+cp -a --parents arch/x86/include $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+%else
+%ifarch aarch64
+cp -a --parents arch/arm64/include $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+%endif
+%endif
+# Just copy auto.conf if it does not exists
+# Do not overwrite it, since the version there might be sanitized and .config might not be
+cp -n .config $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}/include/config/auto.conf
+%ifarch x86_64
+mkdir -p $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}/tools/objtool
+cp -a tools/objtool/objtool $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}/tools/objtool/
+cp -a --parents tools/include/* $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+%endif
+
+# link the vmlinux to the expected place in the kernel-devel tree
+ln -sf /lib/modules/%{_uname}/vmlinux-%{_uname} $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}/vmlinux
+cp -a --parents tools/bpf/resolve_btfids/resolve_btfids $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}
+rm -f $RPM_BUILD_ROOT/lib/modules/%{_uname}/{build,source}
+touch -r $RPM_BUILD_ROOT/usr/src/kernels/%{_uname}/{Makefile,include/generated/uapi/linux/version.h}
+find $RPM_BUILD_ROOT/usr/src/kernels/%{_uname} -name ".*.cmd" -exec rm -f {} \;
+find $RPM_BUILD_ROOT/usr/include \
+  \( -name .install -o -name .check -o \
+     -name ..install.cmd -o -name ..check.cmd \) | xargs rm -f
+%endif
+
+%if %{defined _modules}
+cd $RPM_BUILD_ROOT/lib/modules/%{_uname}
+%endif
+%if %{undefined _kdump}
+ln -sf /usr/src/kernels/%{_uname} build
+ln -sf /usr/src/kernels/%{_uname} source
+
+# generate a fake initramfs so the RPM size on disk is approximately correct
+dd if=/dev/zero of=$RPM_BUILD_ROOT/boot/initramfs-%{_uname}.img bs=1M count=16
+%endif
+
+%if %{defined _modules}
+# remove files that will be auto generated by depmod at rpm -i time
+rm -f $RPM_BUILD_ROOT/lib/modules/%{_uname}/modules.{alias*,builtin.bin,dep*,*map,symbols*,devname,softdep}
+%endif
+
+%if %{undefined _kdump}
+%post
+/sbin/depmod -a %{_uname}
+if [ -x /sbin/installkernel -a -r /boot/vmlinuz-%{_uname} -a -r /boot/System.map-%{_uname} ]; then
+cp /boot/vmlinuz-%{_uname} /boot/.vmlinuz-%{_uname}-rpm
+cp /boot/System.map-%{_uname} /boot/.System.map-%{_uname}-rpm
+rm -f /boot/vmlinuz-%{_uname} /boot/System.map-%{_uname}
+/sbin/installkernel %{_uname} /boot/.vmlinuz-%{_uname}-rpm /boot/.System.map-%{_uname}-rpm
+rm -f /boot/.vmlinuz-%{_uname}-rpm /boot/.System.map-%{_uname}-rpm
+fi
+echo -e "{\n    \"fb\": {\n        \"fb_grub\": {\n            \"desired_kernel_version\": \"%{_uname}\"\n        }\n    }\n}" > /boot/chef_grub_desired_kernel
+
+%preun
+if [ -x /sbin/new-kernel-pkg ]; then
+new-kernel-pkg --remove %{_uname} --rminitrd --initrdfile=/boot/initramfs-%{_uname}.img
+fi
+%endif
+
+%files
+%defattr (-, root, root)
+%if %{defined _modules}
+%dir /lib/modules
+/lib/modules/%{_uname}
+%exclude /lib/modules/%{_uname}/build
+%exclude /lib/modules/%{_uname}/source
+/boot/vmlinux-%{_uname}
+%endif
+/lib/firmware/%{_uname}
+/boot/System.map-%{_uname}
+/boot/config-%{_uname}
+/boot/vmlinuz-%{_uname}
+%ghost %attr(0600, root, root) /boot/initramfs-%{_uname}.img
+
+%if %{defined _headers_rpm}
+%files headers
+%defattr (-, root, root)
+/usr/include
+%endif
+
+%if %{defined _devel_rpm}
+%files devel
+%defattr (-, root, root)
+/usr/src/kernels/%{_uname}
+/lib/modules/%{_uname}/build
+/lib/modules/%{_uname}/source
+%endif
+
+%if %{defined _selftests}
+%files selftests
+%defattr (-, root, root)
+/usr/src/kernels/%{_uname}/tools/testing/selftests/kselftest_install
+%endif

@@ -1,0 +1,63 @@
+load(
+    "//facebook/bzl:constants.bzl",
+    "BUILD_IMAGE_AARCH64_SHA256",
+    "BUILD_IMAGE_AARCH64_URI",
+    "BUILD_IMAGE_X86_64_SHA256",
+    "BUILD_IMAGE_X86_64_URI",
+    "KPATCH_BUILD_RPM_URI",
+    "KPATCH_BUILD_RPM_SHA256",
+    "CLANG_TRAIN_DATA_URI",
+    "CLANG_TRAIN_DATA_SHA256",
+    "HARDENED_TRAIN_DATA_URI",
+    "HARDENED_TRAIN_DATA_SHA256",
+    "AARCH64_TRAIN_DATA_URI",
+    "AARCH64_TRAIN_DATA_SHA256"
+)
+
+export_file(
+    name = "fb-kernel.spec.template",
+    src = "fb-kernel.spec.template",
+    visibility = ["PUBLIC"],
+)
+
+http_file(
+    name = "build-image-x86_64",
+    urls = [BUILD_IMAGE_X86_64_URI],
+    sha256 = BUILD_IMAGE_X86_64_SHA256,
+    visibility = ["PUBLIC"],
+)
+
+http_file(
+    name = "build-image-aarch64",
+    urls = [BUILD_IMAGE_AARCH64_URI],
+    sha256 = BUILD_IMAGE_AARCH64_SHA256,
+    visibility = ["PUBLIC"],
+)
+
+http_file(
+    name = "clang-train-data",
+    urls = [CLANG_TRAIN_DATA_URI],
+    sha256 = CLANG_TRAIN_DATA_SHA256,
+    visibility = ["PUBLIC"],
+)
+
+http_file(
+    name = "hardened-train-data",
+    urls = [HARDENED_TRAIN_DATA_URI],
+    sha256 = HARDENED_TRAIN_DATA_SHA256,
+    visibility = ["PUBLIC"],
+)
+
+http_file(
+    name = "aarch64-train-data",
+    urls = [AARCH64_TRAIN_DATA_URI],
+    sha256 = AARCH64_TRAIN_DATA_SHA256,
+    visibility = ["PUBLIC"],
+)
+
+http_file(
+    name = "kpatch-build-rpm",
+    urls = [KPATCH_BUILD_RPM_URI],
+    sha256 = KPATCH_BUILD_RPM_SHA256,
+    visibility = ["PUBLIC"],
+)

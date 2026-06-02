@@ -1,0 +1,70 @@
+{
+  "base": "git:HEAD^",
+  "arc.feature.start.default": "origin/v6.4-fb",
+  "project_id": "linux-kernel",
+  "conduit_uri": "https://phabricator.fb.com/api/",
+  "remote_hooks_installed": true,
+  "lint.engine": "ArcanistSingleLintEngine",
+  "lint.engine.single.linter": "ArcanistScriptAndRegexLinter",
+  "linter.scriptandregex.script": "sh -c 'scripts/checkpatch.pl --terse --no-summary --show-types -f -- \"$0\" || true'",
+  "linter.scriptandregex.regex": "/^(?P<file>[^:]*):(?P<line>\\d+): ((?P<warning>ERROR)|(?P<advice>WARNING|CHECK)):(?P<name>[^:]*): (?P<message>.*)$/m",
+  "git.default-relative-commit": "HEAD^",
+  "arc.diff.parse-labels": [
+    "Title",
+    "Summary",
+    "Test Plan",
+    "Reviewers",
+    "Reviewed By",
+    "Subscribers",
+    "Differential Revision",
+    "Tasks",
+    "Signature",
+    "Blame Revision"
+  ],
+  "workflows": {
+    "new-release": {
+      "description": "Creates new release branch",
+      "owner": "kernel",
+      "command": [
+          "sh",
+          "-c",
+          "git checkout -b release-$@ && git tag $@-rc1",
+          "--"
+      ]
+    },
+    "rebase": {
+      "description": "Rebases preserving merge commits",
+      "owner": "kernel",
+      "command": [
+        "git",
+        "rebase",
+        "--no-ff",
+        "--rebase-merges"
+      ]
+    },
+    "backport": {
+      "description": "Creates new backport branch",
+      "owner": "kernel",
+      "command": [
+        "git",
+        "checkout",
+        "-b"
+      ]
+    },
+    "merge-backport": {
+      "description": "Merges backport into the current branch",
+      "owner": "kernel",
+      "command": [
+        "sh",
+        "-c",
+        "git merge --no-ff --log --no-edit \"$@\" && jf template && git commit --amend",
+        "--"
+      ]
+    },
+    "build": {
+      "description": "Build kernel target, default: x86_64",
+      "owner": "kernel",
+      "command": ["facebook/build/build.sh"]
+    }
+  }
+}

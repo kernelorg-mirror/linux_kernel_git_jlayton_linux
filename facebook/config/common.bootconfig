@@ -1,0 +1,4 @@
+kernel {
+	csdlock_debug=1
+	sysctl.kernel.panic_on_rcu_stall=1
+}

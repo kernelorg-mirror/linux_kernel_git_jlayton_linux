@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+
+#
+# If you're working on PGO, which sends warnings to stdout rather than stderr,
+# you're going to want to specify both DEBUG=1. so that you can see the output
+# you need for iterating on PGO.
+#
+# For example: buck2 build $(DEBUG=1 facebook/build/buck-config)
+# //:x86_64-hardened This gets noisy, so keep a large scollback buffer or
+# redirect to a file as you see fit.
+
+set -oe pipefail
+
+log() {
+  echo "$1" >&2
+}
+
+if [ ${SANDCASTLE_INSTANCE_ID} ]
+then
+	# Nothing can go to STDOUT, since the output is consumed by sandcastle
+	log "Building on sandcastle. Enabling debugging"
+	set -x
+fi
+
+USE_AARCH64_EMUL=0
+if [ ${AWAIT_BINFMT_MISC:-0} -eq 1 ]; then
+  while true; do
+    log "checking if binfmt_misc is loaded"
+    if [ ! -e /proc/sys/fs/binfmt_misc/status ]; then
+      log "/proc/sys/fs/binfmt_misc/status does not yet exist"
+      sleep 30
+      continue
+    fi
+    log "/proc/sys/fs/binfmt_misc/status exists"
+
+    log "checking if binfmt_misc is enabled"
+    while read -a enval; do
+      if [ x"${enval}" = x"enabled" ]; then
+        break
+      fi
+      log "binfmt_misc is not yet enabled"
+      sleep 30
+    done < /proc/sys/fs/binfmt_misc/status
+    log "binfmt_misc is enabled"
+
+    log "checking if qemu-aarch64 is configured..."
+    if [ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
+      log "/proc/sys/fs/binfmt_misc/qemu-aarch64 exists"
+      break
+    fi
+    log "/proc/sys/fs/binfmt_misc/qemu-aarch64 does not yet exist"
+
+    sleep 30
+  done
+  log "binfmt_misc is loaded, enabled and configured for aarch64 builds"
+  USE_AARCH64_EMUL=1
+fi
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root" || { log "must run from somewhere in the linux tree"; exit 1; }
+
+# buck should be idempotent, so we wrap it in this script so that we
+# can hint to buck about changes that it cannot observe, notably commit hash if
+# HEAD has not changed, we can leverage buck caching as normal, but buck
+# caching can miss commit hash changes when source files don't change, which
+# makes our release name prone to caching issues (eg commit message changes ->
+# hash changes ->kernel built uname changes)
+kernelversion="$(make -s kernelversion EXTRAVERSION=)"
+gittish="$(git describe --long --abbrev=12 | awk -F- '{print $(NF-1)"_"$(NF)}')"
+# git tag --match is very slow, so see if we can get lucky without --match,
+# otherwise we need to fallback on the slow method
+# The --exclude comes from kdump kernel builds being discovered by
+# "^kdump-.*" regular expression, but we don't define any additional semantic
+# information with it, we just want the build to happen from the tagged commit.
+# So we want it not to be seen by build machinery at all.
+# https://fburl.com/wiki/hdpuxsgi
+fbk_tag="$(git describe --abbrev=0 --tags --exclude 'kdump-*')"
+
+# This is coming from D38149809, for --exclude see above
+if [[ $fbk_tag != *"fbk"* ]] && [[ "$fbk_tag" != *"-upstream" ]]
+then
+    fbk_tag="$(git describe --abbrev=0 --tags --match '*fbk*' --exclude 'kdump-*')"
+fi
+
+# modules definitions come from configerator because they need to be built on
+# older kernels and without editing code in the kernel tree, so replace
+# facebook/modules/modules.bzl now with contents from configerator
+if [ x"${SKIP_CONFIGERATOR_MODULES}" = x"1" ]; then
+  log "Skipping just_modules fetch from configerator"
+else
+  configeratorc -minloglevel=2 getConfig kernel/build/just_modules \
+    > "$root/facebook/bzl/modules_list.bzl"
+fi
+
+
+# If this option is set, we do not compile external modules, as in:
+# https://www.internalfb.com/intern/wiki/Kernel/Build/ExternalModule/
+if [ x"${DISABLE_KMOD}" = x"1" ]; then
+  log "Disabling compilation for external modules"
+  DISABLE_KMOD="True"
+fi
+
+DEBUG_PARAM=""
+if [ x"${DEBUG}" = x"1" ]; then
+  log "Debugging mode enabled. The container will not be unmounted"
+  DEBUG_PARAM=" --verbose 3 -c build_info.container_output=true"
+fi
+
+# buck cache is broken by all means in this repo
+# buck is not aware of dependecy between his targets and soruce code
+# and even if it would be aware caching entire kernel tree takes forever
+# so this amazing tool is not amazing itself but also even less amazing for kernel repo
+# we force-clean everything prior to invocation
+# otherwise you may see unexpected results
+buck2 clean 1>&2
+
+# pass the variable config options to buck as cli configs, so that we don't
+# pollute any local files with runtime build info
+cat << EOF
+--no-buckd \
+--local-only \
+-c build_info.provided=True \
+-c build_info.kernelversion=${kernelversion} \
+-c build_info.gittish=${gittish} \
+-c build_info.disable_kmod=${DISABLE_KMOD} \
+-c build_info.fbk_tag=${fbk_tag} \
+-c build_info.use_aarch64_emul=${USE_AARCH64_EMUL} \
+${DEBUG_PARAM}
+EOF

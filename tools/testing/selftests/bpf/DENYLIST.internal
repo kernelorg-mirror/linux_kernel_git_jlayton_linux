@@ -1,0 +1,61 @@
+bpf_cookie/lsm                                   # stack_mprotect unexpected stack_mprotect: actual 0 != expected -1, NOTE: Need lsm=bpf
+bpf_nf                                           # extern (func ksym) 'bpf_ct_change_status': not found in kernel or module BTFs, NOTE: module nf_conntrack is not in /sys/kernel/btf/
+btf_dump/btf_dump:*var_data                                # find type id unexpected find type id: actual -2 < expected 0, NOTE: CONFIG_PROFILING not set
+deny_namespace                                   # failed to find kernel BTF type ID of 'userns_create': -3, NOTE: userns_create not in v5.19-fb
+kfunc_dynptr_param/dynptr_data_null              # unexpected err: actual 0 != expected -74, NOTE: bpf_verify_pkcs7_signature() returns 0 instead of -74
+libbpf_get_fd_by_id_opts                         # bpf_map_get_fd_by_id unexpected bpf_map_get_fd_by_id: actual 25 >= expected 0, NOTE: Need lsm=bpf
+libbpf_probe_prog_types/BPF_PROG_TYPE_LIRC_MODE2 # unexpected BPF_PROG_TYPE_LIRC_MODE2: actual 0 != expected 1, NOTE: CONFIG_BPF_LIRC_MODE2 not set
+lookup_key                                       # unexpected bpf_prog_get_next_id: actual 0 >= expected 0, NOTE: kfunc bpf_lookup_{user,system}_key related issue
+lsm_cgroup/functional                            # sk_priority unexpected sk_priority: actual 0 != expected 123, NOTE: Need lsm=bpf
+mptcp                                            # NOTE: mctcp is not enabled in meta fleet
+ptr_untrusted                                    # missing lsm=bpf?
+setget_sockopt                                   # nr_socket_post_create unexpected nr_socket_post_create: actual 0 != expected 2, NOTE: Need lsm=bpf
+snprintf_btf                                     # kernel config difference
+sockmap_listen/sockmap VSOCK test_vsock_redir    # missing vsock kconfig
+sockmap_listen/sockhash VSOCK test_vsock_redir   # missing vsock kconfig
+sockopt                                          # devserver existing cgrp progs
+sockopt_inherit                                  # devserver existing cgrp progs
+sockopt_multi                                    # devserver existing cgrp progs
+sockopt_sk                                       # devserver existing cgrp progs
+test_bprm_opts                                   # run_set_secureexec:1 err = -22, NOTE: Need lsm=bpf
+test_ima                                         # failed to run command ./ima_setup.sh setup /tmp/ima_measured5JyBD9, errno = 2, NOTE: ima not enabled
+test_local_storage                               # bpf_map_update_elem unexpected error: -9 (errno 9), NOTE: need lsm=bpf
+test_lsm                                         # bprm_count unexpected bprm_count: actual 0 != expected 1, NOTE: need lsm=bpf
+tp_attach_query                                  # assumption on current kernel state
+tunnel                                           # ip netns exec at_ns0 ip link add dev vxlan00 type vxlan external gbp dstport 4789 unexpected error: 512 (errno 0), NOTE: CONFIG_VXLAN not set
+verif_scale_seg6_loop                            # unknown func bpf_lwt_seg6_adjust_srh#75 NOTE: CONFIG_IPV6_SEG6_BPF not set
+verify_pkcs7_sig                                 # bpf_map_update_elem data_input unexpected bpf_map_update_elem data_input: actual 0 >= expected 0, NOTE: pkcs7/key related issue
+xdp_bonding/xdp_bonding_attach                   # add vxlan unexpected error: 512 (errno 17), NOTE: missing bond-related config?
+xdp_bonding/xdp_bonding_redirect_multi           # expected packets on veth1_2 unexpected expected packets on veth1_2: actual 1 < expected 100, NOTE: missing bond-related config?
+xdp_do_redirect                                  # veth_src query_opts.feature_flags unexpected veth_src query_opts.feature_flags: actual 0 != expected 103, NOTE: ???
+xdp_metadata                                     # XDP hints are not backported
+xdp_synproxy                                     # sysctl -w net.netfilter.nf_conntrack_tcp_loose=0 unexpected error: 256 (errno 2), NOTE: ???
+xfrm_info                                        # ip -net xfrm_test_ns0 addr add 192.168.1.100/24 dev ipsec0 unexpected error: 256 (errno 2), NOTE: CONFIG_XFRM_INTERFACE not set
+vrf_socket_lookup                                # missing kconfig
+
+# tests depending on bpf_testmod
+bpf_cookie/multi_kprobe_link_api                 # extern 'bpf_testmod_fentry_test1' (strong): not resolved
+bpf_cookie/multi_kprobe_attach_api               # extern 'bpf_testmod_fentry_test1' (strong): not resolved
+bpf_mod_race
+cb_refs
+core_kern_lskel
+core_kern_overflow_lskel
+fentry_test/fentry_many_args
+fexit_test/fexit_many_args
+get_branch_snapshot                              # prog 'test1': failed to find kernel BTF type ID of 'bpf_testmod_loop_test': -3
+jit_probe_mem
+kfunc_call
+kprobe_multi_test                                # extern 'bpf_testmod_fentry_test1' (strong): not resolved
+kprobe_multi_testmod_test
+ksyms_btf/weak_ksyms
+ksyms_btf/weak_ksyms_lskel
+ldsx_insn/map_val and probed_memory
+map_kptr
+module_attach
+refcounted_kptr/rbtree_sleepable_rcu
+refcounted_kptr/rbtree_sleepable_rcu_no_explicit_rcu_lock
+refcounted_kptr_fail/rbtree_fail_sleepable_lock_across_rcu
+subprogs_extable
+task_kfunc/test_task_acquire_release_argument
+task_kfunc/test_task_acquire_release_current
+tracing_struct

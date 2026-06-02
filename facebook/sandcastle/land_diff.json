@@ -1,0 +1,18 @@
+[
+    {
+        "command": "SandcastleKernelDeterminatorCommand",
+        "oncall": "kernel_infra",
+        "alias": "linux-kernel-land-determinator",
+        "capabilities": {
+            "type": "lego",
+            "vcs": "linux-kernel-git",
+            "tenant": "kernel"
+        },
+        "args": {
+            "disable_secondary_checkouts": true
+        },
+        "description": "UTD for linux-kernel",
+        "scheduleType": "landcastle",
+        "priority": 0
+    }
+]

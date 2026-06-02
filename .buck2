@@ -1,0 +1,62 @@
+#!/usr/bin/env dotslash
+{
+  "name": "buck2",
+  "oncall": "oncall+build_infra@xmail.facebook.com",
+  "platforms": {
+    "linux/aarch64": {
+      "scheme": "manifold",
+      "bucket": "buck_cli",
+      "path": "tree/buckv2-cli/3e7adfd375c3/linux-aarch64",
+      "api_key": "buck_cli-key",
+      "etag": "-194891418576511799",
+      "extract": {
+        "decompress": "tar.gz",
+        "path": "buck2-linux-aarch64/buck2"
+      }
+    },
+    "linux/x86_64": {
+      "scheme": "manifold",
+      "bucket": "buck_cli",
+      "path": "tree/buckv2-cli/3e7adfd375c3/linux-x86_64",
+      "api_key": "buck_cli-key",
+      "etag": "6787019343902060268",
+      "extract": {
+        "decompress": "tar.gz",
+        "path": "buck2-linux-x86_64/buck2"
+      }
+    },
+    "macos/aarch64": {
+      "scheme": "manifold",
+      "bucket": "buck_cli",
+      "path": "tree/buckv2-cli/3e7adfd375c3/macos-aarch64",
+      "api_key": "buck_cli-key",
+      "etag": "-7771316279299244059",
+      "extract": {
+        "decompress": "tar.gz",
+        "path": "buck2-macos-aarch64/buck2"
+      }
+    },
+    "macos/x86_64": {
+      "scheme": "manifold",
+      "bucket": "buck_cli",
+      "path": "tree/buckv2-cli/3e7adfd375c3/macos-x86_64",
+      "api_key": "buck_cli-key",
+      "etag": "-5746857713763395218",
+      "extract": {
+        "decompress": "tar.gz",
+        "path": "buck2-macos-x86_64/buck2"
+      }
+    },
+    "windows": {
+      "scheme": "manifold",
+      "bucket": "buck_cli",
+      "path": "tree/buckv2-cli/3e7adfd375c3/windows",
+      "api_key": "buck_cli-key",
+      "etag": "3615549964823169565",
+      "extract": {
+        "decompress": "tar.gz",
+        "path": "buck2-windows/buck2.exe"
+      }
+    }
+  }
+}

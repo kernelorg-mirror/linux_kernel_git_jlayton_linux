@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+subcommand="$1"
+args="${@:2}"
+
+YELLOW="\e[33m"
+ENDCOLOR="\e[0m"
+
+warn() {
+    local msg
+
+    msg="$1"
+    echo -e "${YELLOW}${msg}${ENDCOLOR}" >&2
+}
+
+warn "###############################################################################################"
+if [[ "$subcommand" == "build" ]]; then
+    warn "[DEPRECATED] Consider running:"
+    warn "\tbuck2 $subcommand \$(facebook/build/buck-config) $args"
+    warn "\tOR"
+    warn "\tarc build $args"
+else
+    warn "[DEPRECATED] Consider running \`buck2 $subcommand \$(facebook/build/buck-config) $args\`"
+fi
+warn "###############################################################################################"
+
+script_dir="$(dirname -- $0)"
+buck2 "$subcommand" $("$script_dir/buck-config") $args | sed -e 's,"linux//:,"//:,g'

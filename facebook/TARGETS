@@ -1,0 +1,25 @@
+export_file(
+    name = "sign-sandcastle-spec",
+    src = "bzl/resources/sign-sandcastle-spec.json",
+    visibility = ["PUBLIC"],
+)
+
+export_file(
+    name = "sign-hook-wrapper-sh",
+    src = "bzl/resources/sign-hook-wrapper.sh",
+    visibility = ["PUBLIC"],
+)
+
+export_file(
+    name = "sign-kernel-build-sh",
+    src = "bzl/resources/sign-kernel-build.sh",
+    visibility = ["PUBLIC"],
+)
+
+genrule(
+    name = "lol2-initramfs",
+    out = "initramfs.cpio.zst",
+    cmd = "fbpkg.fetch --dest $TMP kernel.lol2_validation_initramfs.x86_64:LATEST && mv $TMP/initramfs $OUT",
+    labels = ["linux_kernel", "uses_fbpkg"],
+    visibility = ["PUBLIC"],
+)
