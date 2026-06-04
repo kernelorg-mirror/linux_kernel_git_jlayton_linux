@@ -43,6 +43,7 @@ def _skycastle_impl(
         "build-only": build_only,
         "selftests": selftests,
         "notify": False,
+        "authenticated-build": continuous,
     }
 
     if flavor:
