@@ -986,7 +986,12 @@ static struct folio *alloc_demote_folio(struct folio *src,
 	if (dst)
 		return dst;
 
-	return alloc_migration_target(src, (unsigned long)mtc);
+	dst = alloc_migration_target(src, (unsigned long)mtc);
+#ifdef CONFIG_MIGRATION
+	if (dst)
+		count_vm_events(PGDEMOTE_SECOND_CHANCE, folio_nr_pages(src));
+#endif
+	return dst;
 }
 
 /*
@@ -1553,6 +1558,10 @@ keep:
 	stat->nr_demoted += nr_demoted;
 	/* Folios that could not be demoted are still in @demote_folios */
 	if (!list_empty(&demote_folios)) {
+#ifdef CONFIG_MIGRATION
+		if (!sc->proactive)
+			count_vm_event(PGDEMOTE_SWAP_FALLBACK);
+#endif
 		/* Folios which weren't demoted go back on @folio_list */
 		list_splice_init(&demote_folios, folio_list);
 
