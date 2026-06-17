@@ -4203,12 +4203,26 @@ setup_notify_fhandle(struct dentry *dentry, struct nfs4_delegation *dp,
 		     struct nfsd_file *nf, struct nfsd4_fattr_args *args)
 {
 	struct nfs4_file *fi = dp->dl_stid.sc_file;
-	struct svc_export *exp = dp->dl_stid.sc_export;
+	struct nfs4_client *clp = dp->dl_stid.sc_client;
 	int fileid_type, fsid_len, maxsize, flags = 0;
 	struct knfsd_fh *fhp = &args->fhandle;
 	struct inode *inode = d_inode(dentry);
 	struct inode *parent = NULL;
+	struct svc_export *exp;
 	struct fid *fid;
+	bool ret = false;
+
+	/*
+	 * drop_stid_export() can clear sc_export and drop its reference
+	 * locklessly when the delegation is admin-revoked, concurrently with
+	 * this callback. Grab our own reference under cl_lock so the export
+	 * can be neither NULL-raced nor freed while we encode.
+	 */
+	spin_lock(&clp->cl_lock);
+	exp = dp->dl_stid.sc_export;
+	if (exp)
+		exp_get(exp);
+	spin_unlock(&clp->cl_lock);
 
 	fsid_len = key_len(fi->fi_fhandle.fh_fsid_type);
 	fhp->fh_size = 4 + fsid_len;
@@ -4225,23 +4239,28 @@ setup_notify_fhandle(struct dentry *dentry, struct nfs4_delegation *dp,
 	 * delegation's export rather than the shared nfs4_file, which may
 	 * have been initialized under a different export.
 	 */
-	if (!(exp->ex_flags & NFSEXP_NOSUBTREECHECK) && !S_ISDIR(inode->i_mode)) {
+	if (exp && !(exp->ex_flags & NFSEXP_NOSUBTREECHECK) &&
+	    !S_ISDIR(inode->i_mode)) {
 		parent = d_inode(nf->nf_file->f_path.dentry);
 		flags = EXPORT_FH_CONNECTABLE;
 	}
 
 	fileid_type = exportfs_encode_inode_fh(inode, fid, &maxsize, parent, flags);
 	if (fileid_type < 0 || fileid_type == FILEID_INVALID)
-		return false;
+		goto out;
 
 	fhp->fh_fileid_type = fileid_type;
 	fhp->fh_size += maxsize * 4;
 
 	if (exp && (exp->ex_flags & NFSEXP_SIGN_FH))
 		if (!fh_append_mac(fhp, NFS4_FHSIZE, exp->cd->net))
-			return false;
+			goto out;
 
-	return true;
+	ret = true;
+out:
+	if (exp)
+		exp_put(exp);
+	return ret;
 }
 
 #define CB_NOTIFY_STATX_REQUEST_MASK (STATX_BASIC_STATS   | \
