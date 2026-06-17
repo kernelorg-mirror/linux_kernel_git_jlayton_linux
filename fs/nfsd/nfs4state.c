@@ -3598,23 +3598,30 @@ nfsd4_cb_notify_prepare(struct nfsd4_callback *cb)
 put_event:
 		nfsd_notify_event_put(nne);
 	}
-	if (!error) {
-		if (dp->dl_notify_mask & BIT(NOTIFY4_CHANGE_DIR_ATTRS)) {
-			u32 *maskp = (u32 *)xdr_reserve_space(&stream, sizeof(*maskp));
+	if (!error && (dp->dl_notify_mask & BIT(NOTIFY4_CHANGE_DIR_ATTRS))) {
+		u32 *maskp = (u32 *)xdr_reserve_space(&stream, sizeof(*maskp));
+		u8 *p = NULL;
 
-			if (maskp) {
-				u8 *p = nfsd4_encode_dir_attr_change(&stream, dp, nf);
-
-				if (p) {
-					*maskp = BIT(NOTIFY4_CHANGE_DIR_ATTRS);
-					ncn->ncn_nf[count].notify_mask.count = 1;
-					ncn->ncn_nf[count].notify_mask.element = maskp;
-					ncn->ncn_nf[count].notify_vals.data = p;
-					ncn->ncn_nf[count].notify_vals.len = (u8 *)stream.p - p;
-					++count;
-				}
-			}
+		if (maskp)
+			p = nfsd4_encode_dir_attr_change(&stream, dp, nf);
+		if (!p) {
+			/*
+			 * The client asked to be told about dir attr changes
+			 * but we couldn't encode one. RFC 8881 s10.4 requires
+			 * recalling the delegation rather than dropping a
+			 * requested notification, so fall through to recall.
+			 */
+			error = true;
+		} else {
+			*maskp = BIT(NOTIFY4_CHANGE_DIR_ATTRS);
+			ncn->ncn_nf[count].notify_mask.count = 1;
+			ncn->ncn_nf[count].notify_mask.element = maskp;
+			ncn->ncn_nf[count].notify_vals.data = p;
+			ncn->ncn_nf[count].notify_vals.len = (u8 *)stream.p - p;
+			++count;
 		}
+	}
+	if (!error) {
 		ncn->ncn_nf_cnt = count;
 		nfsd_file_put(nf);
 		return true;
