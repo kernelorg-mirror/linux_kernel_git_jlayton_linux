@@ -3546,15 +3546,20 @@ nfsd4_cb_notify_prepare(struct nfsd4_callback *cb)
 		return false;
 	}
 
-	/* we can't keep up! */
-	if (count > limit) {
-		spin_unlock(&ncn->ncn_lock);
-		goto out_recall;
-	}
-
 	memcpy(events, ncn->ncn_evt, sizeof(*events) * count);
 	ncn->ncn_evt_cnt = 0;
 	spin_unlock(&ncn->ncn_lock);
+
+	/*
+	 * We can't keep up! Drop the queued events and recall. The queue must
+	 * be drained here: out_recall leaves ncn_evt_cnt at 0, so the release
+	 * op won't see leftover events and requeue this callback forever.
+	 */
+	if (count > limit) {
+		for (i = 0; i < count; ++i)
+			nfsd_notify_event_put(events[i]);
+		goto out_recall;
+	}
 
 	rcu_read_lock();
 	nf = nfsd_file_get(rcu_dereference(dp->dl_stid.sc_file->fi_deleg_file));
@@ -3663,8 +3668,13 @@ nfsd4_cb_notify_release(struct nfsd4_callback *cb)
 	struct nfs4_delegation *dp =
 			container_of(ncn, struct nfs4_delegation, dl_cb_notify);
 
-	/* Drain events that arrived while this callback was in flight */
-	if (READ_ONCE(ncn->ncn_evt_cnt) > 0)
+	/*
+	 * Drain events that arrived while this callback was in flight, but
+	 * don't requeue against a revoked delegation: there's no point in
+	 * notifying a client that no longer holds it, and doing so can pin the
+	 * stid and spin the workqueue.
+	 */
+	if (!dp->dl_stid.sc_status && READ_ONCE(ncn->ncn_evt_cnt) > 0)
 		nfsd4_run_cb_notify(ncn);
 	nfs4_put_stid(&dp->dl_stid);
 }
