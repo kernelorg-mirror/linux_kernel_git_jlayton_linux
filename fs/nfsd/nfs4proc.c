@@ -1519,6 +1519,12 @@ static void nfs4_put_copy(struct nfsd4_copy *copy)
 {
 	if (!refcount_dec_and_test(&copy->refcount))
 		return;
+	/*
+	 * Drop the task_struct reference taken in nfsd4_copy(). Only async
+	 * copies have a copy_task; it is left NULL on every other path.
+	 */
+	if (copy->copy_task)
+		put_task_struct(copy->copy_task);
 	kfree(copy->cp_src);
 	kfree(copy);
 }
@@ -1528,19 +1534,23 @@ static void release_copy_files(struct nfsd4_copy *copy);
 static void nfsd4_stop_copy(struct nfsd4_copy *copy)
 {
 	trace_nfsd_copy_async_cancel(copy);
-	if (!test_and_set_bit(NFSD4_COPY_F_STOPPED, &copy->cp_flags)) {
-		kthread_stop(copy->copy_task);
-		if (!test_bit(NFSD4_COPY_F_CB_ERROR, &copy->cp_flags))
-			copy->nfserr = nfs_ok;
-		set_bit(NFSD4_COPY_F_COMPLETED, &copy->cp_flags);
-	}
-
 	/*
-	 * Caller has already removed the copy from clp->async_copies, so
-	 * the reaper cannot reach it. Release files regardless of who won
-	 * STOPPED; if STOPPED was set here, kthread_stop() joined the
-	 * kthread.
+	 * Always join the copy kthread before touching its resources. The
+	 * task_struct is pinned by get_task_struct() in nfsd4_copy(), so
+	 * kthread_stop() is safe even if this one-shot kthread has already
+	 * returned. Joining guarantees the kthread is no longer using
+	 * copy->nf_dst or the client by the time release_copy_files() runs.
+	 *
+	 * The caller has already removed the copy from clp->async_copies and
+	 * is the sole owner of this teardown, so kthread_stop() runs exactly
+	 * once per copy.
 	 */
+	set_bit(NFSD4_COPY_F_STOPPED, &copy->cp_flags);
+	kthread_stop(copy->copy_task);
+	if (!test_bit(NFSD4_COPY_F_CB_ERROR, &copy->cp_flags))
+		copy->nfserr = nfs_ok;
+	set_bit(NFSD4_COPY_F_COMPLETED, &copy->cp_flags);
+
 	release_copy_files(copy);
 	nfs4_put_copy(copy);
 }
@@ -2179,10 +2189,14 @@ static int nfsd4_do_async_copy(void *data)
 do_callback:
 	if (!test_bit(NFSD4_COPY_F_CB_ERROR, &copy->cp_flags))
 		copy->nfserr = nfserr;
-	/* The kthread exits forthwith. Ensure that a subsequent
-	 * OFFLOAD_CANCEL won't try to kill it again. */
-	set_bit(NFSD4_COPY_F_STOPPED, &copy->cp_flags);
-
+	/*
+	 * Do not set NFSD4_COPY_F_STOPPED here. That bit tells a teardown
+	 * caller it may skip kthread_stop(); setting it before the kthread
+	 * is done using copy->nf_dst and the client lets a concurrent
+	 * nfsd4_stop_copy() release those resources out from under us.
+	 * STOPPED is now set only by nfsd4_stop_copy(), which always joins
+	 * via kthread_stop().
+	 */
 	set_bit(NFSD4_COPY_F_COMPLETED, &copy->cp_flags);
 	trace_nfsd_copy_async_done(copy);
 	atomic_dec(&copy->cp_nn->pending_async_copies);
@@ -2234,6 +2248,8 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	memcpy(&copy->fh, &cstate->current_fh.fh_handle,
 		sizeof(struct knfsd_fh));
 	if (nfsd4_copy_is_async(copy)) {
+		struct task_struct *task;
+
 		async_copy = kzalloc_obj(struct nfsd4_copy);
 		if (!async_copy)
 			goto out_err;
@@ -2271,10 +2287,17 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		       NFS4_MAX_SESSIONID_LEN);
 		async_copy->cp_cb_offload.co_referring_slotid = cstate->slot->sl_index;
 		async_copy->cp_cb_offload.co_referring_seqno = cstate->slot->sl_seqid;
-		async_copy->copy_task = kthread_create(nfsd4_do_async_copy,
-				async_copy, "%s", "copy thread");
-		if (IS_ERR(async_copy->copy_task))
+		task = kthread_create(nfsd4_do_async_copy, async_copy,
+				      "%s", "copy thread");
+		if (IS_ERR(task))
 			goto out_dec_async_copy_err;
+		/*
+		 * Pin the task_struct so a later nfsd4_stop_copy() can call
+		 * kthread_stop() safely even after this one-shot kthread has
+		 * exited and been reaped. Released by nfs4_put_copy().
+		 */
+		get_task_struct(task);
+		async_copy->copy_task = task;
 		/*
 		 * Take the kthread's reference and wake it before publishing
 		 * on async_copies, so the publisher does not touch async_copy
