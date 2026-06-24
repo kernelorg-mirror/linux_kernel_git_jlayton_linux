@@ -1960,6 +1960,8 @@ static void nfsd4_cb_offload_release(struct nfsd4_callback *cb)
 
 	set_bit(NFSD4_COPY_F_OFFLOAD_DONE, &copy->cp_flags);
 	nfsd4_put_client(cb->cb_clp);
+	/* Drop the copy reference taken in nfsd4_send_cb_offload(). */
+	nfs4_put_copy(copy);
 }
 
 static int nfsd4_cb_offload_done(struct nfsd4_callback *cb,
@@ -2134,10 +2136,16 @@ static void nfsd4_send_cb_offload(struct nfsd4_copy *copy)
 	cbo->co_retries = 5;
 
 	/*
-	 * Hold a reference on the client while the callback is in flight.
-	 * Released in nfsd4_cb_offload_release().
+	 * Hold a reference on the client and on the copy while the callback
+	 * is in flight. co_cb is embedded in the copy, so the copy must
+	 * outlive the callback; a concurrent OFFLOAD_CANCEL or shutdown can
+	 * otherwise drop the last copy reference and free it while the RPC
+	 * layer still references co_cb. Both are released in
+	 * nfsd4_cb_offload_release(). The kthread still holds its own copy
+	 * reference here, so this refcount_inc() cannot race the final free.
 	 */
 	kref_get(&clp->cl_nfsdfs.cl_ref);
+	refcount_inc(&copy->refcount);
 
 	nfsd4_init_cb(&cbo->co_cb, clp, &nfsd4_cb_offload_ops,
 		      NFSPROC4_CLNT_CB_OFFLOAD);
