@@ -837,6 +837,12 @@ EXPORT_SYMBOL_GPL(svc_set_pool_threads);
  * are multiple pools then the new threads or victims will be distributed
  * evenly among them.
  *
+ * When @nrservs is non-zero but smaller than the number of pools, even
+ * distribution would leave some pools empty. Since each pool maps to a
+ * NUMA node and only services transports steered to that node, every
+ * pool whose node has CPUs is instead guaranteed at least one thread.
+ * The resulting total may therefore exceed @nrservs.
+ *
  * Caller must ensure mutual exclusion between this and server startup or
  * shutdown.
  *
@@ -860,6 +866,15 @@ svc_set_num_threads(struct svc_serv *serv, unsigned int min_threads,
 			++threads;
 			--remain;
 		}
+
+		/*
+		 * Don't let a node's pool sit empty while threads are
+		 * being auto-distributed: a transport steered there would
+		 * have nothing to service it.
+		 */
+		if (threads == 0 && nrservs &&
+		    nr_cpus_node(svc_pool_map_get_node(pool->sp_id)))
+			threads = 1;
 
 		err = svc_set_pool_threads(serv, pool, min_threads, threads);
 		if (err)
