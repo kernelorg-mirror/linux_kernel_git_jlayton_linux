@@ -337,6 +337,13 @@ static int svc_uses_rpcbind(struct svc_serv *serv)
 
 int svc_bind(struct svc_serv *serv, struct net *net)
 {
+	/*
+	 * Leaving rpcb_create_local() alone also leaves sn->rpcb_users
+	 * untouched, which is what lets svc_xprt_destroy_all() skip the
+	 * matching put.
+	 */
+	if (serv->sv_no_rpcbind)
+		return 0;
 	if (!svc_uses_rpcbind(serv))
 		return 0;
 	return svc_rpcb_setup(serv, net);
@@ -1234,6 +1241,15 @@ int svc_register(struct svc_serv *serv, struct net *net,
 	WARN_ON_ONCE(proto == 0 && port == 0);
 	if (proto == 0 && port == 0)
 		return -EINVAL;
+
+	/*
+	 * Both directions pass through here: svc_setup_socket() with a port
+	 * and svc_delete_xprt() with zero. Without this, rpcb_v4_register()
+	 * fails on a NULL rpcb_local_clnt4 and the v2 fallback then oopses on
+	 * a NULL rpcb_local_clnt.
+	 */
+	if (serv->sv_no_rpcbind)
+		return 0;
 
 	for (p = 0; p < serv->sv_nprogs; p++) {
 		struct svc_program *progp = &serv->sv_programs[p];
