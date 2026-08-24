@@ -2075,6 +2075,7 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 	struct svc_serv *serv;
 	LIST_HEAD(permsocks);
 	struct nfsd_net *nn;
+	bool userspace_rpcbind;
 	bool delete = false;
 	int err, rem;
 
@@ -2087,7 +2088,24 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 	if (err)
 		return err;
 
+	userspace_rpcbind = nla_get_flag(info->attrs[NFSD_A_SERVER_SOCK_USERSPACE_RPCBIND]);
+
 	mutex_lock(&nfsd_mutex);
+
+	nn = net_generic(net, nfsd_net_id);
+
+	/*
+	 * rpcbind ownership decides whether svc_bind() took the rpcb_users
+	 * reference that teardown drops, so it cannot change under a serv
+	 * that is already up.
+	 */
+	if (nn->nfsd_serv && nn->nfsd_serv->sv_no_rpcbind != userspace_rpcbind) {
+		NL_SET_ERR_MSG(info->extack,
+			       "cannot change rpcbind ownership while a server exists");
+		mutex_unlock(&nfsd_mutex);
+		return -EBUSY;
+	}
+	assign_bit(NFSD_NET_RPCBIND_USERSPACE, &nn->flags, userspace_rpcbind);
 
 	err = nfsd_create_serv(net);
 	if (err) {
@@ -2095,7 +2113,6 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 		return err;
 	}
 
-	nn = net_generic(net, nfsd_net_id);
 	serv = nn->nfsd_serv;
 
 	spin_lock_bh(&serv->sv_lock);

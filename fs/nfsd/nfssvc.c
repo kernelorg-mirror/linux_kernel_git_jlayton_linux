@@ -635,6 +635,9 @@ int nfsd_create_serv(struct net *net)
 		return -ENOMEM;
 	}
 
+	/* svc_bind() reads this, so set it first. */
+	serv->sv_no_rpcbind = test_bit(NFSD_NET_RPCBIND_USERSPACE, &nn->flags);
+
 	error = svc_bind(serv, net);
 	if (error < 0) {
 		svc_destroy(&serv);
