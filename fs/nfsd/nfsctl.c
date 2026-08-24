@@ -2079,6 +2079,153 @@ static int nfsd_nl_validate_listeners(struct genl_info *info)
 	return 0;
 }
 
+/*
+ * Upper bound on the reply below. A request may carry up to
+ * NFSD_NL_LISTENER_MAX listeners, which is far more than
+ * GENLMSG_DEFAULT_SIZE holds, so the buffer has to be sized from the
+ * contents.
+ *
+ * The program list is counted without nfsd_version_registerable(), because
+ * a handful of unused nests is cheaper than a second copy of that test
+ * that has to stay in step with the first.
+ *
+ * Caller holds nfsd_mutex.
+ */
+static size_t nfsd_nl_listener_set_msgsize(struct svc_serv *serv)
+{
+	size_t size = GENL_HDRLEN +		    /* genlmsg_iput() */
+		      nla_total_size(0);	    /* userspace-rpcbind */
+	struct svc_xprt *xprt;
+	unsigned int p;
+
+	for (p = 0; p < serv->sv_nprogs; p++)
+		size += serv->sv_programs[p].pg_nvers *
+			(nla_total_size(0) +		    /* rpcbind nest */
+			 nla_total_size(sizeof(u32)) +	    /* program */
+			 nla_total_size(sizeof(u32)) +	    /* version */
+			 nla_total_size(sizeof(u32)));	    /* flags */
+
+	spin_lock_bh(&serv->sv_lock);
+	list_for_each_entry(xprt, &serv->sv_permsocks, xpt_list) {
+		if (!test_bit(XPT_RPCB_UNREG, &xprt->xpt_flags))
+			continue;
+		size += nla_total_size(0) +		    /* addr nest */
+			nla_total_size(strlen(xprt->xpt_class->xcl_name) + 1) +
+			nla_total_size(sizeof(struct sockaddr_storage));
+	}
+	spin_unlock_bh(&serv->sv_lock);
+
+	return size;
+}
+
+/*
+ * Build the reply to a listener_set that asked to own rpcbind. It names the
+ * programs and versions that the caller must register, and the listeners to
+ * register them for.
+ *
+ * A listener only appears when XPT_RPCB_UNREG is set on it, which is the
+ * same test svc_delete_xprt() uses to decide whether the kernel would have
+ * talked to rpcbind about that transport. An rdma listener has no rpcbind
+ * netid and the kernel never registered one, so reporting it would invite
+ * the caller to create an entry the kernel never created.
+ *
+ * The caller applies the no-udp flag itself, because that rule depends on
+ * the protocol of each listener. It also derives the netid from the
+ * transport name and the address family, which it already knows.
+ *
+ * Caller holds nfsd_mutex.
+ */
+static struct sk_buff *
+nfsd_nl_listener_set_msg(struct genl_info *info, struct net *net,
+			 struct svc_serv *serv)
+{
+	struct svc_xprt *xprt;
+	struct sk_buff *skb;
+	unsigned int p, i;
+	void *hdr;
+	int err;
+
+	skb = genlmsg_new(nfsd_nl_listener_set_msgsize(serv), GFP_KERNEL);
+	if (!skb)
+		return ERR_PTR(-ENOMEM);
+
+	hdr = genlmsg_iput(skb, info);
+	if (!hdr) {
+		err = -EMSGSIZE;
+		goto err_free_msg;
+	}
+
+	if (nla_put_flag(skb, NFSD_A_SERVER_SOCK_USERSPACE_RPCBIND)) {
+		err = -EMSGSIZE;
+		goto err_free_msg;
+	}
+
+	for (p = 0; p < serv->sv_nprogs; p++) {
+		const struct svc_program *progp = &serv->sv_programs[p];
+
+		for (i = 0; i < progp->pg_nvers; i++) {
+			struct nlattr *attr;
+			u32 flags = 0;
+
+			if (!nfsd_version_registerable(net, progp, i))
+				continue;
+
+			if (progp->pg_vers[i]->vs_need_cong_ctrl)
+				flags |= NFSD_RPCBIND_FLAGS_NO_UDP;
+
+			attr = nla_nest_start(skb, NFSD_A_SERVER_SOCK_RPCBIND);
+			if (!attr) {
+				err = -EMSGSIZE;
+				goto err_free_msg;
+			}
+			if (nla_put_u32(skb, NFSD_A_RPCBIND_PROGRAM,
+					progp->pg_prog) ||
+			    nla_put_u32(skb, NFSD_A_RPCBIND_VERSION, i) ||
+			    (flags && nla_put_u32(skb, NFSD_A_RPCBIND_FLAGS,
+						  flags))) {
+				err = -EMSGSIZE;
+				goto err_free_msg;
+			}
+			nla_nest_end(skb, attr);
+		}
+	}
+
+	spin_lock_bh(&serv->sv_lock);
+	list_for_each_entry(xprt, &serv->sv_permsocks, xpt_list) {
+		struct nlattr *attr;
+
+		if (!test_bit(XPT_RPCB_UNREG, &xprt->xpt_flags))
+			continue;
+
+		attr = nla_nest_start(skb, NFSD_A_SERVER_SOCK_ADDR);
+		if (!attr) {
+			err = -EMSGSIZE;
+			goto err_serv_unlock;
+		}
+
+		if (nla_put_string(skb, NFSD_A_SOCK_TRANSPORT_NAME,
+				   xprt->xpt_class->xcl_name) ||
+		    nla_put(skb, NFSD_A_SOCK_ADDR,
+			    sizeof(struct sockaddr_storage),
+			    &xprt->xpt_local)) {
+			err = -EMSGSIZE;
+			goto err_serv_unlock;
+		}
+
+		nla_nest_end(skb, attr);
+	}
+	spin_unlock_bh(&serv->sv_lock);
+
+	genlmsg_end(skb, hdr);
+	return skb;
+
+err_serv_unlock:
+	spin_unlock_bh(&serv->sv_lock);
+err_free_msg:
+	nlmsg_free(skb);
+	return ERR_PTR(err);
+}
+
 /**
  * nfsd_nl_listener_set_doit - set the nfs running sockets
  * @skb: reply buffer
@@ -2092,6 +2239,7 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 	const struct nlattr *bad_attr = NULL;
 	struct svc_xprt *xprt, *tmp;
 	const char *bad_xprt = NULL;
+	struct sk_buff *rskb = NULL;
 	unsigned int rpcb_failures;
 	const struct nlattr *attr;
 	bool skipped_rpcb = false;
@@ -2278,11 +2426,27 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 			       "rpcbind did not answer, some listeners are not registered");
 	}
 
+	/*
+	 * Build the reply before the serv can go away, and only on success.
+	 * A caller that got an errno has nothing to register.
+	 */
+	if (!err && userspace_rpcbind) {
+		rskb = nfsd_nl_listener_set_msg(info, net, serv);
+		if (IS_ERR(rskb)) {
+			err = PTR_ERR(rskb);
+			rskb = NULL;
+		}
+	}
+
 	if (!serv->sv_nrthreads && list_empty(&nn->nfsd_serv->sv_permsocks))
 		nfsd_destroy_serv(net);
 
 out_unlock_mtx:
 	mutex_unlock(&nfsd_mutex);
+
+	/* rskb is only built once err is known to be zero. */
+	if (rskb)
+		return genlmsg_reply(rskb, info);
 
 	return err;
 }
