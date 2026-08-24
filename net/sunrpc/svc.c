@@ -337,7 +337,7 @@ static int svc_uses_rpcbind(struct svc_serv *serv)
 
 int svc_bind(struct svc_serv *serv, struct net *net)
 {
-	if (!svc_uses_rpcbind(serv))
+	if (serv->sv_no_rpcbind || !svc_uses_rpcbind(serv))
 		return 0;
 	return svc_rpcb_setup(serv, net);
 }

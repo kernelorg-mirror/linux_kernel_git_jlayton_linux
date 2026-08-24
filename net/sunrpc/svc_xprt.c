@@ -1235,7 +1235,13 @@ void svc_xprt_destroy_all(struct svc_serv *serv, struct net *net,
 		msleep(delay++);
 	}
 
-	if (unregister)
+	/*
+	 * rpcb_create_local() took the sn->rpcb_users reference that
+	 * rpcb_put_local() drops, and svc_bind() never called it here.
+	 * lockd shares that count, so an unbalanced put would shut down
+	 * its client too.
+	 */
+	if (unregister && !serv->sv_no_rpcbind)
 		svc_rpcb_cleanup(serv, net);
 }
 EXPORT_SYMBOL_GPL(svc_xprt_destroy_all);

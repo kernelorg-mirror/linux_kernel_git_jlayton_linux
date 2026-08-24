@@ -1515,7 +1515,14 @@ static struct svc_sock *svc_setup_socket(struct svc_serv *serv,
 {
 	struct svc_sock	*svsk;
 	struct sock	*inet;
-	int		pmap_register = !(flags & SVC_SOCK_ANONYMOUS);
+	/*
+	 * svc_bind() skipped rpcb_create_local() for an sv_no_rpcbind serv,
+	 * so rpcb_local_clnt is NULL and the v2 fallback in rpcb_register()
+	 * would dereference it. Callers such as svc_addsock() pass
+	 * SVC_SOCK_DEFAULTS and would otherwise reach it.
+	 */
+	int		pmap_register = !(flags & SVC_SOCK_ANONYMOUS) &&
+					!serv->sv_no_rpcbind;
 	int		sendpages;
 	unsigned long	pages;
 
