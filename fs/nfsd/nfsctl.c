@@ -2060,6 +2060,105 @@ static int nfsd_nl_validate_listeners(struct genl_info *info)
 	return 0;
 }
 
+/*
+ * Build the reply to a listener_set that asked to own rpcbind. It names the
+ * programs and versions that the caller must register, and the listeners
+ * that came up.
+ *
+ * The caller applies the no-udp flag itself, because that rule depends on
+ * the protocol of each listener. It also derives the netid from the
+ * transport name and the address family, which it already knows.
+ *
+ * Caller holds nfsd_mutex.
+ */
+static struct sk_buff *
+nfsd_nl_listener_set_msg(struct genl_info *info, struct net *net,
+			 struct svc_serv *serv)
+{
+	struct svc_xprt *xprt;
+	struct sk_buff *skb;
+	unsigned int p, i;
+	void *hdr;
+	int err;
+
+	skb = genlmsg_new(GENLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (!skb)
+		return ERR_PTR(-ENOMEM);
+
+	hdr = genlmsg_iput(skb, info);
+	if (!hdr) {
+		err = -EMSGSIZE;
+		goto err_free_msg;
+	}
+
+	if (nla_put_flag(skb, NFSD_A_SERVER_SOCK_USERSPACE_RPCBIND)) {
+		err = -EMSGSIZE;
+		goto err_free_msg;
+	}
+
+	for (p = 0; p < serv->sv_nprogs; p++) {
+		const struct svc_program *progp = &serv->sv_programs[p];
+
+		for (i = 0; i < progp->pg_nvers; i++) {
+			struct nlattr *attr;
+			u32 flags = 0;
+
+			if (!nfsd_version_registerable(net, progp, i))
+				continue;
+
+			if (progp->pg_vers[i]->vs_need_cong_ctrl)
+				flags |= NFSD_RPCBIND_FLAGS_NO_UDP;
+
+			attr = nla_nest_start(skb, NFSD_A_SERVER_SOCK_RPCBIND);
+			if (!attr) {
+				err = -EMSGSIZE;
+				goto err_free_msg;
+			}
+			if (nla_put_u32(skb, NFSD_A_RPCBIND_PROGRAM,
+					progp->pg_prog) ||
+			    nla_put_u32(skb, NFSD_A_RPCBIND_VERSION, i) ||
+			    (flags && nla_put_u32(skb, NFSD_A_RPCBIND_FLAGS,
+						  flags))) {
+				err = -EMSGSIZE;
+				goto err_free_msg;
+			}
+			nla_nest_end(skb, attr);
+		}
+	}
+
+	spin_lock_bh(&serv->sv_lock);
+	list_for_each_entry(xprt, &serv->sv_permsocks, xpt_list) {
+		struct nlattr *attr;
+
+		attr = nla_nest_start(skb, NFSD_A_SERVER_SOCK_ADDR);
+		if (!attr) {
+			err = -EMSGSIZE;
+			goto err_serv_unlock;
+		}
+
+		if (nla_put_string(skb, NFSD_A_SOCK_TRANSPORT_NAME,
+				   xprt->xpt_class->xcl_name) ||
+		    nla_put(skb, NFSD_A_SOCK_ADDR,
+			    sizeof(struct sockaddr_storage),
+			    &xprt->xpt_local)) {
+			err = -EMSGSIZE;
+			goto err_serv_unlock;
+		}
+
+		nla_nest_end(skb, attr);
+	}
+	spin_unlock_bh(&serv->sv_lock);
+
+	genlmsg_end(skb, hdr);
+	return skb;
+
+err_serv_unlock:
+	spin_unlock_bh(&serv->sv_lock);
+err_free_msg:
+	nlmsg_free(skb);
+	return ERR_PTR(err);
+}
+
 /**
  * nfsd_nl_listener_set_doit - set the nfs running sockets
  * @skb: reply buffer
@@ -2072,6 +2171,7 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 	struct net *net = genl_info_net(info);
 	struct svc_xprt *xprt, *tmp;
 	const struct nlattr *attr;
+	struct sk_buff *rskb = NULL;
 	struct svc_serv *serv;
 	LIST_HEAD(permsocks);
 	struct nfsd_net *nn;
@@ -2214,11 +2314,30 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 		}
 	}
 
+	/*
+	 * Build the reply before the serv can go away, and only on success:
+	 * a caller that got an errno has nothing to register.
+	 */
+	if (!err && userspace_rpcbind) {
+		rskb = nfsd_nl_listener_set_msg(info, net, serv);
+		if (IS_ERR(rskb)) {
+			err = PTR_ERR(rskb);
+			rskb = NULL;
+		}
+	}
+
 	if (!serv->sv_nrthreads && list_empty(&nn->nfsd_serv->sv_permsocks))
 		nfsd_destroy_serv(net);
 
 out_unlock_mtx:
 	mutex_unlock(&nfsd_mutex);
+
+	if (rskb) {
+		if (err)
+			nlmsg_free(rskb);
+		else
+			return genlmsg_reply(rskb, info);
+	}
 
 	return err;
 }
