@@ -2092,7 +2092,9 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 	const struct nlattr *bad_attr = NULL;
 	struct svc_xprt *xprt, *tmp;
 	const char *bad_xprt = NULL;
+	unsigned int rpcb_failures;
 	const struct nlattr *attr;
+	bool skipped_rpcb = false;
 	struct svc_serv *serv;
 	LIST_HEAD(permsocks);
 	struct nfsd_net *nn;
@@ -2182,12 +2184,22 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 	if (delete)
 		svc_xprt_destroy_all(serv, net, false);
 
+	/*
+	 * Take the reading here rather than earlier. The teardown above
+	 * unregisters each listener it removed, so an earlier reading would
+	 * let this request skip registration completely, and an admin who
+	 * retried would never reach rpcbind again. This way every request
+	 * tries once.
+	 */
+	rpcb_failures = svc_rpcb_failure_count(serv);
+
 	/* walk list of addrs again, open any that still don't exist */
 	nlmsg_for_each_attr_type(attr, NFSD_A_SERVER_SOCK_ADDR, info->nlhdr,
 				 GENL_HDRLEN, rem) {
 		struct nlattr *tb[NFSD_A_SOCK_MAX + 1];
 		const char *xcl_name;
 		struct sockaddr *sa;
+		int flags = 0;
 		int ret;
 
 		/* validated up front in nfsd_nl_validate_listeners() */
@@ -2207,7 +2219,17 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 			continue;
 		}
 
-		ret = svc_xprt_create_from_sa(serv, xcl_name, net, sa, 0,
+		/*
+		 * One failure is enough to know that rpcbind will not answer
+		 * the rest of this request either. Each further call would
+		 * only wait out the timeout again under nfsd_mutex.
+		 */
+		if (svc_rpcb_failure_count(serv) != rpcb_failures) {
+			flags = SVC_SOCK_ANONYMOUS;
+			skipped_rpcb = true;
+		}
+
+		ret = svc_xprt_create_from_sa(serv, xcl_name, net, sa, flags,
 					      current_cred());
 		/* always save the latest error */
 		if (ret < 0) {
@@ -2221,11 +2243,27 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 	 * The ack carries the errno of the last entry that failed. Point at
 	 * that entry as well, since several entries can share a transport
 	 * name and the errno alone cannot tell them apart.
+	 *
+	 * A listener that rpcbind never learned about is up but unreachable
+	 * by anyone that looks it up, so say that too. A v4-only server needs
+	 * it most: vs_rpcb_optnl discards every error, so no errno can say it.
+	 * extack carries one message, so when an entry also failed, report
+	 * both in that message. Keep that one under NETLINK_MAX_FMTMSG_LEN:
+	 * NL_SET_ERR_MSG_FMT() truncates past it and logs a warning of its own.
 	 */
 	if (err) {
 		NL_SET_BAD_ATTR(info->extack, bad_attr);
-		NL_SET_ERR_MSG_FMT(info->extack, "cannot create %s listener",
-				   bad_xprt);
+		if (skipped_rpcb)
+			NL_SET_ERR_MSG_FMT(info->extack,
+					   "cannot create %s listener; rpcbind did not answer, listeners unregistered",
+					   bad_xprt);
+		else
+			NL_SET_ERR_MSG_FMT(info->extack,
+					   "cannot create %s listener",
+					   bad_xprt);
+	} else if (skipped_rpcb) {
+		NL_SET_ERR_MSG(info->extack,
+			       "rpcbind did not answer, listeners are not registered");
 	}
 
 	if (!serv->sv_nrthreads && list_empty(&nn->nfsd_serv->sv_permsocks))
