@@ -1258,6 +1258,14 @@ int svc_register(struct svc_serv *serv, struct net *net,
 				break;
 			}
 		}
+
+		/*
+		 * rpcbind gave no answer, so the next program would only wait
+		 * out the same timeout. A refusal does not set the flag,
+		 * because rpcbind refuses one entry at a time.
+		 */
+		if (noanswer)
+			break;
 	}
 
 	if (noanswer)
