@@ -51,6 +51,16 @@ definitions:
       so the caller must skip the udp and udp6 netids for it.
     entries:
       - no-udp
+  -
+    type: enum
+    name: io-mode
+    doc: >-
+      NFS READ/WRITE I/O mode. These values match the global io_cache_read
+      and io_cache_write debugfs settings.
+    entries:
+      - buffered
+      - dontcache
+      - direct
 
 attribute-sets:
   -
@@ -297,6 +307,20 @@ attribute-sets:
       -
         name: fsid
         type: s32
+      -
+        name: read-iomode
+        type: u32
+        enum: io-mode
+        doc: >-
+          Per-export NFS READ I/O mode. When absent, the export follows
+          the global io_cache_read setting.
+      -
+        name: write-iomode
+        type: u32
+        enum: io-mode
+        doc: >-
+          Per-export NFS WRITE I/O mode. When absent, the export follows
+          the global io_cache_write setting.
   -
     name: svc-export-reqs
     attributes:

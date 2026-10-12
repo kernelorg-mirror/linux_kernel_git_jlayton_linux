@@ -77,6 +77,8 @@ struct svc_export {
 	struct cache_detail	*cd;
 	struct rcu_head		ex_rcu;
 	unsigned long		ex_xprtsec_modes;
+	s8			ex_riomode;
+	s8			ex_wiomode;
 	struct export_stats	*ex_stats;
 };
 
