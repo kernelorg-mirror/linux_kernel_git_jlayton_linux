@@ -47,7 +47,8 @@ DEFINE_DEBUGFS_ATTRIBUTE(nfsd_dsr_fops, nfsd_dsr_get, nfsd_dsr_set, "%llu\n");
  *   %2: NFS READ will use direct IO
  *
  * This setting takes immediate effect for all NFS versions,
- * all exports, and in all NFSD net namespaces.
+ * all exports without an explicit riomode= setting, and in all
+ * NFSD net namespaces.
  */
 
 static int nfsd_io_cache_read_get(void *data, u64 *val)
@@ -92,7 +93,8 @@ DEFINE_DEBUGFS_ATTRIBUTE(nfsd_io_cache_read_fops, nfsd_io_cache_read_get,
  *   %1: NFS WRITE will use dontcache (buffered IO w/ dropbehind)
  *
  * This setting takes immediate effect for all NFS versions,
- * all exports, and in all NFSD net namespaces.
+ * all exports without an explicit wiomode= setting, and in all
+ * NFSD net namespaces.
  */
 
 static int nfsd_io_cache_write_get(void *data, u64 *val)
