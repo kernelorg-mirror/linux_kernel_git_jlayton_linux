@@ -41,6 +41,32 @@ corresponding IO operation's debugfs interface, e.g.::
 If you experiment with NFSD's IO modes on a recent kernel and have
 interesting results, please report them to linux-nfs@vger.kernel.org
 
+NFSD PER-EXPORT IO MODES
+========================
+
+In addition to the global debugfs knobs above, the IO mode may be set
+independently for each export via the ``riomode=`` and ``wiomode=``
+export options, e.g.::
+
+  /srv/data  client(ro,riomode=direct,wiomode=dontcache)
+
+Each option accepts one of ``buffered``, ``dontcache``, or ``direct``,
+with the same meanings as the corresponding debugfs values.
+
+An export without an explicit ``riomode=`` (or ``wiomode=``) setting
+follows the global ``io_cache_read`` (or ``io_cache_write``) knob, so
+the effective default for both reads and writes remains buffered IO.
+An explicit per-export setting pins that export's IO mode regardless
+of the global knob.
+
+As with the global setting, a read IO mode of ``dontcache`` or
+``direct`` disables the use of splice for reads via that export.
+
+The per-export settings are reported in
+/proc/net/rpc/nfsd.export/content, e.g.::
+
+  /srv/data  client(...,riomode=direct,wiomode=dontcache)
+
 NFSD DONTCACHE
 ==============
 
