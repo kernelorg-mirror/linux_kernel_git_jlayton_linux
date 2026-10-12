@@ -1183,6 +1183,38 @@ static bool nfsd_direct_read_ok(struct svc_rqst *rqstp, struct nfsd_file *nf)
 }
 
 /**
+ * nfsd_read_iomode - effective NFS READ I/O mode for an export
+ * @exp: export being accessed
+ *
+ * An export without an explicit riomode= setting follows the global
+ * nfsd_io_cache_read knob.
+ *
+ * Returns one of NFSD_IO_BUFFERED, NFSD_IO_DONTCACHE, or NFSD_IO_DIRECT.
+ */
+int nfsd_read_iomode(struct svc_export *exp)
+{
+	if (exp->ex_riomode == NFSD_IO_DEFAULT)
+		return nfsd_io_cache_read;
+	return exp->ex_riomode;
+}
+
+/**
+ * nfsd_write_iomode - effective NFS WRITE I/O mode for an export
+ * @exp: export being accessed
+ *
+ * An export without an explicit wiomode= setting follows the global
+ * nfsd_io_cache_write knob.
+ *
+ * Returns one of NFSD_IO_BUFFERED, NFSD_IO_DONTCACHE, or NFSD_IO_DIRECT.
+ */
+int nfsd_write_iomode(struct svc_export *exp)
+{
+	if (exp->ex_wiomode == NFSD_IO_DEFAULT)
+		return nfsd_io_cache_write;
+	return exp->ex_wiomode;
+}
+
+/**
  * nfsd_iter_read - Perform a VFS read using an iterator
  * @rqstp: RPC transaction context
  * @fhp: file handle of file to be read
@@ -1216,7 +1248,7 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	init_sync_kiocb(&kiocb, file);
 
-	switch (nfsd_io_cache_read) {
+	switch (nfsd_read_iomode(fhp->fh_export)) {
 	case NFSD_IO_BUFFERED:
 		break;
 	case NFSD_IO_DIRECT:
@@ -1494,7 +1526,7 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (verf)
 		nfsd_copy_write_verifier(verf, nn);
 
-	switch (nfsd_io_cache_write) {
+	switch (nfsd_write_iomode(exp)) {
 	case NFSD_IO_DIRECT:
 		host_err = nfsd_direct_write(rqstp, fhp, nf, nvecs,
 					     cnt, &kiocb);
@@ -1597,7 +1629,8 @@ __be32 nfsd_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		return err;
 
 	file = nf->nf_file;
-	if (file->f_op->splice_read && nfsd_read_splice_ok(rqstp))
+	if (file->f_op->splice_read && nfsd_read_splice_ok(rqstp) &&
+	    nfsd_read_iomode(fhp->fh_export) == NFSD_IO_BUFFERED)
 		err = nfsd_splice_read(rqstp, fhp, file, offset, count, eof);
 	else
 		err = nfsd_iter_read(rqstp, fhp, nf, offset, count, eof);
