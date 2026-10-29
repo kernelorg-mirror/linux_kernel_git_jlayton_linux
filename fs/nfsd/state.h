@@ -212,6 +212,8 @@ struct nfs4_cb_fattr {
 
 	bool ncf_file_modified;
 	u64 ncf_initial_cinfo;
+	/* server change attr after our last timestamp update, under inode_lock */
+	u64 ncf_srv_cinfo;
 	u64 ncf_cur_fsize;
 };
 
@@ -1041,7 +1043,7 @@ static inline bool try_to_expire_client(struct nfs4_client *clp)
 }
 
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
-		struct dentry *dentry, struct nfs4_delegation **pdp);
+		const struct path *path, struct nfs4_delegation **pdp);
 
 struct nfsd4_get_dir_delegation;
 struct nfs4_delegation *nfsd_get_dir_deleg(struct nfsd4_compound_state *cstate,

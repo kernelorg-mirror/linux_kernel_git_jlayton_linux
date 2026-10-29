@@ -103,6 +103,10 @@ struct nfsd_attrs {
 	struct posix_acl	*na_pacl;	/* input */
 	struct posix_acl	*na_dpacl;	/* input */
 
+	/* input: vet these FATTR4_WORD2_TIME_DELEG_* times under inode_lock */
+	struct nfs4_delegation	*na_deleg;
+	u32			na_deleg_attrs;
+
 	int			na_labelerr;	/* output */
 	int			na_dpaclerr;	/* output */
 	int			na_paclerr;	/* output */
@@ -177,6 +181,15 @@ int		nfsd_clone_file_range(struct file *src, u64 src_pos,
 				      u64 count, errseq_t *since);
 int		nfsd_clone_sync_range(struct file *src, struct file *dst,
 				      u64 dst_pos, u64 count, errseq_t since);
+void		nfsd4_vet_deleg_attrs(struct iattr *iattr,
+				      struct nfs4_delegation *dp,
+				      u32 deleg_attrs);
+#else
+static inline void nfsd4_vet_deleg_attrs(struct iattr *iattr,
+					 struct nfs4_delegation *dp,
+					 u32 deleg_attrs)
+{
+}
 #endif /* CONFIG_NFSD_V4 */
 __be32		nfsd_create_locked(struct svc_rqst *, struct svc_fh *,
 				struct nfsd_attrs *attrs, int type, dev_t rdev,

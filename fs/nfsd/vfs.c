@@ -631,6 +631,10 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		}
 	}
 
+	if (attr->na_deleg)
+		nfsd4_vet_deleg_attrs(iap, attr->na_deleg,
+				      attr->na_deleg_attrs);
+
 	for (retries = 1;;) {
 		struct iattr attrs;
 

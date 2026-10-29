@@ -1472,7 +1472,7 @@ static void nfsd4_finalize_deleg_timestamps(struct nfs4_delegation *dp, struct f
 	spin_unlock(&f->f_lock);
 
 	/* was it never written? */
-	if (!dp->dl_written)
+	if (!READ_ONCE(dp->dl_written))
 		return;
 
 	/* did it get a setattr for the timestamps at some point? */
@@ -7539,6 +7539,7 @@ nfs4_open_delegation(struct svc_rqst *rqstp, struct nfsd4_open *open,
 		open->op_delegate_type = deleg_ts ? OPEN_DELEGATE_WRITE_ATTRS_DELEG :
 						    OPEN_DELEGATE_WRITE;
 		dp->dl_cb_fattr.ncf_initial_cinfo = nfsd4_change_attribute(&stat);
+		dp->dl_cb_fattr.ncf_srv_cinfo = dp->dl_cb_fattr.ncf_initial_cinfo;
 		dp->dl_atime = stat.atime;
 		dp->dl_ctime = stat.ctime;
 		dp->dl_mtime = stat.mtime;
@@ -10718,15 +10719,81 @@ bool nfsd4_vet_deleg_time(struct timespec64 *req, const struct timespec64 *orig,
 	return true;
 }
 
-static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation *dp)
+/**
+ * nfsd4_vet_deleg_attrs - vet the delegated timestamps in a SETATTR
+ * @iattr: attributes to be set
+ * @dp: timestamp delegation held by the SETATTR's sender
+ * @deleg_attrs: FATTR4_WORD2_TIME_DELEG_* bits in the SETATTR
+ *
+ * Drop requested timestamps that don't pass nfsd4_vet_deleg_time(), and
+ * clamp ones in the future. The caller holds the inode_lock across this
+ * and applying @iattr, so cb_getattr_update_times() can't move dl_*time
+ * in between.
+ */
+void nfsd4_vet_deleg_attrs(struct iattr *iattr, struct nfs4_delegation *dp,
+			   u32 deleg_attrs)
 {
-	struct inode *inode = d_inode(dentry);
-	struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
-	struct iattr attrs = { };
+	struct inode *inode = dp->dl_stid.sc_file->fi_inode;
+	struct timespec64 now = current_time(inode);
+
+	lockdep_assert_held_write(&inode->i_rwsem);
+
+	if ((deleg_attrs & FATTR4_WORD2_TIME_DELEG_ACCESS) &&
+	    !nfsd4_vet_deleg_time(&iattr->ia_atime, &dp->dl_atime, &now))
+		iattr->ia_valid &= ~(ATTR_ATIME | ATTR_ATIME_SET);
+
+	if (deleg_attrs & FATTR4_WORD2_TIME_DELEG_MODIFY) {
+		if (nfsd4_vet_deleg_time(&iattr->ia_mtime, &dp->dl_mtime, &now)) {
+			iattr->ia_ctime = iattr->ia_mtime;
+			if (nfsd4_vet_deleg_time(&iattr->ia_ctime, &dp->dl_ctime, &now))
+				dp->dl_setattr = true;
+			else
+				iattr->ia_valid &= ~(ATTR_CTIME | ATTR_CTIME_SET);
+		} else {
+			iattr->ia_valid &= ~(ATTR_CTIME | ATTR_CTIME_SET |
+					     ATTR_MTIME | ATTR_MTIME_SET);
+		}
+	}
+}
+
+static int nfsd4_srv_cinfo(const struct path *path, u64 *cinfo)
+{
+	struct kstat stat;
 	int ret;
 
+	ret = vfs_getattr(path, &stat,
+			  STATX_MODE | STATX_CTIME | STATX_CHANGE_COOKIE,
+			  AT_STATX_SYNC_AS_STAT);
+	if (!ret)
+		*cinfo = nfsd4_change_attribute(&stat);
+	return ret;
+}
+
+static void cb_getattr_update_times(const struct path *path,
+				    struct nfs4_delegation *dp)
+{
+	struct inode *inode = d_inode(path->dentry);
+	struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
+	struct iattr attrs = { };
+	u64 cinfo;
+	int ret;
+
+	/* Serialize vetting against dl_*time with their update below */
+	inode_lock(inode);
 	if (deleg_attrs_deleg(dp->dl_type)) {
 		struct timespec64 now = current_time(inode);
+
+		/*
+		 * The holder's own SETATTRs, xattr changes, fallocates, LINKs
+		 * etc. don't break its delegation and don't show up in its
+		 * CB_GETATTR reply. Any change to the server's change
+		 * attribute other than our own timestamp updates is one of
+		 * those.
+		 */
+		if (!READ_ONCE(ncf->ncf_file_modified) &&
+		    (nfsd4_srv_cinfo(path, &cinfo) ||
+		     cinfo != ncf->ncf_srv_cinfo))
+			WRITE_ONCE(ncf->ncf_file_modified, true);
 
 		attrs.ia_atime = ncf->ncf_cb_atime;
 		attrs.ia_mtime = ncf->ncf_cb_mtime;
@@ -10740,24 +10807,55 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 			if (nfsd4_vet_deleg_time(&attrs.ia_ctime, &dp->dl_ctime, &now))
 				attrs.ia_valid |= ATTR_CTIME | ATTR_CTIME_SET;
 		}
+
+		/*
+		 * The times are the holder's, so don't hold the GETATTR
+		 * caller to the owner check for setting them.
+		 */
+		if (attrs.ia_valid)
+			attrs.ia_valid |= ATTR_FORCE;
 	} else {
 		attrs.ia_valid |= ATTR_MTIME | ATTR_CTIME;
 	}
 
 	if (!attrs.ia_valid)
-		return 0;
+		goto out_unlock;
 
 	attrs.ia_valid |= ATTR_DELEG;
-	inode_lock(inode);
-	ret = notify_change(&nop_mnt_idmap, dentry, &attrs, NULL);
+	ret = notify_change(&nop_mnt_idmap, path->dentry, &attrs, NULL);
+	if (ret) {
+		/* Don't fail the GETATTR over the holder's times */
+		pr_notice_ratelimited("nfsd: Unable to apply delegated timestamps on inode %02x:%02x:%llu: %d\n",
+				      MAJOR(inode->i_sb->s_dev),
+				      MINOR(inode->i_sb->s_dev),
+				      inode->i_ino, ret);
+		goto out_unlock;
+	}
+
+	/* Don't reapply the same times on every CB_GETATTR */
+	if (attrs.ia_valid & ATTR_ATIME_SET)
+		dp->dl_atime = attrs.ia_atime;
+	if (attrs.ia_valid & ATTR_CTIME_SET)
+		dp->dl_ctime = attrs.ia_ctime;
+	if (attrs.ia_valid & ATTR_MTIME_SET) {
+		dp->dl_mtime = attrs.ia_mtime;
+		/*
+		 * FMODE_NOCMTIME kept the holder's WRITEs from bumping the
+		 * change attribute; a newer delegated mtime is evidence of
+		 * them.
+		 */
+		WRITE_ONCE(ncf->ncf_file_modified, true);
+	}
+	if (deleg_attrs_deleg(dp->dl_type) && !nfsd4_srv_cinfo(path, &cinfo))
+		ncf->ncf_srv_cinfo = cinfo;
+out_unlock:
 	inode_unlock(inode);
-	return ret;
 }
 
 /**
  * nfsd4_deleg_getattr_conflict - Recall if GETATTR causes conflict
  * @rqstp: RPC transaction context
- * @dentry: dentry of inode to be checked for a conflict
+ * @path: path of inode to be checked for a conflict
  * @pdp: returned WRITE delegation, if one was found
  *
  * This function is called when there is a conflict between a write
@@ -10772,7 +10870,7 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
  * caller must put the reference.
  */
 __be32
-nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
+nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, const struct path *path,
 			     struct nfs4_delegation **pdp)
 {
 	struct nfsd_thread_local_info *ntli = rqstp->rq_private;
@@ -10780,7 +10878,7 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 	struct nfs4_delegation *dp = NULL;
 	struct file_lease *fl;
 	struct nfs4_cb_fattr *ncf;
-	struct inode *inode = d_inode(dentry);
+	struct inode *inode = d_inode(path->dentry);
 	__be32 status;
 
 	ctx = locks_inode_context(inode);
@@ -10830,25 +10928,32 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 		status = nfs_ok;
 		goto out_status;
 	}
-	if (!ncf->ncf_file_modified) {
+	if (!READ_ONCE(ncf->ncf_file_modified)) {
 		if (ncf->ncf_initial_cinfo != ncf->ncf_cb_change)
-			ncf->ncf_file_modified = true;
+			WRITE_ONCE(ncf->ncf_file_modified, true);
 		else if (i_size_read(inode) != ncf->ncf_cb_fsize)
-			ncf->ncf_file_modified = true;
+			WRITE_ONCE(ncf->ncf_file_modified, true);
+		/* FMODE_NOCMTIME hid flushed WRITEs from the change attribute */
+		else if (READ_ONCE(dp->dl_written))
+			WRITE_ONCE(ncf->ncf_file_modified, true);
 	}
-	if (ncf->ncf_file_modified) {
-		int err;
-
+	/*
+	 * The holder of a timestamp delegation is the authority for atime
+	 * and mtime (RFC 9754, section 5), even if change and size match.
+	 * Applying them can bump i_version, so for these delegations the
+	 * reply always takes its change attribute from ncf_initial_cinfo.
+	 */
+	if (READ_ONCE(ncf->ncf_file_modified) || deleg_attrs_deleg(dp->dl_type)) {
 		/*
 		 * Per section 10.4.3 of RFC 8881, the server would
 		 * not update the file's metadata with the client's
 		 * modified size
 		 */
-		err = cb_getattr_update_times(dentry, dp);
-		if (err) {
-			status = nfserrno(err);
-			goto out_status;
-		}
+		cb_getattr_update_times(path, dp);
+		/*
+		 * Set even if unmodified: another thread may set
+		 * ncf_file_modified before our caller encodes the reply.
+		 */
 		ncf->ncf_cur_fsize = ncf->ncf_cb_fsize;
 		*pdp = dp;
 		return nfs_ok;

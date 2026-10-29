@@ -1338,35 +1338,6 @@ nfsd4_secinfo_no_name_release(union nfsd4_op_u *u)
 		exp_put(u->secinfo_no_name.sin_exp);
 }
 
-/*
- * Validate that the requested timestamps are within the acceptable range. If
- * timestamp appears to be in the future, then it will be clamped to
- * current_time().
- */
-static void
-vet_deleg_attrs(struct nfsd4_setattr *setattr, struct nfs4_delegation *dp)
-{
-	struct timespec64 now = current_time(dp->dl_stid.sc_file->fi_inode);
-	struct iattr *iattr = &setattr->sa_iattr;
-
-	if ((setattr->sa_bmval[2] & FATTR4_WORD2_TIME_DELEG_ACCESS) &&
-	    !nfsd4_vet_deleg_time(&iattr->ia_atime, &dp->dl_atime, &now))
-		iattr->ia_valid &= ~(ATTR_ATIME | ATTR_ATIME_SET);
-
-	if (setattr->sa_bmval[2] & FATTR4_WORD2_TIME_DELEG_MODIFY) {
-		if (nfsd4_vet_deleg_time(&iattr->ia_mtime, &dp->dl_mtime, &now)) {
-			iattr->ia_ctime = iattr->ia_mtime;
-			if (nfsd4_vet_deleg_time(&iattr->ia_ctime, &dp->dl_ctime, &now))
-				dp->dl_setattr = true;
-			else
-				iattr->ia_valid &= ~(ATTR_CTIME | ATTR_CTIME_SET);
-		} else {
-			iattr->ia_valid &= ~(ATTR_CTIME | ATTR_CTIME_SET |
-					     ATTR_MTIME | ATTR_MTIME_SET);
-		}
-	}
-}
-
 static __be32
 nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	      union nfsd4_op_u *u)
@@ -1378,10 +1349,11 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		.na_pacl	= posix_acl_dup(setattr->sa_pacl),
 		.na_dpacl	= posix_acl_dup(setattr->sa_dpacl),
 	};
-	bool save_no_wcc, deleg_attrs;
 	struct nfs4_stid *st = NULL;
 	struct inode *inode;
 	__be32 status = nfs_ok;
+	bool save_no_wcc;
+	u32 deleg_attrs;
 	int err;
 
 	deleg_attrs = setattr->sa_bmval[2] & (FATTR4_WORD2_TIME_DELEG_ACCESS |
@@ -1407,13 +1379,13 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 
 			/* Only for *_ATTRS_DELEG flavors */
 			if (deleg_attrs_deleg(dp->dl_type)) {
-				vet_deleg_attrs(setattr, dp);
+				/* nfsd_setattr() vets them under inode_lock */
+				attrs.na_deleg = dp;
+				attrs.na_deleg_attrs = deleg_attrs;
 				status = nfs_ok;
 			}
 		}
 	}
-	if (st)
-		nfs4_put_stid(st);
 	if (status)
 		goto out_err;
 
@@ -1452,6 +1424,8 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 out:
 	fh_drop_write(&cstate->current_fh);
 out_err:
+	if (st)
+		nfs4_put_stid(st);
 	nfsd_attrs_free(&attrs);
 	return status;
 }
@@ -1463,8 +1437,9 @@ static void nfsd4_file_mark_deleg_written(struct nfs4_file *fi)
 		struct nfs4_delegation *dp = list_first_entry(&fi->fi_delegations,
 							      struct nfs4_delegation, dl_perfile);
 
+		/* Read locklessly by nfsd4_deleg_getattr_conflict() */
 		if (dp->dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG)
-			dp->dl_written = true;
+			WRITE_ONCE(dp->dl_written, true);
 	}
 	spin_unlock(&fi->fi_lock);
 }
