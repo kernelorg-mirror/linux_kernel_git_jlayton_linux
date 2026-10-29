@@ -10741,6 +10741,13 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 	inode_lock(inode);
 	ret = notify_change(&nop_mnt_idmap, dentry, &attrs, NULL);
 	inode_unlock(inode);
+
+	/*
+	 * FMODE_NOCMTIME kept the holder's WRITEs from bumping the change
+	 * attribute; a newer delegated mtime is the only evidence of them.
+	 */
+	if (!ret && (attrs.ia_valid & ATTR_MTIME))
+		ncf->ncf_file_modified = true;
 	return ret;
 }
 
@@ -10826,7 +10833,11 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 		else if (i_size_read(inode) != ncf->ncf_cb_fsize)
 			ncf->ncf_file_modified = true;
 	}
-	if (ncf->ncf_file_modified) {
+	/*
+	 * The holder of a timestamp delegation is the authority for atime
+	 * and mtime (RFC 9754, section 5), even if change and size match.
+	 */
+	if (ncf->ncf_file_modified || deleg_attrs_deleg(dp->dl_type)) {
 		int err;
 
 		/*
@@ -10839,6 +10850,8 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 			status = nfserrno(err);
 			goto out_status;
 		}
+	}
+	if (ncf->ncf_file_modified) {
 		ncf->ncf_cur_fsize = ncf->ncf_cb_fsize;
 		*pdp = dp;
 		return nfs_ok;
