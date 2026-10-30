@@ -2119,12 +2119,17 @@ scsih_sdev_init(struct scsi_device *sdev)
 	sas_target_priv_data = starget->hostdata;
 	sas_target_priv_data->num_luns++;
 	sas_device_priv_data->sas_target = sas_target_priv_data;
-	sdev->hostdata = sas_device_priv_data;
-	if ((sas_target_priv_data->flags & MPT_TARGET_FLAGS_RAID_COMPONENT))
-		sdev->no_uld_attach = 1;
 
 	shost = dev_to_shost(&starget->dev);
 	ioc = shost_priv(shost);
+
+	/* _scsih_block_io_device() may already see this sdev */
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	sdev->hostdata = sas_device_priv_data;
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
+	if ((sas_target_priv_data->flags & MPT_TARGET_FLAGS_RAID_COMPONENT))
+		sdev->no_uld_attach = 1;
+
 	if (starget->channel == RAID_CHANNEL) {
 		spin_lock_irqsave(&ioc->raid_device_lock, flags);
 		raid_device = _scsih_raid_device_find_by_id(ioc,
@@ -2176,6 +2181,7 @@ scsih_sdev_init(struct scsi_device *sdev)
 static void
 scsih_sdev_destroy(struct scsi_device *sdev)
 {
+	struct MPT3SAS_DEVICE *sas_device_priv_data;
 	struct MPT3SAS_TARGET *sas_target_priv_data;
 	struct scsi_target *starget;
 	struct Scsi_Host *shost;
@@ -2218,8 +2224,11 @@ scsih_sdev_destroy(struct scsi_device *sdev)
 		spin_unlock_irqrestore(&ioc->sas_device_lock, flags);
 	}
 
-	kfree(sdev->hostdata);
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	sas_device_priv_data = sdev->hostdata;
 	sdev->hostdata = NULL;
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
+	kfree(sas_device_priv_data);
 }
 
 /**
@@ -4234,26 +4243,30 @@ _scsih_block_io_device(struct MPT3SAS_ADAPTER *ioc, u16 handle)
 	struct MPT3SAS_DEVICE *sas_device_priv_data;
 	struct scsi_device *sdev;
 	struct _sas_device *sas_device;
+	unsigned long flags;
 
 	sas_device = mpt3sas_get_sdev_by_handle(ioc, handle);
 
 	shost_for_each_device(sdev, ioc->shost) {
+		spin_lock_irqsave(&ioc->block_lock, flags);
 		sas_device_priv_data = sdev->hostdata;
 		if (!sas_device_priv_data)
-			continue;
+			goto next;
 		if (sas_device_priv_data->sas_target->handle != handle)
-			continue;
+			goto next;
 		if (sas_device_priv_data->block)
-			continue;
+			goto next;
 		if (sas_device && sas_device->pend_sas_rphy_add)
-			continue;
+			goto next;
 		if (sas_device_priv_data->ignore_delay_remove) {
 			sdev_printk(KERN_INFO, sdev,
 			"%s skip device_block for SES handle(0x%04x)\n",
 			__func__, sas_device_priv_data->sas_target->handle);
-			continue;
+			goto next;
 		}
 		_scsih_internal_device_block(sdev, sas_device_priv_data);
+next:
+		spin_unlock_irqrestore(&ioc->block_lock, flags);
 	}
 
 	if (sas_device)
@@ -13539,6 +13552,7 @@ _scsih_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	spin_lock_init(&ioc->raid_device_lock);
 	spin_lock_init(&ioc->pcie_device_lock);
 	spin_lock_init(&ioc->diag_trigger_lock);
+	spin_lock_init(&ioc->block_lock);
 
 	INIT_LIST_HEAD(&ioc->sas_device_list);
 	INIT_LIST_HEAD(&ioc->sas_device_init_list);
