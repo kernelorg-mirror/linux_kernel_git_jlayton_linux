@@ -3882,6 +3882,7 @@ _scsih_internal_device_block(struct scsi_device *sdev,
 	sdev_printk(KERN_INFO, sdev, "device_block, handle(0x%04x)\n",
 	    sas_device_priv_data->sas_target->handle);
 	sas_device_priv_data->block = 1;
+	sas_device_priv_data->block_deadline = 0;
 
 	r = scsi_internal_device_block_nowait(sdev);
 	if (r == -EINVAL)
@@ -3907,6 +3908,7 @@ _scsih_internal_device_unblock(struct scsi_device *sdev,
 	sdev_printk(KERN_WARNING, sdev, "device_unblock and setting to running, "
 	    "handle(0x%04x)\n", sas_device_priv_data->sas_target->handle);
 	sas_device_priv_data->block = 0;
+	sas_device_priv_data->block_deadline = 0;
 	r = scsi_internal_device_unblock_nowait(sdev, SDEV_RUNNING);
 	if (r == -EINVAL) {
 		/* The device has been set to SDEV_RUNNING by SD layer during
@@ -3932,6 +3934,26 @@ _scsih_internal_device_unblock(struct scsi_device *sdev,
 			    " failed with return(%d) for handle(0x%04x)\n",
 			    r, sas_device_priv_data->sas_target->handle);
 	}
+}
+
+/**
+ * _scsih_clear_block_deadline - keep dnr_unblock_work off a blocked sdev
+ * @ioc: per adapter object
+ * @sas_device_priv_data: per device driver private data
+ *
+ * Called by the firmware event worker before it polls a blocked device
+ * with TURs.  The worker unblocks the device when polling ends, and
+ * must not have dnr_unblock_work send I/O to it in the meantime.
+ */
+static void
+_scsih_clear_block_deadline(struct MPT3SAS_ADAPTER *ioc,
+			    struct MPT3SAS_DEVICE *sas_device_priv_data)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	sas_device_priv_data->block_deadline = 0;
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
 }
 
 /**
@@ -3974,6 +3996,7 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 			continue;
 		}
 
+		_scsih_clear_block_deadline(ioc, sas_device_priv_data);
 		do {
 			pcie_device = mpt3sas_get_pdev_by_handle(ioc, sas_target->handle);
 			if (pcie_device && (!ioc->tm_custom_handling) &&
@@ -4089,6 +4112,7 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 		if (!sas_device_priv_data->block)
 			continue;
 
+		_scsih_clear_block_deadline(ioc, sas_device_priv_data);
 		do {
 			host_reset_completion_count = 0;
 			pcie_device = mpt3sas_get_pdev_by_handle(ioc, sas_target->handle);
@@ -4225,6 +4249,92 @@ _scsih_block_io_all_device(struct MPT3SAS_ADAPTER *ioc)
 	}
 }
 
+/*
+ * Margin on top of the firmware's report device missing delay before
+ * _scsih_dnr_unblock_work() releases a delayed not-responding block.
+ */
+#define MPT3SAS_DNR_BLOCK_SLACK	30
+
+static unsigned long
+_scsih_dnr_block_timeout(struct MPT3SAS_ADAPTER *ioc)
+{
+	return (max(ioc->device_missing_delay, ioc->pcie_device_missing_delay) +
+	    MPT3SAS_DNR_BLOCK_SLACK) * HZ;
+}
+
+/**
+ * _scsih_dnr_unblock_sdev - release an expired delayed not-responding block
+ * @ioc: per adapter object
+ * @sdev: scsi device struct
+ *
+ * Return: the deadline of an unexpired block on @sdev, or 0 if none.
+ */
+static unsigned long
+_scsih_dnr_unblock_sdev(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev)
+{
+	struct MPT3SAS_DEVICE *sas_device_priv_data;
+	unsigned long flags, deadline = 0;
+
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	sas_device_priv_data = sdev->hostdata;
+	if (!sas_device_priv_data || !sas_device_priv_data->block ||
+	    !sas_device_priv_data->block_deadline)
+		goto out;
+	if (time_before(jiffies, sas_device_priv_data->block_deadline)) {
+		deadline = sas_device_priv_data->block_deadline;
+		goto out;
+	}
+	sdev_printk(KERN_WARNING, sdev,
+	    "delayed not-responding block expired, handle(0x%04x)\n",
+	    sas_device_priv_data->sas_target->handle);
+	_scsih_internal_device_unblock(sdev, sas_device_priv_data);
+out:
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
+	return deadline;
+}
+
+/**
+ * _scsih_dnr_unblock_work - release expired delayed not-responding blocks
+ * @work: the dnr_unblock_work of the adapter
+ *
+ * Within the device missing delay, the firmware either reports the device
+ * as not responding, and the event callback unblocks it, or the device
+ * comes back, and only the firmware event worker unblocks it.  The worker
+ * may first need shost->scan_mutex or the SAS transport's host lock, and
+ * a scan holding those can have a command queued on the blocked sdev.
+ * Past the delay the block has no further use, so release it here.
+ */
+static void
+_scsih_dnr_unblock_work(struct work_struct *work)
+{
+	struct MPT3SAS_ADAPTER *ioc = container_of(to_delayed_work(work),
+	    struct MPT3SAS_ADAPTER, dnr_unblock_work);
+	struct scsi_device *sdev;
+	unsigned long deadline, next = 0;
+
+	if (ioc->remove_host)
+		return;
+	if (ioc->shost_recovery || ioc->pci_error_recovery) {
+		queue_delayed_work(system_dfl_wq, &ioc->dnr_unblock_work, HZ);
+		return;
+	}
+
+	shost_for_each_device(sdev, ioc->shost) {
+		deadline = _scsih_dnr_unblock_sdev(ioc, sdev);
+		if (deadline && (!next || time_before(deadline, next)))
+			next = deadline;
+	}
+
+	/*
+	 * A block made while this ran may have queued the work already,
+	 * with its own later deadline.  Pull the timer in to the earliest
+	 * one seen here; the next run reschedules for the rest.
+	 */
+	if (next)
+		mod_delayed_work(system_dfl_wq, &ioc->dnr_unblock_work,
+		    max_t(long, next - jiffies, 1));
+}
+
 /**
  * _scsih_block_io_device - set the device state to SDEV_BLOCK
  * @ioc: per adapter object
@@ -4238,7 +4348,9 @@ _scsih_block_io_device(struct MPT3SAS_ADAPTER *ioc, u16 handle)
 	struct MPT3SAS_DEVICE *sas_device_priv_data;
 	struct scsi_device *sdev;
 	struct _sas_device *sas_device;
+	unsigned long timeout = _scsih_dnr_block_timeout(ioc);
 	unsigned long flags;
+	bool blocked = false;
 
 	sas_device = mpt3sas_get_sdev_by_handle(ioc, handle);
 
@@ -4260,12 +4372,18 @@ _scsih_block_io_device(struct MPT3SAS_ADAPTER *ioc, u16 handle)
 			goto next;
 		}
 		_scsih_internal_device_block(sdev, sas_device_priv_data);
+		sas_device_priv_data->block_deadline = (jiffies + timeout) ?: 1;
+		blocked = true;
 next:
 		spin_unlock_irqrestore(&ioc->block_lock, flags);
 	}
 
 	if (sas_device)
 		sas_device_put(sas_device);
+
+	if (blocked)
+		queue_delayed_work(system_dfl_wq, &ioc->dnr_unblock_work,
+		    timeout);
 }
 
 /**
@@ -12549,6 +12667,7 @@ static void scsih_remove(struct pci_dev *pdev)
 		return;
 
 	ioc->remove_host = 1;
+	disable_delayed_work_sync(&ioc->dnr_unblock_work);
 
 	if (!pci_device_is_present(pdev)) {
 		mpt3sas_base_pause_mq_polling(ioc);
@@ -12649,6 +12768,7 @@ scsih_shutdown(struct pci_dev *pdev)
 		return;
 
 	ioc->remove_host = 1;
+	disable_delayed_work_sync(&ioc->dnr_unblock_work);
 
 	if (!pci_device_is_present(pdev)) {
 		mpt3sas_base_pause_mq_polling(ioc);
@@ -13562,6 +13682,7 @@ _scsih_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_LIST_HEAD(&ioc->delayed_tr_volume_list);
 	INIT_LIST_HEAD(&ioc->reply_queue_list);
 	INIT_LIST_HEAD(&ioc->port_table_list);
+	INIT_DELAYED_WORK(&ioc->dnr_unblock_work, _scsih_dnr_unblock_work);
 
 	sprintf(ioc->name, "%s_cm%d", ioc->driver_name, ioc->id);
 

@@ -469,6 +469,8 @@ struct MPT3SAS_TARGET {
  * @flags: MPT_DEVICE_XXX flags
  * @configured_lun: lun is configured
  * @block: device is in SDEV_BLOCK state
+ * @block_deadline: jiffies after which a delayed not-responding block is
+ *	released without waiting for the firmware event worker, 0 if none
  * @tlr_snoop_check: flag used in determining whether to disable TLR
  * @eedp_enable: eedp support enable bit
  * @eedp_type: 0(type_1), 1(type_2), 2(type_3)
@@ -486,6 +488,7 @@ struct MPT3SAS_DEVICE {
 	u8	ignore_delay_remove;
 	/* Iopriority Command Handling */
 	u8	ncq_prio_enable;
+	unsigned long	block_deadline;
 	/*
 	 * Bug workaround for SATL handling: the mpt2/3sas firmware
 	 * doesn't return BUSY or TASK_SET_FULL for subsequent
@@ -1165,6 +1168,7 @@ typedef void (*MPT3SAS_FLUSH_RUNNING_CMDS)(struct MPT3SAS_ADAPTER *ioc);
  *			pci resource handling
  * @fault_reset_work_q: fw fault workqueue
  * @fault_reset_work: fw fault work
+ * @dnr_unblock_work: releases expired delayed not-responding blocks
  * @firmware_event_thread: fw event work queue
  * @fw_event_lock:
  * @fw_event_list: list of fw events
@@ -1249,9 +1253,11 @@ typedef void (*MPT3SAS_FLUSH_RUNNING_CMDS)(struct MPT3SAS_ADAPTER *ioc);
  * @pcie_device_list: pcie device object list
  * @pcie_device_init_list: pcie device object list (used only at init time)
  * @pcie_device_lock:
- * @block_lock: serializes sdev blocking against sdev hostdata teardown
+ * @block_lock: serializes sdev blocking against dnr_unblock_work and
+ *	sdev hostdata teardown
  * @io_missing_delay: time for IO completed by fw when PDR enabled
  * @device_missing_delay: time for device missing by fw when PDR enabled
+ * @pcie_device_missing_delay: time for PCIe device missing by fw
  * @sas_id : used for setting volume target IDs
  * @pcie_target_id: used for setting pcie target IDs
  * @blocking_handles: bitmask used to identify which devices need blocking
@@ -1351,6 +1357,7 @@ struct MPT3SAS_ADAPTER {
 	/* fw fault handler */
 	struct workqueue_struct *fault_reset_work_q;
 	struct delayed_work fault_reset_work;
+	struct delayed_work dnr_unblock_work;
 
 	/* fw event handler */
 	struct workqueue_struct	*firmware_event_thread;
@@ -1489,6 +1496,7 @@ struct MPT3SAS_ADAPTER {
 	spinlock_t	raid_device_lock;
 	u8		io_missing_delay;
 	u16		device_missing_delay;
+	u16		pcie_device_missing_delay;
 	int		sas_id;
 	int		pcie_target_id;
 

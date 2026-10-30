@@ -5405,6 +5405,7 @@ _base_update_diag_trigger_pages(struct MPT3SAS_ADAPTER *ioc)
 /**
  * _base_assign_fw_reported_qd	- Get FW reported QD for SAS/SATA devices.
  *				- On failure set default QD values.
+ *				- Also get the PCIe device missing delay.
  * @ioc : per adapter object
  *
  * Returns 0 for success, non-zero for failure.
@@ -5416,6 +5417,7 @@ static int _base_assign_fw_reported_qd(struct MPT3SAS_ADAPTER *ioc)
 	Mpi2SasIOUnitPage1_t sas_iounit_pg1;
 	Mpi26PCIeIOUnitPage1_t pcie_iounit_pg1;
 	u16 depth;
+	u8 dmd;
 	int rc = 0;
 
 	ioc->max_wideport_qd = MPT3SAS_SAS_QUEUE_DEPTH;
@@ -5453,6 +5455,14 @@ static int _base_assign_fw_reported_qd(struct MPT3SAS_ADAPTER *ioc)
 	ioc->max_nvme_qd = (le16_to_cpu(pcie_iounit_pg1.NVMeMaxQueueDepth)) ?
 	    (le16_to_cpu(pcie_iounit_pg1.NVMeMaxQueueDepth)) :
 	    MPT3SAS_NVME_QUEUE_DEPTH;
+
+	dmd = pcie_iounit_pg1.DMDReportPCIe;
+	if (dmd & MPI26_PCIEIOUNIT1_DMDRPT_UNIT_16_SEC)
+		ioc->pcie_device_missing_delay =
+		    (dmd & MPI26_PCIEIOUNIT1_DMDRPT_DELAY_TIME_MASK) * 16;
+	else
+		ioc->pcie_device_missing_delay =
+		    dmd & MPI26_PCIEIOUNIT1_DMDRPT_DELAY_TIME_MASK;
 out:
 	dinitprintk(ioc, pr_err(
 	    "MaxWidePortQD: 0x%x MaxNarrowPortQD: 0x%x MaxSataQD: 0x%x MaxNvmeQD: 0x%x\n",
