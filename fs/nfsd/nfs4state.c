@@ -7292,6 +7292,26 @@ nfsd4_add_rdaccess_to_wrdeleg(struct svc_rqst *rqstp, struct nfsd4_open *open,
 }
 
 /*
+ * An exclusive create stores the verifier in atime and mtime, so the only
+ * real floor for the holder's times is the ctime. Vetting rejects a time
+ * equal to its floor, but one equal to the ctime must still replace the
+ * verifier.
+ */
+static void nfsd4_deleg_set_time_floors(struct nfs4_delegation *dp,
+					const struct nfsd4_open *open,
+					const struct kstat *stat)
+{
+	dp->dl_atime = stat->atime;
+	dp->dl_ctime = stat->ctime;
+	dp->dl_mtime = stat->mtime;
+	if (open->op_created &&
+	    nfsd4_create_is_exclusive(open->op_createmode)) {
+		dp->dl_atime = timespec64_sub(stat->ctime, ns_to_timespec64(1));
+		dp->dl_mtime = dp->dl_atime;
+	}
+}
+
+/*
  * The Linux NFS server does not offer write delegations to NFSv4.0
  * clients in order to avoid conflicts between write delegations and
  * GETATTRs requesting CHANGE or SIZE attributes.
@@ -7380,18 +7400,21 @@ nfs4_open_delegation(struct svc_rqst *rqstp, struct nfsd4_open *open,
 		open->op_delegate_type = deleg_ts ? OPEN_DELEGATE_WRITE_ATTRS_DELEG :
 						    OPEN_DELEGATE_WRITE;
 		dp->dl_cb_fattr.ncf_initial_cinfo = nfsd4_change_attribute(&stat);
-		dp->dl_atime = stat.atime;
-		dp->dl_ctime = stat.ctime;
-		dp->dl_mtime = stat.mtime;
+		nfsd4_deleg_set_time_floors(dp, open, &stat);
 		spin_lock(&f->f_lock);
 		if (deleg_ts)
 			f->f_mode |= FMODE_NOCMTIME;
 		spin_unlock(&f->f_lock);
 		trace_nfsd_deleg_write(&dp->dl_stid.sc_stateid);
 	} else {
-		open->op_delegate_type = deleg_ts && nfs4_delegation_stat(dp, currentfh, &stat) ?
-					 OPEN_DELEGATE_READ_ATTRS_DELEG : OPEN_DELEGATE_READ;
-		dp->dl_atime = stat.atime;
+		if (deleg_ts && nfs4_delegation_stat(dp, currentfh, &stat)) {
+			open->op_delegate_type = OPEN_DELEGATE_READ_ATTRS_DELEG;
+			nfsd4_deleg_set_time_floors(dp, open, &stat);
+		} else {
+			open->op_delegate_type = OPEN_DELEGATE_READ;
+			/* Without floors, don't accept delegated times */
+			dp->dl_type = OPEN_DELEGATE_READ;
+		}
 		trace_nfsd_deleg_read(&dp->dl_stid.sc_stateid);
 	}
 	nfs4_put_stid(&dp->dl_stid);
