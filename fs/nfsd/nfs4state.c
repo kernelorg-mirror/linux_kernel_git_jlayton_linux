@@ -6288,7 +6288,7 @@ move_to_close_lru(struct nfs4_ol_stateid *s, struct net *net)
 		nfs4_put_stid(&last->st_stid);
 }
 
-static noinline_for_stack struct nfs4_file *
+noinline_for_stack struct nfs4_file *
 nfsd4_file_hash_lookup(const struct svc_fh *fhp)
 {
 	struct inode *inode = d_inode(fhp->fh_dentry);

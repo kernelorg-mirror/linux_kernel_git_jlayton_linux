@@ -988,6 +988,7 @@ int nfsd_handle_dir_event(u32 mask, const struct inode *dir, const void *data,
 			  int data_type, const struct qstr *name);
 
 void put_nfs4_file(struct nfs4_file *fi);
+struct nfs4_file *nfsd4_file_hash_lookup(const struct svc_fh *fhp);
 extern void nfs4_put_cpntf_state(struct nfsd_net *nn,
 				 struct nfs4_cpntf_state *cps);
 extern __be32 manage_cpntf_state(struct nfsd_net *nn, stateid_t *st,

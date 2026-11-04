@@ -1438,6 +1438,25 @@ static void nfsd4_file_mark_deleg_written(struct nfs4_file *fi)
 	spin_unlock(&fi->fi_lock);
 }
 
+/*
+ * A COPY or CLONE into a file under a timestamp delegation is the holder's
+ * modification, like a WRITE: the holder supplies the c/mtime, and DELEGRETURN
+ * stamps them if it doesn't.
+ */
+static void nfsd4_copy_mark_deleg_written(struct svc_fh *fhp,
+					  struct nfsd_file *dst)
+{
+	struct nfs4_file *fi;
+
+	if (!(READ_ONCE(dst->nf_file->f_mode) & FMODE_NOCMTIME))
+		return;
+	fi = nfsd4_file_hash_lookup(fhp);
+	if (fi) {
+		nfsd4_file_mark_deleg_written(fi);
+		put_nfs4_file(fi);
+	}
+}
+
 static __be32
 nfsd4_write(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	    union nfsd4_op_u *u)
@@ -1576,8 +1595,8 @@ nfsd4_clone(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	}
 	status = nfserrno(host_err);
 
-	if (!status && (READ_ONCE(dst->nf_file->f_mode) & FMODE_NOCMTIME) != 0)
-		nfsd_update_cmtime_attr(dst->nf_file, 0);
+	if (!status)
+		nfsd4_copy_mark_deleg_written(&cstate->current_fh, dst);
 
 	nfsd_file_put(dst);
 	nfsd_file_put(src);
@@ -2198,6 +2217,10 @@ static void release_copy_files(struct nfsd4_copy *copy)
 		nfsd_file_put(copy->nf_dst);
 		copy->nf_dst = NULL;
 	}
+	if (copy->cp_dst_fi) {
+		put_nfs4_file(copy->cp_dst_fi);
+		copy->cp_dst_fi = NULL;
+	}
 }
 
 /*
@@ -2301,8 +2324,9 @@ do_callback:
 	set_bit(NFSD4_COPY_F_COMPLETED, &copy->cp_flags);
 	trace_nfsd_copy_async_done(async->cp_stid.sc_client, copy);
 	atomic_dec(&copy->cp_nn->pending_async_copies);
-	if (copy->cp_res.wr_bytes_written > 0 && copy->attr_update)
-		nfsd_update_cmtime_attr(copy->nf_dst->nf_file, 0);
+	/* Before CB_OFFLOAD tells the holder to supply the times */
+	if (copy->cp_res.wr_bytes_written > 0 && copy->cp_dst_fi)
+		nfsd4_file_mark_deleg_written(copy->cp_dst_fi);
 	nfsd4_send_cb_offload(async);
 	/* Drop the kthread's reference (taken in nfsd4_copy()); copy may be freed after this. */
 	nfs4_put_copy(async);
@@ -2382,9 +2406,13 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		 * the callback stateid zeroed.
 		 */
 		dup_copy_fields(copy, &async_copy->cp_copy);
-		if ((READ_ONCE(copy->nf_dst->nf_file->f_mode) &
-			       FMODE_NOCMTIME) != 0)
-			async_copy->cp_copy.attr_update = true;
+		/*
+		 * The copy thread has no filehandle. Look up the file now;
+		 * the thread marks its delegation if the copy writes.
+		 */
+		if (READ_ONCE(copy->nf_dst->nf_file->f_mode) & FMODE_NOCMTIME)
+			async_copy->cp_copy.cp_dst_fi =
+				nfsd4_file_hash_lookup(&cstate->current_fh);
 		memcpy(async_copy->cp_cb_offload.co_referring_sessionid.data,
 		       cstate->session->se_sessionid.data,
 		       NFS4_MAX_SESSIONID_LEN);
@@ -2415,10 +2443,9 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	} else {
 		status = nfsd4_do_copy(copy, copy->nf_src->nf_file,
 				       copy->nf_dst->nf_file, true);
-		if ((READ_ONCE(copy->nf_dst->nf_file->f_mode) &
-			       FMODE_NOCMTIME) != 0 &&
-				copy->cp_res.wr_bytes_written > 0)
-			nfsd_update_cmtime_attr(copy->nf_dst->nf_file, 0);
+		if (copy->cp_res.wr_bytes_written > 0)
+			nfsd4_copy_mark_deleg_written(&cstate->current_fh,
+						      copy->nf_dst);
 	}
 out:
 	trace_nfsd_copy_done(copy, status);

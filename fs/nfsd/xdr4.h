@@ -646,7 +646,8 @@ struct nfsd4_copy {
 
 	struct nfsd_file        *nf_src;
 	struct nfsd_file        *nf_dst;
-	bool			attr_update;
+	/* async: file whose timestamp delegation the copy marks written */
+	struct nfs4_file	*cp_dst_fi;
 
 	struct nfsd4_ssc_umount_item *ss_nsui;
 	struct nfs_fh		c_fh;
