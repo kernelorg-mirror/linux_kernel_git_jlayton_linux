@@ -7543,6 +7543,20 @@ nfs4_open_delegation(struct svc_rqst *rqstp, struct nfsd4_open *open,
 		dp->dl_atime = stat.atime;
 		dp->dl_ctime = stat.ctime;
 		dp->dl_mtime = stat.mtime;
+		/*
+		 * An exclusive create stores the verifier in atime and mtime,
+		 * so the only real floor for the holder's times is the ctime.
+		 * Vetting rejects a time equal to its floor, but one equal to
+		 * the ctime must still replace the verifier.
+		 */
+		if (open->op_created &&
+		    nfsd4_create_is_exclusive(open->op_createmode)) {
+			struct timespec64 floor;
+
+			floor = timespec64_sub(stat.ctime, ns_to_timespec64(1));
+			dp->dl_atime = floor;
+			dp->dl_mtime = floor;
+		}
 		spin_lock(&f->f_lock);
 		if (deleg_ts)
 			f->f_mode |= FMODE_NOCMTIME;

@@ -245,12 +245,6 @@ static void nfsd4_set_open_owner_reply_cache(struct nfsd4_compound_state *cstate
 			&resfh->fh_handle);
 }
 
-static inline bool nfsd4_create_is_exclusive(int createmode)
-{
-	return createmode == NFS4_CREATE_EXCLUSIVE ||
-		createmode == NFS4_CREATE_EXCLUSIVE4_1;
-}
-
 static struct file *do_lookup_open(struct path *parent,
 				   struct qstr *name,
 				   unsigned int oflags,
