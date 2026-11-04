@@ -10744,11 +10744,16 @@ void nfsd4_vet_deleg_attrs(struct iattr *iattr, struct nfs4_delegation *dp,
 
 	if (deleg_attrs & FATTR4_WORD2_TIME_DELEG_MODIFY) {
 		if (nfsd4_vet_deleg_time(&iattr->ia_mtime, &dp->dl_mtime, &now)) {
+			/* Don't let DELEGRETURN stamp over the holder's mtime */
+			dp->dl_setattr = true;
 			iattr->ia_ctime = iattr->ia_mtime;
-			if (nfsd4_vet_deleg_time(&iattr->ia_ctime, &dp->dl_ctime, &now))
-				dp->dl_setattr = true;
-			else
-				iattr->ia_valid &= ~(ATTR_CTIME | ATTR_CTIME_SET);
+			/*
+			 * dl_setattr keeps DELEGRETURN from stamping ctime,
+			 * and the change attribute may derive from it. Set
+			 * it to the current time instead.
+			 */
+			if (!nfsd4_vet_deleg_time(&iattr->ia_ctime, &dp->dl_ctime, &now))
+				iattr->ia_valid &= ~ATTR_CTIME_SET;
 		} else {
 			iattr->ia_valid &= ~(ATTR_CTIME | ATTR_CTIME_SET |
 					     ATTR_MTIME | ATTR_MTIME_SET);
@@ -10804,8 +10809,11 @@ static void cb_getattr_update_times(const struct path *path,
 		if (nfsd4_vet_deleg_time(&attrs.ia_mtime, &dp->dl_mtime, &now)) {
 			attrs.ia_valid |= ATTR_MTIME | ATTR_MTIME_SET;
 			attrs.ia_ctime = attrs.ia_mtime;
+			/* See nfsd4_vet_deleg_attrs() */
 			if (nfsd4_vet_deleg_time(&attrs.ia_ctime, &dp->dl_ctime, &now))
 				attrs.ia_valid |= ATTR_CTIME | ATTR_CTIME_SET;
+			else
+				attrs.ia_valid |= ATTR_CTIME;
 		}
 
 		/*
@@ -10845,6 +10853,8 @@ static void cb_getattr_update_times(const struct path *path,
 		 * them.
 		 */
 		WRITE_ONCE(ncf->ncf_file_modified, true);
+		/* Don't let DELEGRETURN stamp over the holder's mtime */
+		dp->dl_setattr = true;
 	}
 	if (deleg_attrs_deleg(dp->dl_type) && !nfsd4_srv_cinfo(path, &cinfo))
 		ncf->ncf_srv_cinfo = cinfo;
