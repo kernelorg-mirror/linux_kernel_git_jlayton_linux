@@ -648,6 +648,21 @@ nfs_delegated_ctime_after(struct inode *inode, const struct timespec64 *old)
 	return now;
 }
 
+/*
+ * The server stamped c/mtime itself (e.g. for a size change). Raise the
+ * cached ctime to the server's so that the next delegated stamp lands
+ * after it.
+ */
+static void nfs_delegated_ctime_raise(struct inode *inode,
+				      const struct nfs_fattr *fattr)
+{
+	struct timespec64 ctime = inode_get_ctime(inode);
+
+	if ((fattr->valid & NFS_ATTR_FATTR_CTIME) &&
+	    timespec64_compare(&fattr->ctime, &ctime) > 0)
+		inode_set_ctime_to_ts(inode, fattr->ctime);
+}
+
 static void nfs_set_timestamps_to_ts(struct inode *inode, struct iattr *attr)
 {
 	unsigned int cache_flags = 0;
@@ -860,6 +875,8 @@ void nfs_setattr_update_inode(struct inode *inode, struct iattr *attr,
 	if ((attr->ia_valid & ATTR_SIZE) != 0) {
 		if (!nfs_have_delegated_mtime(inode))
 			nfs_set_cache_invalid(inode, NFS_INO_INVALID_MTIME);
+		else
+			nfs_delegated_ctime_raise(inode, fattr);
 		nfs_set_cache_invalid(inode, NFS_INO_INVALID_BLOCKS);
 		nfs_inc_stats(inode, NFSIOS_SETATTRTRUNC);
 		nfs_vmtruncate(inode, attr->ia_size);
