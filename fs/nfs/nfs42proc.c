@@ -380,6 +380,7 @@ out:
  * @pos: destination offset
  * @len: copy length
  * @oldsize: length of the file prior to clone/copy
+ * @fattr: destination attributes from the reply, or NULL
  *
  * Punch a hole in the inode page cache, so that the NFS client will
  * know to retrieve new data.
@@ -387,7 +388,7 @@ out:
  * invalid cached values for change attribute, ctime, mtime and space used.
  */
 static void nfs42_copy_dest_done(struct file *file, loff_t pos, loff_t len,
-				 loff_t oldsize)
+				 loff_t oldsize, const struct nfs_fattr *fattr)
 {
 	struct inode *inode = file_inode(file);
 	struct address_space *mapping = file->f_mapping;
@@ -405,6 +406,9 @@ static void nfs42_copy_dest_done(struct file *file, loff_t pos, loff_t len,
 					     NFS_INO_INVALID_CTIME |
 					     NFS_INO_INVALID_MTIME |
 					     NFS_INO_INVALID_BLOCKS);
+	/* The server may have stamped c/mtime; stamp after it */
+	if (fattr && nfs_have_delegated_mtime(inode))
+		nfs_delegated_ctime_raise(inode, fattr);
 	spin_unlock(&inode->i_lock);
 	nfs_update_delegated_mtime(inode);
 }
@@ -506,7 +510,8 @@ static ssize_t _nfs42_proc_copy(struct file *src,
 			goto out;
 	}
 
-	nfs42_copy_dest_done(dst, pos_dst, res->write_res.count, oldsize_dst);
+	nfs42_copy_dest_done(dst, pos_dst, res->write_res.count, oldsize_dst,
+			     NULL);
 	nfs_invalidate_atime(src_inode);
 	status = res->write_res.count;
 out:
@@ -1311,7 +1316,8 @@ static int _nfs42_proc_clone(struct rpc_message *msg, struct file *src_f,
 		/* a zero-length count means clone to EOF in src */
 		if (count == 0 && res.dst_fattr->valid & NFS_ATTR_FATTR_SIZE)
 			count = nfs_size_to_loff_t(res.dst_fattr->size) - dst_offset;
-		nfs42_copy_dest_done(dst_f, dst_offset, count, oldsize_dst);
+		nfs42_copy_dest_done(dst_f, dst_offset, count, oldsize_dst,
+				     res.dst_fattr);
 		status = nfs_post_op_update_inode(dst_inode, res.dst_fattr);
 	}
 
