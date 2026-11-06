@@ -212,6 +212,8 @@ struct nfs4_cb_fattr {
 
 	bool ncf_file_modified;
 	u64 ncf_initial_cinfo;
+	/* server change attr after our last timestamp update, under inode_lock */
+	u64 ncf_srv_cinfo;
 	u64 ncf_cur_fsize;
 };
 
@@ -986,6 +988,7 @@ int nfsd_handle_dir_event(u32 mask, const struct inode *dir, const void *data,
 			  int data_type, const struct qstr *name);
 
 void put_nfs4_file(struct nfs4_file *fi);
+struct nfs4_file *nfsd4_file_hash_lookup(const struct svc_fh *fhp);
 extern void nfs4_put_cpntf_state(struct nfsd_net *nn,
 				 struct nfs4_cpntf_state *cps);
 extern __be32 manage_cpntf_state(struct nfsd_net *nn, stateid_t *st,
@@ -1041,7 +1044,7 @@ static inline bool try_to_expire_client(struct nfs4_client *clp)
 }
 
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
-		struct dentry *dentry, struct nfs4_delegation **pdp);
+		const struct path *path, struct nfs4_delegation **pdp);
 
 struct nfsd4_get_dir_delegation;
 struct nfs4_delegation *nfsd_get_dir_deleg(struct nfsd4_compound_state *cstate,

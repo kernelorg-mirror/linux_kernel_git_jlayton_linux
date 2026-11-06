@@ -280,6 +280,12 @@ struct nfsd4_open {
 	struct svc_rqst *op_rqstp;
 };
 
+static inline bool nfsd4_create_is_exclusive(int createmode)
+{
+	return createmode == NFS4_CREATE_EXCLUSIVE ||
+		createmode == NFS4_CREATE_EXCLUSIVE4_1;
+}
+
 struct nfsd4_open_confirm {
 	stateid_t	oc_req_stateid		/* request */;
 	u32		oc_seqid    		/* request */;
@@ -640,7 +646,8 @@ struct nfsd4_copy {
 
 	struct nfsd_file        *nf_src;
 	struct nfsd_file        *nf_dst;
-	bool			attr_update;
+	/* async: file whose timestamp delegation the copy marks written */
+	struct nfs4_file	*cp_dst_fi;
 
 	struct nfsd4_ssc_umount_item *ss_nsui;
 	struct nfs_fh		c_fh;
