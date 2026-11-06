@@ -15,6 +15,7 @@
 #include "cache.h"
 #include "xdr.h"
 #include "vfs.h"
+#include "fattr.h"
 #include "nfserr.h"
 #include "trace.h"
 
@@ -189,7 +190,7 @@ nfsd_mode_to_ftype(umode_t mode)
 	return NFNON;
 }
 
-static void
+void
 nfsd_stat_to_fattr(struct svc_rqst *rqstp, struct fattr *fattr,
 		   const struct kstat *stat, const struct svc_fh *fhp)
 {
@@ -682,7 +683,7 @@ nfsd_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		.na_iattr	= attr,
 	};
 	struct svc_export *exp;
-	struct dentry *dchild;
+	struct dentry *dchild, *dmnt;
 	struct inode *inode;
 	int type, mode;
 	__be32 status;
@@ -705,20 +706,26 @@ nfsd_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		status = nfserrno(PTR_ERR(dchild));
 		goto out_drop_write;
 	}
-	/*
-	 * If name exists we need to check for mountpoints
-	 */
 	exp = exp_get(fhp->fh_export);
+	/*
+	 * If name exists we need to check for mountpoints. Cross on a
+	 * separate reference: end_creating() unlocks the parent of the
+	 * dentry it is given, and only dchild has the locked directory
+	 * as its parent.
+	 */
+	dmnt = dget(dchild);
 	if (d_is_reg(dchild) &&
 	    unlikely(nfsd_mountpoint(dchild, exp))) {
-		status = nfsd_cross_mnt(rqstp, &dchild, &exp);
+		status = nfsd_cross_mnt(rqstp, &dmnt, &exp, 0);
 		if (status != nfs_ok) {
+			dput(dmnt);
 			exp_put(exp);
 			goto out;
 		}
 	}
 
-	status = fh_compose(resfhp, exp, dchild, fhp);
+	status = fh_compose(resfhp, exp, dmnt, fhp);
+	dput(dmnt);
 	exp_put(exp);
 	if (!status && d_really_is_negative(dchild))
 		status = nfserr_noent;
@@ -966,28 +973,6 @@ static __be32 nfsd_proc_link(struct svc_rqst *rqstp)
 	fh_put(ffhp);
 	fh_put(tfhp);
 	return rpc_success;
-}
-
-static char *nfsd_symlink_target(const struct xdr_buf *to)
-{
-	char *result;
-
-	result = kmalloc(to->len + 1, GFP_KERNEL);
-	if (!result)
-		return ERR_PTR(-ESERVERFAULT);
-	/* The target can span the receive buffer's head, pages, and tail */
-	if (read_bytes_from_xdr_buf(to, 0, result, to->len)) {
-		kfree(result);
-		return ERR_PTR(-ESERVERFAULT);
-	}
-	result[to->len] = '\0';
-
-	/* The VFS rejects a pathname that contains a NUL byte */
-	if (strlen(result) != to->len) {
-		kfree(result);
-		return ERR_PTR(-EINVAL);
-	}
-	return result;
 }
 
 /**

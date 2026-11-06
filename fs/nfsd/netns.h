@@ -11,6 +11,7 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 #include <linux/filelock.h>
+#include <linux/hashtable.h>
 #include <linux/nfs4.h>
 #include <linux/percpu_counter.h>
 #include <linux/percpu-refcount.h>
@@ -77,6 +78,11 @@ struct nfsd_net {
 	struct cache_detail *svc_expkey_cache;
 	struct cache_detail *svc_export_cache;
 
+	/* per-export statistics, shared by export cache entries */
+	spinlock_t export_stats_lock;
+	DECLARE_HASHTABLE(export_stats_hash, 6);
+	struct delayed_work export_stats_reaper;
+
 	struct cache_detail *idtoname_cache;
 	struct cache_detail *nametoid_cache;
 
@@ -137,7 +143,6 @@ struct nfsd_net {
 	/* protects blocked_locks_lru */
 	spinlock_t blocked_locks_lock;
 
-	struct file *rec_file;
 	const struct nfsd4_client_tracking_ops *client_tracking_ops;
 
 	time64_t nfsd4_lease;
@@ -154,9 +159,24 @@ struct nfsd_net {
 	 */
 	unsigned int min_threads;
 
-	u32 clientid_base;
-	u32 clientid_counter;
+	/*
+	 * Maximum size of an NFS READ or WRITE payload.  Zero until the
+	 * first server start in this namespace picks a default.
+	 */
+	unsigned int max_blksize;
+
 	u32 clverifier_counter;
+	atomic_t client_display_counter;
+
+	/*
+	 * Serializes this namespace's control plane: ->nfsd_serv and the
+	 * svc_serv members that hang off it (->sv_permsocks,
+	 * ->sv_temp_socks, thread counts), the NFSD_NET_* flags, and the
+	 * settables above that may only change while the server is down.
+	 *
+	 * Nests outside nfsd_global_mutex.
+	 */
+	struct mutex nfsd_mutex;
 
 	struct svc_info nfsd_info;
 #define nfsd_serv nfsd_info.serv
@@ -165,11 +185,7 @@ struct nfsd_net {
 	struct completion nfsd_net_confirm_done;
 	struct completion nfsd_net_free_done;
 
-	/*
-	 * clientid and stateid data for construction of net unique COPY
-	 * stateids.
-	 */
-	u32		s2s_cp_cl_id;
+	/* stateid data for construction of net unique COPY stateids */
 	struct idr	s2s_cp_stateids;
 	spinlock_t	s2s_cp_lock;
 	atomic_t	pending_async_copies;

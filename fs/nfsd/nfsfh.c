@@ -9,7 +9,7 @@
  */
 
 #include <linux/exportfs.h>
-#include <linux/nfs3.h>
+#include <linux/sunrpc/xdrgen/nfs3.h>
 
 #include <linux/sunrpc/svcauth_gss.h>
 #include <crypto/utils.h>
@@ -102,11 +102,26 @@ static bool nfsd_originating_port_ok(struct svc_rqst *rqstp,
 	return test_bit(RQ_SECURE, &rqstp->rq_flags);
 }
 
-static __be32 nfsd_setuser_and_check_port(struct svc_rqst *rqstp,
-					  struct svc_cred *cred,
-					  struct svc_export *exp)
+/**
+ * nfsd_check_port - check an export's secure-port requirement
+ * @rqstp: request being checked, or %NULL for a local caller
+ * @cred: credential whose flavor selects the export options to check
+ * @exp: export being checked
+ * @access: NFSD_MAY_* flags; %NFSD_MAY_BYPASS_PORT skips the check
+ *
+ * Context: Process context.
+ *
+ * A GSS flavor is exempt from the port check, so a denial reports
+ * NFS4ERR_WRONGSEC to an NFSv4 client.
+ *
+ * Return: %nfs_ok if allowed, %nfserr_wrongsec for an NFSv4 client,
+ * %nfserr_perm otherwise.
+ */
+__be32 nfsd_check_port(struct svc_rqst *rqstp, struct svc_cred *cred,
+		       struct svc_export *exp, int access)
 {
-	/* Check if the request originated from a secure port. */
+	if (access & NFSD_MAY_BYPASS_PORT)
+		return nfs_ok;
 	if (rqstp && !nfsd_originating_port_ok(rqstp, cred, exp)) {
 		if (IS_ENABLED(CONFIG_SUNRPC_DEBUG)) {
 			char buf[RPC_MAX_ADDRBUFLEN];
@@ -114,8 +129,20 @@ static __be32 nfsd_setuser_and_check_port(struct svc_rqst *rqstp,
 			dprintk("nfsd: request from insecure port %s!\n",
 			        svc_print_addr(rqstp, buf, sizeof(buf)));
 		}
-		return nfserr_perm;
+		return nfsd_v4client(rqstp) ? nfserr_wrongsec : nfserr_perm;
 	}
+	return nfs_ok;
+}
+
+static __be32 nfsd_setuser_and_check_port(struct svc_rqst *rqstp,
+					  struct svc_cred *cred,
+					  struct svc_export *exp, int access)
+{
+	__be32 status;
+
+	status = nfsd_check_port(rqstp, cred, exp, access);
+	if (status)
+		return status;
 
 	/* Set user creds for this exportpoint */
 	return nfserrno(nfsd_setuser(cred, exp));
@@ -202,7 +229,7 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 				 struct svc_cred *cred,
 				 struct auth_domain *client,
 				 struct auth_domain *gssclient,
-				 struct svc_fh *fhp)
+				 struct svc_fh *fhp, int access)
 {
 	struct knfsd_fh	*fh = &fhp->fh_handle;
 	struct fid *fid = NULL;
@@ -281,7 +308,7 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 					   new->cap_permitted);
 		put_cred(override_creds(new));
 	} else {
-		error = nfsd_setuser_and_check_port(rqstp, cred, exp);
+		error = nfsd_setuser_and_check_port(rqstp, cred, exp, access);
 		if (error)
 			goto out;
 	}
@@ -399,7 +426,7 @@ __fh_verify(struct svc_rqst *rqstp,
 
 	if (!fhp->fh_dentry) {
 		error = nfsd_set_fh_dentry(rqstp, net, cred, client,
-					   gssclient, fhp);
+					   gssclient, fhp, access);
 		if (error)
 			goto out;
 	}
@@ -428,7 +455,7 @@ __fh_verify(struct svc_rqst *rqstp,
 	if (error)
 		goto out;
 
-	error = nfsd_setuser_and_check_port(rqstp, cred, exp);
+	error = nfsd_setuser_and_check_port(rqstp, cred, exp, access);
 	if (error)
 		goto out;
 
@@ -471,9 +498,12 @@ __fh_verify(struct svc_rqst *rqstp,
 			&& exp->ex_path.dentry == dentry)
 		may_bypass_gss = true;
 
-	error = check_security_flavor(exp, rqstp, may_bypass_gss);
-	if (error)
-		goto out;
+	/* The xprtsec= policy applies even when the flavor check is bypassed. */
+	if (!(access & NFSD_MAY_BYPASS_FLAVOR)) {
+		error = check_security_flavor(exp, rqstp, may_bypass_gss);
+		if (error)
+			goto out;
+	}
 
 	svc_xprt_set_valid(rqstp->rq_xprt);
 

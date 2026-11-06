@@ -49,6 +49,7 @@
 #include "xdr4.h"
 #include "nfs4ctl.h"
 #include "vfs.h"
+#include "auth.h"
 #include "current_stateid.h"
 #include "netns.h"
 #include "acl.h"
@@ -342,7 +343,7 @@ nfsd4_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		    unlikely(nfsd_mountpoint(child, fhp->fh_export))) {
 			struct svc_export *exp = exp_get(fhp->fh_export);
 
-			status = nfsd_cross_mnt(rqstp, &child, &exp);
+			status = nfsd_cross_mnt(rqstp, &child, &exp, 0);
 			if (status == nfs_ok)
 				status = fh_compose(resfhp, exp,
 						    child, fhp);
@@ -702,13 +703,16 @@ nfsd4_open(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	status = nfsd4_process_open1(cstate, open, nn);
 	if (status == nfserr_replay_me) {
 		struct nfs4_replay *rp = &open->op_openowner->oo_owner.so_replay;
+
+		/* A cached error does not guarantee rp_openfh was set. */
+		if (rp->rp_status)
+			goto out;
 		fh_put(&cstate->current_fh);
 		fh_copy_shallow(&cstate->current_fh.fh_handle,
 				&rp->rp_openfh);
 		status = fh_verify(rqstp, &cstate->current_fh, 0, NFSD_MAY_NOP);
 		if (status)
-			dprintk("nfsd4_open: replay failed"
-				" restoring previous filehandle\n");
+			nfsd4_cstate_clear_replay(cstate);
 		else
 			status = nfserr_replay_me;
 	}
@@ -824,7 +828,9 @@ nfsd4_putfh(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	cstate->current_fh.fh_handle.fh_size = putfh->pf_fhlen;
 	memcpy(&cstate->current_fh.fh_handle.fh_raw, putfh->pf_fhval,
 	       putfh->pf_fhlen);
-	ret = fh_verify(rqstp, &cstate->current_fh, 0, NFSD_MAY_BYPASS_GSS);
+	/* need_wrongsec_check() decides whether the bypassed checks apply. */
+	ret = fh_verify(rqstp, &cstate->current_fh, 0,
+			NFSD_MAY_BYPASS_FLAVOR | NFSD_MAY_BYPASS_PORT);
 #ifdef CONFIG_NFSD_V4_2_INTER_SSC
 	if (ret == nfserr_stale && putfh->no_verify) {
 		SET_FH_FLAG(&cstate->current_fh, NFSD4_FH_FOREIGN);
@@ -847,14 +853,20 @@ static __be32
 nfsd4_restorefh(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		union nfsd4_op_u *u)
 {
+	bool crossed;
+
 	if (!cstate->save_fh.fh_dentry)
 		return nfserr_restorefh;
 
+	crossed = cstate->current_fh.fh_export != cstate->save_fh.fh_export;
 	fh_dup2(&cstate->current_fh, &cstate->save_fh);
 	if (HAS_CSTATE_FLAG(cstate, SAVED_STATE_ID_FLAG)) {
 		memcpy(&cstate->current_stateid, &cstate->save_stateid, sizeof(stateid_t));
 		SET_CSTATE_FLAG(cstate, CURRENT_STATE_ID_FLAG);
 	}
+	/* RFC 8881 Section 18.27.3 does not permit NFS4ERR_DELAY here. */
+	if (crossed && nfsd_setuser(&rqstp->rq_cred, cstate->current_fh.fh_export))
+		return nfserr_serverfault;
 	return nfs_ok;
 }
 
@@ -1076,7 +1088,17 @@ nfsd4_link(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	return status;
 }
 
-static __be32 nfsd4_do_lookupp(struct svc_rqst *rqstp, struct svc_fh *fh)
+/*
+ * RFC 8881 Section 2.6.3.1.1.5 forbids NFS4ERR_WRONGSEC from SECINFO.
+ * Section 18.29.3 has SECINFO report a denied lookup as NFS4ERR_ACCESS.
+ */
+static __be32 nfsd4_secinfo_status(__be32 status)
+{
+	return status == nfserr_wrongsec ? nfserr_acces : status;
+}
+
+static __be32 nfsd4_do_lookupp(struct svc_rqst *rqstp, struct svc_fh *fh,
+			       int access)
 {
 	struct svc_fh tmp_fh;
 	__be32 ret;
@@ -1090,14 +1112,14 @@ static __be32 nfsd4_do_lookupp(struct svc_rqst *rqstp, struct svc_fh *fh)
 		return nfserr_noent;
 	}
 	fh_put(&tmp_fh);
-	return nfsd_lookup(rqstp, fh, "..", 2, fh);
+	return __nfsd_lookup(rqstp, fh, "..", 2, fh, access);
 }
 
 static __be32
 nfsd4_lookupp(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	      union nfsd4_op_u *u)
 {
-	return nfsd4_do_lookupp(rqstp, &cstate->current_fh);
+	return nfsd4_do_lookupp(rqstp, &cstate->current_fh, NFSD_MAY_EXEC);
 }
 
 static __be32
@@ -1145,6 +1167,11 @@ nfsd4_read(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	status = nfs4_preprocess_stateid_op(rqstp, cstate, &cstate->current_fh,
 					&read->rd_stateid, RD_STATE,
 					&read->rd_nf, NULL);
+	if (status == nfserr_bad_stateid)
+		status = nfs4_preprocess_cpntf_stateid(rqstp, cstate,
+						       &cstate->current_fh,
+						       &read->rd_stateid,
+						       &read->rd_nf);
 
 	read->rd_rqstp = rqstp;
 	read->rd_fhp = &cstate->current_fh;
@@ -1244,14 +1271,18 @@ nfsd4_secinfo(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	struct dentry *dentry;
 	__be32 err;
 
-	err = fh_verify(rqstp, &cstate->current_fh, S_IFDIR, NFSD_MAY_EXEC);
+	err = fh_verify(rqstp, &cstate->current_fh, S_IFDIR,
+			NFSD_MAY_EXEC | NFSD_MAY_BYPASS_FLAVOR |
+			NFSD_MAY_BYPASS_PORT);
 	if (err)
-		return err;
+		return nfsd4_secinfo_status(err);
 	err = nfsd_lookup_dentry(rqstp, &cstate->current_fh,
 				    secinfo->si_name, secinfo->si_namelen,
-				    &exp, &dentry);
+				    &exp, &dentry,
+				    NFSD_MAY_EXEC | NFSD_MAY_BYPASS_FLAVOR |
+				    NFSD_MAY_BYPASS_PORT);
 	if (err)
-		return err;
+		return nfsd4_secinfo_status(err);
 	if (d_really_is_negative(dentry)) {
 		exp_put(exp);
 		err = nfserr_noent;
@@ -1272,11 +1303,17 @@ nfsd4_secinfo_no_name(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstat
 
 	switch (u->secinfo_no_name.sin_style) {
 	case NFS4_SECINFO_STYLE4_CURRENT_FH:
+		err = fh_verify(rqstp, &cstate->current_fh, 0,
+				NFSD_MAY_BYPASS_FLAVOR | NFSD_MAY_BYPASS_PORT);
+		if (err)
+			return nfsd4_secinfo_status(err);
 		break;
 	case NFS4_SECINFO_STYLE4_PARENT:
-		err = nfsd4_do_lookupp(rqstp, &cstate->current_fh);
+		err = nfsd4_do_lookupp(rqstp, &cstate->current_fh,
+				       NFSD_MAY_EXEC | NFSD_MAY_BYPASS_FLAVOR |
+				       NFSD_MAY_BYPASS_PORT);
 		if (err)
-			return err;
+			return nfsd4_secinfo_status(err);
 		break;
 	default:
 		return nfserr_inval;
@@ -1478,15 +1515,36 @@ nfsd4_verify_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		  stateid_t *src_stateid, struct nfsd_file **src,
 		  stateid_t *dst_stateid, struct nfsd_file **dst)
 {
+	bool crossed;
 	__be32 status;
 
 	if (!cstate->save_fh.fh_dentry)
 		return nfserr_nofilehandle;
 
+	/* A cached open stateid does not authorize the saved source export. */
+	status = check_nfsd_access(cstate->save_fh.fh_export, rqstp, 0);
+	if (status)
+		return status == nfserr_wrongsec ? nfserr_acces : status;
+	crossed = cstate->save_fh.fh_export != cstate->current_fh.fh_export;
+	if (crossed) {
+		status = nfserrno(nfsd_setuser(&rqstp->rq_cred,
+					       cstate->save_fh.fh_export));
+		if (status)
+			return status;
+	}
+
 	status = nfs4_preprocess_stateid_op(rqstp, cstate, &cstate->save_fh,
 					    src_stateid, RD_STATE, src, NULL);
 	if (status)
 		goto out;
+
+	/* The destination export was checked when current_fh was set. */
+	if (crossed) {
+		status = nfserrno(nfsd_setuser(&rqstp->rq_cred,
+					       cstate->current_fh.fh_export));
+		if (status)
+			goto out_put_src;
+	}
 
 	status = nfs4_preprocess_stateid_op(rqstp, cstate, &cstate->current_fh,
 					    dst_stateid, WR_STATE, dst, NULL);
@@ -1608,6 +1666,7 @@ void nfsd4_async_copy_reaper(struct nfsd_net *nn)
 			if (test_bit(NFSD4_COPY_F_OFFLOAD_DONE,
 				     &copy->cp_copy.cp_flags)) {
 				if (!--copy->cp_ttl) {
+					nfsd4_get_client(clp);
 					list_del_init(&copy->copies);
 					list_add(&copy->copies, &reaplist);
 				}
@@ -1618,10 +1677,14 @@ void nfsd4_async_copy_reaper(struct nfsd_net *nn)
 	spin_unlock(&nn->client_lock);
 
 	while (!list_empty(&reaplist)) {
+		struct nfs4_client *clp;
+
 		copy = list_first_entry(&reaplist, struct nfsd4_async_copy,
 					copies);
+		clp = copy->cp_stid.sc_client;
 		list_del_init(&copy->copies);
 		cleanup_async_copy(copy);
+		nfsd4_put_client(clp);
 	}
 }
 
@@ -1640,7 +1703,7 @@ static void release_copy_files(struct nfsd4_copy *copy);
 
 static void nfsd4_stop_copy(struct nfsd4_async_copy *copy)
 {
-	trace_nfsd_copy_async_cancel(&copy->cp_copy);
+	trace_nfsd_copy_async_cancel(copy->cp_stid.sc_client, &copy->cp_copy);
 	/*
 	 * Join the kthread before releasing its resources. The task_struct is
 	 * pinned in nfsd4_copy(), so kthread_stop() is safe even after the
@@ -1703,7 +1766,7 @@ static bool nfsd4_copy_on_sb(const struct nfsd4_copy *copy,
  * @net: net namespace containing the copy operations
  * @sb: targeted superblock
  *
- * Context: Caller must hold nfsd_mutex with NFSD_NET_UP set.  Outside
+ * Context: Caller must hold nn->nfsd_mutex with NFSD_NET_UP set.  Outside
  *          that window nn->conf_id_hashtbl is unallocated or freed,
  *          so the walk would dereference a NULL or dangling pointer.
  */
@@ -1715,7 +1778,7 @@ void nfsd4_cancel_copy_by_sb(struct net *net, struct super_block *sb)
 	unsigned int idhashval;
 	LIST_HEAD(to_cancel);
 
-	lockdep_assert_held(&nfsd_mutex);
+	lockdep_assert_held(&nn->nfsd_mutex);
 	spin_lock(&nn->client_lock);
 	for (idhashval = 0; idhashval < CLIENT_HASH_SIZE; idhashval++) {
 		struct list_head *head = &nn->conf_id_hashtbl[idhashval];
@@ -2232,7 +2295,7 @@ static int nfsd4_do_async_copy(void *data)
 	struct nfsd4_copy *copy = &async->cp_copy;
 	__be32 nfserr = nfs_ok;
 
-	trace_nfsd_copy_async(copy);
+	trace_nfsd_copy_async(async->cp_stid.sc_client, copy);
 	if (nfsd4_ssc_is_inter(copy)) {
 		struct file *filp;
 
@@ -2267,7 +2330,7 @@ do_callback:
 	 * joining.
 	 */
 	set_bit(NFSD4_COPY_F_COMPLETED, &copy->cp_flags);
-	trace_nfsd_copy_async_done(copy);
+	trace_nfsd_copy_async_done(async->cp_stid.sc_client, copy);
 	atomic_dec(&copy->cp_nn->pending_async_copies);
 	if (copy->cp_res.wr_bytes_written > 0 && copy->attr_update)
 		nfsd_update_cmtime_attr(copy->nf_dst->nf_file, 0);
@@ -2285,6 +2348,7 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	struct nfsd4_async_copy *async_copy = NULL;
 	struct nfsd4_copy *copy = &u->copy;
 	struct nfsd42_write_res *result;
+	struct inode *src, *dst;
 	__be32 status;
 
 	result = &copy->cp_res;
@@ -2292,7 +2356,7 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 
 	copy->cp_clp = cstate->clp;
 	if (nfsd4_ssc_is_inter(copy)) {
-		trace_nfsd_copy_inter(copy);
+		trace_nfsd_copy_inter(cstate->clp, copy);
 		if (!inter_copy_offload_enable || nfsd4_copy_is_sync(copy)) {
 			status = nfserr_notsupp;
 			goto out;
@@ -2303,11 +2367,20 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 			goto out;
 		}
 	} else {
-		trace_nfsd_copy_intra(copy);
+		trace_nfsd_copy_intra(cstate->clp, copy);
 		status = nfsd4_setup_intra_ssc(rqstp, cstate, copy);
 		if (status)
 			goto out;
 	}
+
+	/*
+	 * A copy can be done as a clone, which breaks both files. The source
+	 * of an inter-server copy is not local.
+	 */
+	dst = file_inode(copy->nf_dst->nf_file);
+	src = copy->nf_src ? file_inode(copy->nf_src->nf_file) : dst;
+	if (nfsd_break_layouts(dst, src != dst ? src : NULL))
+		goto out_err;
 
 	memcpy(&copy->fh, &cstate->current_fh.fh_handle,
 		sizeof(struct knfsd_fh));
@@ -2613,6 +2686,10 @@ nfsd4_seek(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	status = nfs4_preprocess_stateid_op(rqstp, cstate, &cstate->current_fh,
 					    &seek->seek_stateid,
 					    RD_STATE, &nf, NULL);
+	if (status == nfserr_bad_stateid)
+		status = nfs4_preprocess_cpntf_stateid(rqstp, cstate,
+						       &cstate->current_fh,
+						       &seek->seek_stateid, &nf);
 	if (status)
 		return status;
 
@@ -3205,37 +3282,72 @@ bool nfsd4_cache_this_op(struct nfsd4_op *op)
 	return OPDESC(op)->op_flags & OP_CACHEME;
 }
 
+/*
+ * RFC 8881 Section 2.6.3.1.1.7: only an OPEN by component name may
+ * report NFS4ERR_WRONGSEC itself.
+ */
+static bool open_handles_wrongsec(const struct nfsd4_op *op)
+{
+	/* A failed decode leaves op_claim_type unset. */
+	if (op->status != nfs_ok)
+		return false;
+	switch (op->u.open.op_claim_type) {
+	case NFS4_OPEN_CLAIM_NULL:
+	case NFS4_OPEN_CLAIM_DELEGATE_CUR:
+	case NFS4_OPEN_CLAIM_DELEGATE_PREV:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static bool need_wrongsec_check(struct svc_rqst *rqstp)
 {
 	struct nfsd4_compoundres *resp = rqstp->rq_resp;
 	struct nfsd4_compoundargs *argp = rqstp->rq_argp;
 	struct nfsd4_op *this = &argp->ops[resp->opcnt - 1];
-	struct nfsd4_op *next = &argp->ops[resp->opcnt];
+	struct nfsd4_op *next = NULL;
 	const struct nfsd4_operation *thisd = OPDESC(this);
 	const struct nfsd4_operation *nextd;
+	unsigned int i;
 
-	/*
-	 * Most ops check wronsec on our own; only the putfh-like ops
-	 * have special rules.
-	 */
+	/* Only put-filehandle operations need a deferred WRONGSEC check. */
 	if (!(thisd->op_flags & OP_IS_PUTFH_LIKE))
 		return false;
+
 	/*
-	 * rfc 5661 2.6.3.1.1.6: don't bother erroring out a
-	 * put-filehandle operation if we're not going to use the
-	 * result:
+	 * RFC 8881 Section 2.6.3.1.1.1: SAVEFH does not count as the
+	 * next operation.
 	 */
-	if (argp->opcnt == resp->opcnt)
+	for (i = resp->opcnt; i < argp->opcnt; i++) {
+		next = &argp->ops[i];
+		if (next->opnum != OP_SAVEFH)
+			break;
+	}
+
+	/* RFC 8881 Section 2.6.3.1.1.6: nothing uses the filehandle. */
+	if (i == argp->opcnt)
 		return false;
+
 	if (next->opnum == OP_ILLEGAL)
 		return false;
+	/*
+	 * RFC 7530 permits NFS4ERR_WRONGSEC from PUTFH but not from
+	 * SECINFO, and NFSv4.0 SECINFO leaves the current filehandle in
+	 * place for the next operation.
+	 */
+	if (resp->cstate.minorversion == 0 && next->opnum == OP_SECINFO)
+		return true;
+	if (next->opnum == OP_OPEN)
+		return !open_handles_wrongsec(next);
 	nextd = OPDESC(next);
 	/*
-	 * Rest of 2.6.3.1.1: certain operations will return WRONGSEC
-	 * errors themselves as necessary; others should check for them
-	 * now:
+	 * RFC 8881 Section 2.6.3.1.1.2: a later put-filehandle operation
+	 * replaces this one. Other marked operations check WRONGSEC
+	 * themselves.
 	 */
-	return !(nextd->op_flags & OP_HANDLES_WRONGSEC);
+	return !(nextd->op_flags &
+		  (OP_HANDLES_WRONGSEC | OP_IS_PUTFH_LIKE));
 }
 
 #ifdef CONFIG_NFSD_V4_2_INTER_SSC
@@ -3422,7 +3534,8 @@ nfsd4_proc_compound(struct svc_rqst *rqstp)
 
 			if (current_fh->fh_export &&
 					need_wrongsec_check(rqstp))
-				op->status = check_nfsd_access(current_fh->fh_export, rqstp);
+				op->status = check_nfsd_access(current_fh->fh_export,
+							       rqstp, 0);
 		}
 encode_op:
 		if (op->status == nfserr_replay_me) {
@@ -3896,7 +4009,6 @@ static const struct nfsd4_operation nfsd4_ops[] = {
 	},
 	[OP_LOCK] = {
 		.op_func = nfsd4_lock,
-		.op_release = nfsd4_lock_release,
 		.op_flags = OP_MODIFIES_SOMETHING |
 				OP_NONTRIVIAL_ERROR_ENCODE,
 		.op_name = "OP_LOCK",
@@ -3905,7 +4017,6 @@ static const struct nfsd4_operation nfsd4_ops[] = {
 	},
 	[OP_LOCKT] = {
 		.op_func = nfsd4_lockt,
-		.op_release = nfsd4_lockt_release,
 		.op_flags = OP_NONTRIVIAL_ERROR_ENCODE,
 		.op_name = "OP_LOCKT",
 		.op_rsize_bop = nfsd4_lock_rsize,
@@ -4022,7 +4133,7 @@ static const struct nfsd4_operation nfsd4_ops[] = {
 	},
 	[OP_SAVEFH] = {
 		.op_func = nfsd4_savefh,
-		.op_flags = OP_HANDLES_WRONGSEC | OP_MODIFIES_SOMETHING,
+		.op_flags = OP_MODIFIES_SOMETHING,
 		.op_name = "OP_SAVEFH",
 		.op_rsize_bop = nfsd4_only_status_rsize,
 	},
@@ -4293,9 +4404,10 @@ bool nfsd4_spo_must_allow(struct svc_rqst *rqstp)
 	opiter = resp->opcnt;
 	while (opiter < argp->opcnt) {
 		this = &argp->ops[opiter++];
-		if (test_bit(this->opnum, allow->u.longs) &&
-			cstate->clp->cl_mach_cred &&
-			nfsd4_mach_creds_match(cstate->clp, rqstp)) {
+		if (this->opnum <= LAST_NFS4_OP &&
+		    test_bit(this->opnum, allow->u.longs) &&
+		    cstate->clp->cl_mach_cred &&
+		    nfsd4_mach_creds_match(cstate->clp, rqstp)) {
 			cstate->spo_must_allowed = true;
 			return true;
 		}

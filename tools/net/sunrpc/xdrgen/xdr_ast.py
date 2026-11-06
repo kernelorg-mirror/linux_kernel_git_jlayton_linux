@@ -186,10 +186,6 @@ class _XdrFixedLengthOpaque(_XdrDeclaration):
         """Return list containing XDR width of type's components"""
         return ["XDR_QUADLEN(" + self.size + ")"]
 
-    def __post_init__(self):
-        max_widths[self.name] = self.max_width()
-        symbolic_widths[self.name] = self.symbolic_width()
-
 
 @dataclass
 class _XdrVariableLengthOpaque(_XdrDeclaration):
@@ -209,10 +205,6 @@ class _XdrVariableLengthOpaque(_XdrDeclaration):
         if self.maxsize != "0":
             widths.append("XDR_QUADLEN(" + self.maxsize + ")")
         return widths
-
-    def __post_init__(self):
-        max_widths[self.name] = self.max_width()
-        symbolic_widths[self.name] = self.symbolic_width()
 
 
 @dataclass
@@ -234,10 +226,6 @@ class _XdrString(_XdrDeclaration):
             widths.append("XDR_QUADLEN(" + self.maxsize + ")")
         return widths
 
-    def __post_init__(self):
-        max_widths[self.name] = self.max_width()
-        symbolic_widths[self.name] = self.symbolic_width()
-
 
 @dataclass
 class _XdrFixedLengthArray(_XdrDeclaration):
@@ -256,10 +244,6 @@ class _XdrFixedLengthArray(_XdrDeclaration):
         """Return list containing XDR width of type's components"""
         item_width = " + ".join(symbolic_widths[self.spec.type_name])
         return ["(" + self.size + " * (" + item_width + "))"]
-
-    def __post_init__(self):
-        max_widths[self.name] = self.max_width()
-        symbolic_widths[self.name] = self.symbolic_width()
 
 
 @dataclass
@@ -283,10 +267,6 @@ class _XdrVariableLengthArray(_XdrDeclaration):
             widths.append("(" + self.maxsize + " * (" + item_width + "))")
         return widths
 
-    def __post_init__(self):
-        max_widths[self.name] = self.max_width()
-        symbolic_widths[self.name] = self.symbolic_width()
-
 
 @dataclass
 class _XdrOptionalData(_XdrDeclaration):
@@ -304,12 +284,6 @@ class _XdrOptionalData(_XdrDeclaration):
         """Return list containing XDR width of type's components"""
         return ["XDR_bool"]
 
-    def __post_init__(self):
-        structs.add(self.name)
-        pass_by_reference.add(self.name)
-        max_widths[self.name] = self.max_width()
-        symbolic_widths[self.name] = self.symbolic_width()
-
 
 @dataclass
 class _XdrBasic(_XdrDeclaration):
@@ -326,10 +300,6 @@ class _XdrBasic(_XdrDeclaration):
     def symbolic_width(self) -> List:
         """Return list containing XDR width of type's components"""
         return symbolic_widths[self.spec.type_name]
-
-    def __post_init__(self):
-        max_widths[self.name] = self.max_width()
-        symbolic_widths[self.name] = self.symbolic_width()
 
 
 @dataclass
@@ -466,6 +436,9 @@ class _XdrTypedef(_XdrAst):
     def __post_init__(self):
         if isinstance(self.declaration, (_XdrVariableLengthOpaque, _XdrString)):
             varlen_object_typedefs[self.declaration.name] = self.declaration.maxsize
+        if isinstance(self.declaration, _XdrOptionalData):
+            structs.add(self.declaration.name)
+            pass_by_reference.add(self.declaration.name)
         if isinstance(self.declaration, _XdrBasic):
             new_type = self.declaration
             if isinstance(new_type.spec, _XdrDefinedType):
@@ -475,8 +448,8 @@ class _XdrTypedef(_XdrAst):
                     varlen_object_typedefs[new_type.name] = varlen_object_typedefs[
                         new_type.spec.type_name
                     ]
-                max_widths[new_type.name] = self.max_width()
-                symbolic_widths[new_type.name] = self.symbolic_width()
+        max_widths[self.declaration.name] = self.max_width()
+        symbolic_widths[self.declaration.name] = self.symbolic_width()
 
 
 def pages_member_maxsize(field: _XdrDeclaration):
@@ -541,11 +514,12 @@ class _XdrUnion(_XdrAst):
         if self.default:
             if self.default.arm.max_width() > max_width:
                 max_width = self.default.arm.max_width()
-        return 1 + max_width
+        return self.discriminant.max_width() + max_width
 
     def symbolic_width(self) -> List:
         """Return list containing XDR width of type's components"""
         max_width = 0
+        width = []
         for case in self.cases:
             if case.arm.max_width() > max_width:
                 max_width = case.arm.max_width()
@@ -554,7 +528,7 @@ class _XdrUnion(_XdrAst):
             if self.default.arm.max_width() > max_width:
                 max_width = self.default.arm.max_width()
                 width = self.default.arm.symbolic_width()
-        return symbolic_widths[self.discriminant.name] + width
+        return self.discriminant.symbolic_width() + width
 
     def __post_init__(self):
         structs.add(self.name)

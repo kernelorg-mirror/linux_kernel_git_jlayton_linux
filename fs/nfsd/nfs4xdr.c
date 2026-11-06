@@ -44,6 +44,7 @@
 #include <linux/xattr.h>
 #include <linux/vmalloc.h>
 #include <linux/nfsacl.h>
+#include <uapi/linux/nfsacl.h>
 
 #include <uapi/linux/xattr.h>
 
@@ -4675,7 +4676,7 @@ nfsd4_encode_entry4_fattr(struct nfsd4_readdir *cd, const char *name,
 		 * Different "."/".." handling?  Something else?
 		 * At least, add a comment here to explain....
 		 */
-		nfserr = nfsd_cross_mnt(cd->rd_rqstp, &dentry, &exp);
+		nfserr = nfsd_cross_mnt(cd->rd_rqstp, &dentry, &exp, 0);
 		if (nfserr)
 			goto out_put;
 		crossed = true;
@@ -4774,8 +4775,12 @@ nfsd4_encode_entry4(void *ccdv, const char *name, int namlen,
 		 * then in accordance with the spec, we fail the
 		 * entire READDIR operation(!)
 		 */
-		if (!(cd->rd_bmval[0] & FATTR4_WORD0_RDATTR_ERROR))
+		if (!(cd->rd_bmval[0] & FATTR4_WORD0_RDATTR_ERROR)) {
+			/* READDIR cannot return NFS4ERR_WRONGSEC itself. */
+			if (nfserr == nfserr_wrongsec)
+				nfserr = nfserr_acces;
 			goto fail;
+		}
 		if (nfsd4_encode_entry4_rdattr_error(xdr, nfserr)) {
 			nfserr = nfserr_toosmall;
 			goto fail;
@@ -5275,7 +5280,8 @@ static __be32 nfsd4_encode_splice_read(
 	}
 
 	/*
-	 * Prepare to encode subsequent operations.
+	 * Bound the stream at the space left in the head page so a later
+	 * xdr_reserve_space() cannot write past it.
 	 *
 	 * xdr_truncate_encode() is not safe to use after a successful
 	 * splice read has been done, so the following stream
@@ -5284,7 +5290,7 @@ static __be32 nfsd4_encode_splice_read(
 	space_left = min_t(int, (void *)xdr->end - (void *)xdr->p,
 				buf->buflen - buf->len);
 	buf->buflen = buf->len + space_left;
-	xdr->end = (__be32 *)((void *)xdr->end + space_left);
+	xdr->end = (__be32 *)((void *)xdr->p + space_left);
 
 	return nfs_ok;
 
@@ -5303,14 +5309,12 @@ static __be32 nfsd4_encode_readv(struct nfsd4_compoundres *resp,
 				 unsigned long maxcount)
 {
 	struct xdr_stream *xdr = resp->xdr;
-	unsigned int base = xdr->buf->page_len & ~PAGE_MASK;
 	unsigned int starting_len = xdr->buf->len;
 	__be32 zero = xdr_zero;
 	__be32 nfserr;
 
 	nfserr = nfsd_iter_read(resp->rqstp, read->rd_fhp, read->rd_nf,
-				read->rd_offset, &maxcount, base,
-				&read->rd_eof);
+				read->rd_offset, &maxcount, &read->rd_eof);
 	read->rd_length = maxcount;
 	if (nfserr)
 		return nfserr;
@@ -5367,7 +5371,8 @@ nfsd4_encode_read(struct nfsd4_compoundres *resp, __be32 nfserr,
 	maxcount = min_t(unsigned long, read->rd_length,
 			 (xdr->buf->buflen - xdr->buf->len));
 
-	if (file->f_op->splice_read && splice_ok)
+	if (file->f_op->splice_read && splice_ok &&
+	    nfsd_read_io_mode(read->rd_fhp->fh_export) == NFSD_IO_BUFFERED)
 		nfserr = nfsd4_encode_splice_read(resp, read, file, maxcount);
 	else
 		nfserr = nfsd4_encode_readv(resp, read, maxcount);
@@ -6265,7 +6270,8 @@ nfsd4_encode_read_plus_data(struct nfsd4_compoundres *resp,
 	maxcount = min_t(unsigned long, read->rd_length,
 			 (xdr->buf->buflen - xdr->buf->len));
 
-	if (file->f_op->splice_read && splice_ok)
+	if (file->f_op->splice_read && splice_ok &&
+	    nfsd_read_io_mode(read->rd_fhp->fh_export) == NFSD_IO_BUFFERED)
 		nfserr = nfsd4_encode_splice_read(resp, read, file, maxcount);
 	else
 		nfserr = nfsd4_encode_readv(resp, read, maxcount);
@@ -6440,6 +6446,7 @@ nfsd4_encode_listxattrs(struct nfsd4_compoundres *resp, __be32 nfserr,
 {
 	struct nfsd4_listxattrs *listxattrs = &u->listxattrs;
 	struct xdr_stream *xdr = resp->xdr;
+	unsigned int starting_len = xdr->buf->len;
 	u32 cookie_offset, count_offset, eof;
 	u32 left, xdrleft, slen, count;
 	u32 xdrlen, offset;
@@ -6547,6 +6554,8 @@ wreof:
 out:
 	if (listxattrs->lsxa_len)
 		kvfree(listxattrs->lsxa_buf);
+	if (status)
+		xdr_truncate_encode(xdr, starting_len);
 	return status;
 }
 
@@ -6711,6 +6720,7 @@ nfsd4_encode_operation(struct nfsd4_compoundres *resp, struct nfsd4_op *op)
 	struct svc_rqst *rqstp = resp->rqstp;
 	const struct nfsd4_operation *opdesc = op->opdesc;
 	unsigned int op_status_offset;
+	struct page **next_page;
 	nfsd4_enc encoder;
 
 	/*
@@ -6768,7 +6778,13 @@ nfsd4_encode_operation(struct nfsd4_compoundres *resp, struct nfsd4_op *op)
 		 */
 		warn_on_nonidempotent_op(op);
 		xdr_truncate_encode(xdr, op_status_offset + XDR_UNIT);
-	} else if (so) {
+		/* Keep a truncated reply out of so_replay. */
+		so = NULL;
+	}
+status:
+	op->status = nfsd4_map_status(op->status,
+				      resp->cstate.minorversion);
+	if (so) {
 		int len = xdr->buf->len - (op_status_offset + XDR_UNIT);
 
 		so->so_replay.rp_status = op->status;
@@ -6779,8 +6795,8 @@ nfsd4_encode_operation(struct nfsd4_compoundres *resp, struct nfsd4_op *op)
 			if (buf) {
 				so->so_replay.rp_buf = buf;
 			} else {
-				/* rp_buflen already zeroed; skip caching */
-				goto status;
+				/* A body this long would overrun rp_ibuf. */
+				len = 0;
 			}
 		} else if (so->so_replay.rp_buf != so->so_replay.rp_ibuf) {
 			nfs4_replay_free_cache(&so->so_replay);
@@ -6790,17 +6806,26 @@ nfsd4_encode_operation(struct nfsd4_compoundres *resp, struct nfsd4_op *op)
 					op_status_offset + XDR_UNIT,
 					so->so_replay.rp_buf, len);
 	}
-status:
-	op->status = nfsd4_map_status(op->status,
-				      resp->cstate.minorversion);
 	write_bytes_to_xdr_buf(xdr->buf, op_status_offset,
 			       &op->status, XDR_UNIT);
 release:
 	/*
-	 * Account for pages consumed while encoding this operation.
-	 * The xdr_stream primitives don't manage rq_next_page.
+	 * Account for pages consumed while encoding this operation. The
+	 * xdr_stream primitives don't manage rq_next_page, and
+	 * xdr->page_ptr does not account for page_base. XDR padding can
+	 * carry page_base + page_len past rq_page_end.
 	 */
-	rqstp->rq_next_page = xdr->page_ptr + 1;
+	next_page = xdr->buf->pages +
+		DIV_ROUND_UP(xdr->buf->page_base + xdr->buf->page_len,
+			     PAGE_SIZE);
+	next_page = min(next_page, rqstp->rq_page_end);
+	/*
+	 * A failed splice read leaves page cache pages in rq_respages
+	 * above the truncated payload. Keep them below rq_next_page so
+	 * that svc_rqst_release_pages() releases them.
+	 */
+	if (!op->status || next_page > rqstp->rq_next_page)
+		rqstp->rq_next_page = next_page;
 }
 
 /**

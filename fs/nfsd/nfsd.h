@@ -16,6 +16,7 @@
 #include <linux/sunrpc/svc_xprt.h>
 
 #include <uapi/linux/nfsd/debug.h>
+#include <uapi/linux/nfsd_netlink.h>
 
 #undef ifdebug
 #ifdef CONFIG_SUNRPC_DEBUG
@@ -46,7 +47,7 @@ enum {
 
 extern struct svc_program	nfsd_programs[];
 extern const struct svc_version	nfsd_version2, nfsd_version3, nfsd_version4;
-extern struct mutex		nfsd_mutex;
+extern struct mutex		nfsd_global_mutex;
 extern atomic_t			nfsd_th_cnt;		/* number of available threads */
 
 extern const struct seq_operations nfs_exports_op;
@@ -134,16 +135,24 @@ extern bool nfsd_disable_splice_read __read_mostly;
 extern bool nfsd_delegts_enabled __read_mostly;
 
 enum {
-	/* Any new NFSD_IO enum value must be added at the end */
-	NFSD_IO_BUFFERED,
-	NFSD_IO_DONTCACHE,
-	NFSD_IO_DIRECT,
+	/* Values are uAPI: per-export modes are sent over netlink */
+	NFSD_IO_BUFFERED	= NFSD_IO_MODE_BUFFERED,
+	NFSD_IO_DONTCACHE	= NFSD_IO_MODE_DONTCACHE,
+	NFSD_IO_DIRECT		= NFSD_IO_MODE_DIRECT,
+	/*
+	 * Kernel-internal only: a per-export mode of NFSD_IO_DEFAULT
+	 * means "follow the global nfsd_io_cache_read/write knob".
+	 * It is never sent across the kernel-userspace interface.
+	 * It is -1 so that it stays distinct from all present and
+	 * future mode values.
+	 */
+	NFSD_IO_DEFAULT = -1,
 };
 
 extern u64 nfsd_io_cache_read __read_mostly;
 extern u64 nfsd_io_cache_write __read_mostly;
-
-extern int nfsd_max_blksize;
+extern u32 nfsd_direct_misaligned_min_bytes __read_mostly;
+extern bool nfsd_direct_misaligned_dontcache __read_mostly;
 
 bool nfsd_v4client(struct svc_rqst *rqstp);
 

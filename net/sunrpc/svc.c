@@ -483,6 +483,8 @@ EXPORT_SYMBOL_GPL(svc_create);
  * @prog:  Array of RPC programs the new service will handle
  * @nprogs: Number of programs in the array
  * @stats: the stats struct if desired
+ * @net: network namespace the service belongs to. No reference is
+ *	 held, so the caller tears the serv down before @net exits.
  * @bufsize: maximum message size for @prog
  * @threadfn: a function to service RPC requests for @prog
  *
@@ -491,6 +493,7 @@ EXPORT_SYMBOL_GPL(svc_create);
 struct svc_serv *svc_create_pooled(struct svc_program *prog,
 				   unsigned int nprogs,
 				   struct svc_stat *stats,
+				   struct net *net,
 				   unsigned int bufsize,
 				   int (*threadfn)(void *data))
 {
@@ -504,6 +507,7 @@ struct svc_serv *svc_create_pooled(struct svc_program *prog,
 	if (!serv)
 		goto out_err;
 	serv->sv_is_pooled = true;
+	serv->sv_net = net;
 	return serv;
 out_err:
 	svc_pool_map_put();
@@ -780,6 +784,12 @@ svc_stop_kthreads(struct svc_serv *serv, struct svc_pool *pool, int nrservs)
 	do {
 		set_bit(SP_VICTIM_REMAINS, &pool->sp_flags);
 		set_bit(SP_NEED_VICTIM, &pool->sp_flags);
+		/*
+		 * Order the flag updates before the idle list and task
+		 * state checks. Pairs with set_current_state() and
+		 * llist_add() in svc_thread_wait_for_work().
+		 */
+		smp_mb__after_atomic();
 		svc_pool_wake_idle_thread(pool);
 		wait_on_bit(&pool->sp_flags, SP_VICTIM_REMAINS, TASK_IDLE);
 		nrservs++;
@@ -1883,53 +1893,3 @@ int svc_encode_result_payload(struct svc_rqst *rqstp, unsigned int offset,
 							   length);
 }
 EXPORT_SYMBOL_GPL(svc_encode_result_payload);
-
-/**
- * svc_fill_symlink_pathname - Construct pathname argument for VFS symlink call
- * @rqstp: svc_rqst to operate on
- * @first: buffer containing first section of pathname
- * @p: buffer containing remaining section of pathname
- * @total: total length of the pathname argument
- *
- * The VFS symlink API demands a NUL-terminated pathname in mapped memory.
- * Returns pointer to a NUL-terminated string, or an ERR_PTR. Caller must free
- * the returned string.
- */
-char *svc_fill_symlink_pathname(struct svc_rqst *rqstp, struct kvec *first,
-				void *p, size_t total)
-{
-	size_t len, remaining;
-	char *result, *dst;
-
-	result = kmalloc(total + 1, GFP_KERNEL);
-	if (!result)
-		return ERR_PTR(-ESERVERFAULT);
-
-	dst = result;
-	remaining = total;
-
-	len = min_t(size_t, total, first->iov_len);
-	if (len) {
-		memcpy(dst, first->iov_base, len);
-		dst += len;
-		remaining -= len;
-	}
-
-	if (remaining) {
-		len = min_t(size_t, remaining, PAGE_SIZE);
-		memcpy(dst, p, len);
-		dst += len;
-	}
-
-	*dst = '\0';
-
-	/* Sanity check: Linux doesn't allow the pathname argument to
-	 * contain a NUL byte.
-	 */
-	if (strlen(result) != total) {
-		kfree(result);
-		return ERR_PTR(-EINVAL);
-	}
-	return result;
-}
-EXPORT_SYMBOL_GPL(svc_fill_symlink_pathname);

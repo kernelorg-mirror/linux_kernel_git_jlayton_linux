@@ -21,9 +21,11 @@
 #include <linux/nfs3.h>
 #include <linux/nfs_fs.h>
 #include <linux/nfsacl.h>
+#include <uapi/linux/nfsacl.h>
 #include <linux/nfs_common.h>
 
 #include "internal.h"
+#include "nfs3_fs.h"
 #include "nfstrace.h"
 
 #define NFSDBG_FACILITY		NFSDBG_XDR

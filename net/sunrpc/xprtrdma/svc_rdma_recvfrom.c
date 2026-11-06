@@ -235,6 +235,24 @@ void svc_rdma_recv_ctxt_put(struct svcxprt_rdma *rdma,
 }
 
 /**
+ * svc_rdma_recv_ctxts_stranded_release - Release stranded recv_ctxts
+ * @rdma: svcxprt_rdma being torn down
+ *
+ * Context: transport destructor only, after the QP has been drained
+ * and before its rw contexts and recv_ctxts are destroyed.
+ */
+void svc_rdma_recv_ctxts_stranded_release(struct svcxprt_rdma *rdma)
+{
+	struct svc_rdma_recv_ctxt *ctxt;
+	struct llist_node *node;
+
+	while ((node = llist_del_first(&rdma->sc_recv_stranded_ctxts)) != NULL) {
+		ctxt = llist_entry(node, struct svc_rdma_recv_ctxt, rc_node);
+		svc_rdma_recv_ctxt_put(rdma, ctxt);
+	}
+}
+
+/**
  * svc_rdma_release_ctxt - Release transport-specific per-rqst resources
  * @xprt: the transport which owned the context
  * @vctxt: the context from rqstp->rq_xprt_ctxt or dr->xprt_ctxt
@@ -685,16 +703,22 @@ static void svc_rdma_get_inv_rkey(struct svcxprt_rdma *rdma,
  * On successful exit, head[0] points to first byte past the
  * RPC-over-RDMA header. For RDMA_MSG, this is the RPC message.
  *
- * The length of the RPC-over-RDMA header is returned.
- *
  * Assumptions:
  * - The transport header is entirely contained in the head iovec.
+ *
+ * Return:
+ *   %0: The message is discarded without a reply.
+ *   Negative errno: The caller sends an RDMA_ERROR reply.
+ *   Otherwise, the length in bytes of the RPC-over-RDMA header.
  */
 static int svc_rdma_xdr_decode_req(struct xdr_buf *rq_arg,
 				   struct svc_rdma_recv_ctxt *rctxt)
 {
 	__be32 *p, *rdma_argp;
 	unsigned int hdr_len;
+
+	if (unlikely(rq_arg->len < RPCRDMA_HDRLEN_MIN))
+		goto out_short;
 
 	rdma_argp = rq_arg->head[0].iov_base;
 	xdr_init_decode(&rctxt->rc_stream, rq_arg, rdma_argp, NULL);
@@ -740,7 +764,7 @@ static int svc_rdma_xdr_decode_req(struct xdr_buf *rq_arg,
 
 out_short:
 	trace_svcrdma_decode_short_err(rctxt, rq_arg->len);
-	return -EINVAL;
+	return 0;
 
 out_version:
 	trace_svcrdma_decode_badvers_err(rctxt, rdma_argp);

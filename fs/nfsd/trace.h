@@ -142,7 +142,9 @@ DEFINE_NFSD_DYNTHREAD_EVENT(trylock_fail);
 		{ NFSD_MAY_BYPASS_GSS,		"BYPASS_GSS" },		\
 		{ NFSD_MAY_READ_IF_EXEC,	"READ_IF_EXEC" },	\
 		{ NFSD_MAY_64BIT_COOKIE,	"64BIT_COOKIE" },	\
-		{ NFSD_MAY_LOCALIO,		"LOCALIO" })
+		{ NFSD_MAY_LOCALIO,		"LOCALIO" },	\
+		{ NFSD_MAY_BYPASS_FLAVOR,	"BYPASS_FLAVOR" },	\
+		{ NFSD_MAY_BYPASS_PORT,		"BYPASS_PORT" })
 
 TRACE_EVENT(nfsd_compound,
 	TP_PROTO(
@@ -500,18 +502,167 @@ DEFINE_EVENT(nfsd_io_class, nfsd_##name,	\
 
 DEFINE_NFSD_IO_EVENT(read_start);
 DEFINE_NFSD_IO_EVENT(read_splice);
-DEFINE_NFSD_IO_EVENT(read_vector);
 DEFINE_NFSD_IO_EVENT(read_direct);
 DEFINE_NFSD_IO_EVENT(read_io_done);
 DEFINE_NFSD_IO_EVENT(read_done);
 DEFINE_NFSD_IO_EVENT(write_start);
 DEFINE_NFSD_IO_EVENT(write_opened);
-DEFINE_NFSD_IO_EVENT(write_direct);
-DEFINE_NFSD_IO_EVENT(write_vector);
 DEFINE_NFSD_IO_EVENT(write_io_done);
 DEFINE_NFSD_IO_EVENT(write_done);
+
+DECLARE_EVENT_CLASS(nfsd_io_kiocb_class,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh	*fhp,
+		 u64		offset,
+		 u32		len,
+		 int		ki_flags),
+	TP_ARGS(rqstp, fhp, offset, len, ki_flags),
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(u32, fh_hash)
+		__field(u64, offset)
+		__field(u32, len)
+	),
+	TP_fast_assign(
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__entry->fh_hash = knfsd_fh_hash(&fhp->fh_handle);
+		__entry->offset = offset;
+		__entry->len = len;
+	),
+	TP_printk("xid=0x%08x fh_hash=0x%08x offset=%llu len=%u",
+		  __entry->xid, __entry->fh_hash,
+		  __entry->offset, __entry->len)
+)
+
+#define DEFINE_NFSD_IO_KIOCB_EVENT(name, cond)			\
+DEFINE_EVENT_CONDITION(nfsd_io_kiocb_class, nfsd_##name,	\
+	TP_PROTO(struct svc_rqst *rqstp,			\
+		 struct svc_fh	*fhp,				\
+		 u64		offset,				\
+		 u32		len,				\
+		 int		ki_flags),			\
+	TP_ARGS(rqstp, fhp, offset, len, ki_flags),		\
+	TP_CONDITION(cond))
+
+DEFINE_NFSD_IO_KIOCB_EVENT(read_vector, !(ki_flags & IOCB_DONTCACHE));
+DEFINE_NFSD_IO_KIOCB_EVENT(read_dontcache, ki_flags & IOCB_DONTCACHE);
+DEFINE_NFSD_IO_KIOCB_EVENT(write_direct, ki_flags & IOCB_DIRECT);
+DEFINE_NFSD_IO_KIOCB_EVENT(write_dontcache,
+			   (ki_flags & (IOCB_DIRECT | IOCB_DONTCACHE)) ==
+			   IOCB_DONTCACHE);
+DEFINE_NFSD_IO_KIOCB_EVENT(write_vector,
+			   !(ki_flags & (IOCB_DIRECT | IOCB_DONTCACHE)));
 DEFINE_NFSD_IO_EVENT(commit_start);
 DEFINE_NFSD_IO_EVENT(commit_done);
+
+DECLARE_EVENT_CLASS(nfsd_write_dio_class,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh *fhp,
+		 u64 offset,
+		 u32 len,
+		 u32 offset_align,
+		 u32 mem_align,
+		 u32 mem_offset,
+		 u32 start,
+		 u32 middle,
+		 u32 end),
+	TP_ARGS(rqstp, fhp, offset, len, offset_align, mem_align, mem_offset,
+		start, middle, end),
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(u32, fh_hash)
+		__field(u64, offset)
+		__field(u32, len)
+		__field(u32, offset_align)
+		__field(u32, mem_align)
+		__field(u32, mem_offset)
+		__field(u32, start)
+		__field(u32, middle)
+		__field(u32, end)
+	),
+	TP_fast_assign(
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__entry->fh_hash = knfsd_fh_hash(&fhp->fh_handle);
+		__entry->offset = offset;
+		__entry->len = len;
+		__entry->offset_align = offset_align;
+		__entry->mem_align = mem_align;
+		__entry->mem_offset = mem_offset;
+		__entry->start = start;
+		__entry->middle = middle;
+		__entry->end = end;
+	),
+	TP_printk("xid=0x%08x fh_hash=0x%08x offset=%llu len=%u "
+		  "offset_align=%u mem_align=%u mem_offset=%u "
+		  "start=%u middle=%u end=%u",
+		  __entry->xid, __entry->fh_hash,
+		  __entry->offset, __entry->len,
+		  __entry->offset_align, __entry->mem_align,
+		  __entry->mem_offset,
+		  __entry->start, __entry->middle, __entry->end)
+);
+
+#define DEFINE_NFSD_WRITE_DIO_EVENT(name)				\
+DEFINE_EVENT(nfsd_write_dio_class, nfsd_write_dio_##name,		\
+	TP_PROTO(struct svc_rqst *rqstp,				\
+		 struct svc_fh *fhp,					\
+		 u64 offset,						\
+		 u32 len,						\
+		 u32 offset_align,					\
+		 u32 mem_align,						\
+		 u32 mem_offset,					\
+		 u32 start,						\
+		 u32 middle,						\
+		 u32 end),						\
+	TP_ARGS(rqstp, fhp, offset, len, offset_align, mem_align,	\
+		mem_offset, start, middle, end))
+
+DEFINE_NFSD_WRITE_DIO_EVENT(direct);
+DEFINE_NFSD_WRITE_DIO_EVENT(no_alignment);
+DEFINE_NFSD_WRITE_DIO_EVENT(too_small);
+DEFINE_NFSD_WRITE_DIO_EVENT(no_middle);
+DEFINE_NFSD_WRITE_DIO_EVENT(mem_misaligned);
+
+DECLARE_EVENT_CLASS(nfsd_read_dio_class,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh *fhp,
+		 u64 offset,
+		 u32 len,
+		 u32 offset_align),
+	TP_ARGS(rqstp, fhp, offset, len, offset_align),
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(u32, fh_hash)
+		__field(u64, offset)
+		__field(u32, len)
+		__field(u32, offset_align)
+	),
+	TP_fast_assign(
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__entry->fh_hash = knfsd_fh_hash(&fhp->fh_handle);
+		__entry->offset = offset;
+		__entry->len = len;
+		__entry->offset_align = offset_align;
+	),
+	TP_printk("xid=0x%08x fh_hash=0x%08x offset=%llu len=%u "
+		  "offset_align=%u",
+		  __entry->xid, __entry->fh_hash,
+		  __entry->offset, __entry->len, __entry->offset_align)
+);
+
+#define DEFINE_NFSD_READ_DIO_EVENT(name)				\
+DEFINE_EVENT(nfsd_read_dio_class, nfsd_read_dio_##name,		\
+	TP_PROTO(struct svc_rqst *rqstp,				\
+		 struct svc_fh *fhp,					\
+		 u64 offset,						\
+		 u32 len,						\
+		 u32 offset_align),					\
+	TP_ARGS(rqstp, fhp, offset, len, offset_align))
+
+DEFINE_NFSD_READ_DIO_EVENT(no_alignment);
+DEFINE_NFSD_READ_DIO_EVENT(too_small);
+DEFINE_NFSD_READ_DIO_EVENT(pages_in_use);
+DEFINE_NFSD_READ_DIO_EVENT(not_last_op);
 
 DECLARE_EVENT_CLASS(nfsd_err_class,
 	TP_PROTO(struct svc_rqst *rqstp,
@@ -679,7 +830,9 @@ DEFINE_STATEID_EVENT(layout_get_lookup_fail);
 DEFINE_STATEID_EVENT(layout_commit_lookup_fail);
 DEFINE_STATEID_EVENT(layout_return_lookup_fail);
 DEFINE_STATEID_EVENT(layout_recall);
+DEFINE_STATEID_EVENT(layout_recall_empty);
 DEFINE_STATEID_EVENT(layout_recall_done);
+DEFINE_STATEID_EVENT(layout_recall_new_seqid);
 DEFINE_STATEID_EVENT(layout_recall_fail);
 DEFINE_STATEID_EVENT(layout_recall_release);
 
@@ -2293,25 +2446,6 @@ TRACE_EVENT(nfsd_ctl_time,
 	)
 );
 
-TRACE_EVENT(nfsd_ctl_recoverydir,
-	TP_PROTO(
-		const struct net *net,
-		const char *recdir
-	),
-	TP_ARGS(net, recdir),
-	TP_STRUCT__entry(
-		__field(unsigned int, netns_ino)
-		__string(recdir, recdir)
-	),
-	TP_fast_assign(
-		__entry->netns_ino = net->ns.inum;
-		__assign_str(recdir);
-	),
-	TP_printk("recdir=%s",
-		__get_str(recdir)
-	)
-);
-
 TRACE_EVENT(nfsd_end_grace,
 	TP_PROTO(
 		const struct net *net
@@ -2349,9 +2483,10 @@ TRACE_EVENT(nfsd_ctl_fh_key_set,
 
 DECLARE_EVENT_CLASS(nfsd_copy_class,
 	TP_PROTO(
+		const struct nfs4_client *clp,
 		const struct nfsd4_copy *copy
 	),
-	TP_ARGS(copy),
+	TP_ARGS(clp, copy),
 	TP_STRUCT__entry(
 		__field(bool, intra)
 		__field(bool, async)
@@ -2394,7 +2529,7 @@ DECLARE_EVENT_CLASS(nfsd_copy_class,
 		__entry->src_cp_pos = copy->cp_src_pos;
 		__entry->dst_cp_pos = copy->cp_dst_pos;
 		__entry->cp_count = copy->cp_count;
-		__assign_sockaddr(addr, &copy->cp_clp->cl_addr,
+		__assign_sockaddr(addr, &clp->cl_addr,
 				sizeof(struct sockaddr_in6));
 	),
 	TP_printk("client=%pISpc intra=%d async=%d "
@@ -2415,8 +2550,9 @@ DECLARE_EVENT_CLASS(nfsd_copy_class,
 
 #define DEFINE_COPY_EVENT(name)				\
 DEFINE_EVENT(nfsd_copy_class, nfsd_copy_##name,	\
-	TP_PROTO(const struct nfsd4_copy *copy),	\
-	TP_ARGS(copy))
+	TP_PROTO(const struct nfs4_client *clp,		\
+		 const struct nfsd4_copy *copy),	\
+	TP_ARGS(clp, copy))
 
 DEFINE_COPY_EVENT(inter);
 DEFINE_COPY_EVENT(intra);
@@ -2448,9 +2584,10 @@ TRACE_EVENT(nfsd_copy_done,
 
 DECLARE_EVENT_CLASS(nfsd_copy_async_done_class,
 	TP_PROTO(
+		const struct nfs4_client *clp,
 		const struct nfsd4_copy *copy
 	),
-	TP_ARGS(copy),
+	TP_ARGS(clp, copy),
 	TP_STRUCT__entry(
 		__field(int, status)
 		__field(bool, intra)
@@ -2495,7 +2632,7 @@ DECLARE_EVENT_CLASS(nfsd_copy_async_done_class,
 		__entry->src_cp_pos = copy->cp_src_pos;
 		__entry->dst_cp_pos = copy->cp_dst_pos;
 		__entry->cp_count = copy->cp_count;
-		__assign_sockaddr(addr, &copy->cp_clp->cl_addr,
+		__assign_sockaddr(addr, &clp->cl_addr,
 				sizeof(struct sockaddr_in6));
 	),
 	TP_printk("client=%pISpc status=%d intra=%d async=%d "
@@ -2518,8 +2655,9 @@ DECLARE_EVENT_CLASS(nfsd_copy_async_done_class,
 #define DEFINE_COPY_ASYNC_DONE_EVENT(name)		\
 DEFINE_EVENT(nfsd_copy_async_done_class,		\
 	nfsd_copy_async_##name,				\
-	TP_PROTO(const struct nfsd4_copy *copy),	\
-	TP_ARGS(copy))
+	TP_PROTO(const struct nfs4_client *clp,		\
+		 const struct nfsd4_copy *copy),	\
+	TP_ARGS(clp, copy))
 
 DEFINE_COPY_ASYNC_DONE_EVENT(done);
 DEFINE_COPY_ASYNC_DONE_EVENT(cancel);
