@@ -2959,6 +2959,35 @@ out:
 EXPORT_SYMBOL(inode_set_ctime_current);
 
 /**
+ * current_time_deleg - get the current time to clamp a delegated time to
+ * @update: timestamp from a delegation holder
+ *
+ * A delegation holder stamps at least 1ns past the fine-grained ctime it was
+ * last sent, which can be past the coarse time. Return the coarse time (or mg
+ * floor) if @update isn't past it. Otherwise return a fine-grained time,
+ * which is also published as the floor, so later coarse stamps can't land
+ * before a time clamped to it.
+ *
+ * Return: the time to clamp @update to if it's later
+ */
+struct timespec64 current_time_deleg(struct timespec64 update)
+{
+	struct timespec64 now, fine;
+
+	ktime_get_coarse_real_ts64_mg(&now);
+	if (timespec64_compare(&update, &now) <= 0)
+		return now;
+
+	ktime_get_real_ts64_mg(&fine);
+	mgtime_counter_inc(mg_fine_stamps);
+	/* A lost floor swap returns the winner's floor, which can trail @now */
+	if (timespec64_compare(&fine, &now) > 0)
+		now = fine;
+	return now;
+}
+EXPORT_SYMBOL(current_time_deleg);
+
+/**
  * inode_set_ctime_deleg - try to update the ctime on a delegated inode
  * @inode: inode to update
  * @update: timespec64 to set the ctime
@@ -2989,9 +3018,8 @@ struct timespec64 inode_set_ctime_deleg(struct inode *inode, struct timespec64 u
 	if (timespec64_compare(&update, &cur_ts) <= 0)
 		return cur_ts;
 
-	ktime_get_coarse_real_ts64_mg(&now);
-
 	/* Clamp the update to "now" if it's in the future */
+	now = current_time_deleg(update);
 	if (timespec64_compare(&update, &now) > 0)
 		update = now;
 
