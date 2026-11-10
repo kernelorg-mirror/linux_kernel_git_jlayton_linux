@@ -10591,6 +10591,8 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 		if (nfsd4_vet_deleg_time(&attrs.ia_atime, &dp->dl_atime, &now))
 			attrs.ia_valid |= ATTR_ATIME | ATTR_ATIME_SET;
 
+		/* See vet_deleg_attrs() */
+		now = current_time_deleg(attrs.ia_mtime);
 		if (nfsd4_vet_deleg_time(&attrs.ia_mtime, &dp->dl_mtime, &now)) {
 			attrs.ia_valid |= ATTR_MTIME | ATTR_MTIME_SET;
 			attrs.ia_ctime = attrs.ia_mtime;

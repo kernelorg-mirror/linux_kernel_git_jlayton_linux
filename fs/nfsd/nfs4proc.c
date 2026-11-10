@@ -1358,6 +1358,16 @@ vet_deleg_attrs(struct nfsd4_setattr *setattr, struct nfs4_delegation *dp)
 		iattr->ia_valid &= ~(ATTR_ATIME | ATTR_ATIME_SET);
 
 	if (setattr->sa_bmval[2] & FATTR4_WORD2_TIME_DELEG_MODIFY) {
+		/*
+		 * A holder stamps just past the last fine-grained ctime it
+		 * was sent, which can be past the coarse @now. Clamp against
+		 * current_time_deleg() instead: the mgtime floor is at least
+		 * the time it returns, so the ctime following the mtime isn't
+		 * clamped below it, and later stamps on other files can't
+		 * appear older. atime gets no such floor raise, so it stays
+		 * clamped to the coarse time.
+		 */
+		now = current_time_deleg(iattr->ia_mtime);
 		if (nfsd4_vet_deleg_time(&iattr->ia_mtime, &dp->dl_mtime, &now)) {
 			iattr->ia_ctime = iattr->ia_mtime;
 			if (nfsd4_vet_deleg_time(&iattr->ia_ctime, &dp->dl_ctime, &now))
