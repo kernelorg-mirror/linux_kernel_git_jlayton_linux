@@ -1404,7 +1404,13 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	if (deleg_attrs || (setattr->sa_iattr.ia_valid & ATTR_SIZE)) {
 		int flags = WR_STATE;
 
-		if (setattr->sa_bmval[2] & FATTR4_WORD2_TIME_DELEG_ACCESS)
+		/*
+		 * A read timestamp delegation may set only the access time.
+		 * The modify time and size need a write delegation.
+		 */
+		if ((setattr->sa_bmval[2] & FATTR4_WORD2_TIME_DELEG_ACCESS) &&
+		    !(setattr->sa_bmval[2] & FATTR4_WORD2_TIME_DELEG_MODIFY) &&
+		    !(setattr->sa_iattr.ia_valid & ATTR_SIZE))
 			flags |= RD_STATE;
 
 		status = nfs4_preprocess_stateid_op(rqstp, cstate,
