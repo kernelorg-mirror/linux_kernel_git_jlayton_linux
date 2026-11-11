@@ -4042,6 +4042,22 @@ _scsih_internal_device_unblock(struct scsi_device *sdev,
 }
 
 /**
+ * _scsih_unresponding_scan_cancelled - should polling devices stop
+ * @ioc: per adapter object
+ *
+ * While the MPT3SAS_REMOVE_UNRESPONDING_DEVICES event polls devices, a
+ * hard reset or the removal of the host waits for it to finish, and the
+ * readiness check doesn't test devices during a reset.
+ *
+ * Return: true if the event is being cancelled, false otherwise.
+ */
+static bool
+_scsih_unresponding_scan_cancelled(struct MPT3SAS_ADAPTER *ioc)
+{
+	return READ_ONCE(ioc->remove_host) || READ_ONCE(ioc->fw_events_cleanup);
+}
+
+/**
  * _scsih_ublock_io_all_device - unblock every device
  * @ioc: per adapter object
  * @no_turs: flag to disable TEST UNIT READY checks during device unblocking
@@ -4098,7 +4114,13 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 				pcie_device_put(pcie_device);
 		} while ((rc == DEVICE_RETRY || rc == DEVICE_START_UNIT ||
 		    rc == DEVICE_STOP_UNIT || rc == DEVICE_RETRY_UA)
-			&& count++ < command_retry_count);
+			&& count++ < command_retry_count &&
+			!_scsih_unresponding_scan_cancelled(ioc));
+		if (_scsih_unresponding_scan_cancelled(ioc)) {
+			/* a reset queues a new scan, which polls the rest */
+			scsi_device_put(sdev);
+			return;
+		}
 		sas_device_priv_data->block = 0;
 		if (rc != DEVICE_READY)
 			sas_device_priv_data->deleted = 1;
