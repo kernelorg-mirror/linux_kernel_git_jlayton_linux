@@ -1472,22 +1472,6 @@ static void nfsd_cmtime_notice(struct inode *inode, int err)
 			      inode->i_ino, err);
 }
 
-/* Caller holds freeze protection for @f's filesystem */
-static void __nfsd_update_cmtime_attr(struct file *f, unsigned int flags)
-{
-	struct inode *inode = file_inode(f);
-	struct iattr attr = {
-		.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_DELEG | flags,
-	};
-	int ret;
-
-	inode_lock(inode);
-	ret = notify_change(&nop_mnt_idmap, f->f_path.dentry, &attr, NULL);
-	inode_unlock(inode);
-	if (ret)
-		nfsd_cmtime_notice(inode, ret);
-}
-
 /*
  * Whether @t is an exclusive create's verifier, which the record's
  * floor stands in for, rather than a real time. Once a time is
@@ -8595,9 +8579,6 @@ nfs4_set_delegation(struct nfsd4_open *open,
 		}
 		*grant_change = nfsd4_change_attribute(&stat);
 		dp->dl_cb_fattr.ncf_initial_cinfo = *grant_change;
-		dp->dl_atime = stat.atime;
-		dp->dl_ctime = stat.ctime;
-		dp->dl_mtime = stat.mtime;
 		if (dp->dl_times)
 			nfsd4_init_deleg_times(dp, open, &stat);
 	}
@@ -12005,70 +11986,16 @@ nfsd4_get_writestateid(struct nfsd4_compound_state *cstate,
 	get_stateid(cstate, &u->write.wr_stateid);
 }
 
-/**
- * nfsd4_vet_deleg_time - vet and set the timespec for a delegated timestamp update
- * @req: timestamp from the client
- * @orig: original timestamp in the inode
- * @now: current time
- *
- * Given a timestamp from the client response, check it against the
- * current timestamp in the inode and the current time. Returns true
- * if the inode's timestamp needs to be updated, and false otherwise.
- * @req may also be changed if the timestamp needs to be clamped.
- */
-bool nfsd4_vet_deleg_time(struct timespec64 *req, const struct timespec64 *orig,
-			  const struct timespec64 *now)
-{
-
-	/*
-	 * "When the time presented is before the original time, then the
-	 *  update is ignored." Also no need to update if there is no change.
-	 */
-	if (timespec64_compare(req, orig) <= 0)
-		return false;
-
-	/*
-	 * "When the time presented is in the future, the server can either
-	 *  clamp the new time to the current time, or it may
-	 *  return NFS4ERR_DELAY to the client, allowing it to retry."
-	 */
-	if (timespec64_compare(req, now) > 0)
-		*req = *now;
-
-	return true;
-}
-
-static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation *dp,
-				   const struct nfsd4_deleg_cb_sample *cb)
+static int cb_getattr_update_times(struct dentry *dentry,
+				   struct nfs4_delegation *dp)
 {
 	struct inode *inode = d_inode(dentry);
 	struct nfs4_file *fp = dp->dl_stid.sc_file;
-	struct iattr attrs = { };
+	struct iattr attrs = {
+		.ia_valid = ATTR_MTIME | ATTR_CTIME | ATTR_DELEG,
+	};
 	struct nfsd_file *nf;
-	bool hashed;
-	int ret = 0;
-
-	if (deleg_attrs_deleg(dp->dl_type)) {
-		struct timespec64 now = current_time(inode);
-
-		attrs.ia_atime = cb->atime;
-		attrs.ia_mtime = cb->mtime;
-
-		if (nfsd4_vet_deleg_time(&attrs.ia_atime, &dp->dl_atime, &now))
-			attrs.ia_valid |= ATTR_ATIME | ATTR_ATIME_SET;
-
-		if (nfsd4_vet_deleg_time(&attrs.ia_mtime, &dp->dl_mtime, &now)) {
-			attrs.ia_valid |= ATTR_MTIME | ATTR_MTIME_SET;
-			attrs.ia_ctime = attrs.ia_mtime;
-			if (nfsd4_vet_deleg_time(&attrs.ia_ctime, &dp->dl_ctime, &now))
-				attrs.ia_valid |= ATTR_CTIME | ATTR_CTIME_SET;
-		}
-	} else {
-		attrs.ia_valid |= ATTR_MTIME | ATTR_CTIME;
-	}
-
-	if (!attrs.ia_valid)
-		return 0;
+	int ret;
 
 	/*
 	 * The reference on @dp doesn't keep the delegation's file open.
@@ -12089,18 +12016,8 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 		nfsd_file_put(nf);
 		return -EAGAIN;
 	}
-	attrs.ia_valid |= ATTR_DELEG;
 	inode_lock(inode);
-	/*
-	 * Once @dp is unhashed, its return or revocation may already have
-	 * finalized the times under inode_lock. The CB_GETATTR times are
-	 * older and would roll the finalized times back.
-	 */
-	spin_lock(&fp->fi_lock);
-	hashed = delegation_hashed(dp);
-	spin_unlock(&fp->fi_lock);
-	if (hashed)
-		ret = notify_change(&nop_mnt_idmap, dentry, &attrs, NULL);
+	ret = notify_change(&nop_mnt_idmap, dentry, &attrs, NULL);
 	inode_unlock(inode);
 	file_end_write(nf->nf_file);
 	nfsd_file_put(nf);
@@ -12490,7 +12407,7 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, const struct path *path,
 		 * not update the file's metadata with the client's
 		 * modified size
 		 */
-		err = cb_getattr_update_times(dentry, dp, cb);
+		err = cb_getattr_update_times(dentry, dp);
 		if (err) {
 			status = nfserrno(err);
 			goto out_status;
@@ -12656,23 +12573,6 @@ out_delegees:
 	put_deleg_file(fp);
 	put_nfs4_file(fp);
 	return ERR_PTR(status);
-}
-
-/**
- * nfsd_update_cmtime_attr - update file's delegated ctime/mtime,
- *                           and optionally other attributes (ie ATTR_ATIME).
- * @f: pointer to an opened file
- * @flags: any additional flags that should be updated
- *
- * Given upon opening a file delegated attributes were issues, update
- * @f attributes to current times. Waits for a frozen filesystem to thaw,
- * like the data change that makes this necessary.
- */
-void nfsd_update_cmtime_attr(struct file *f, unsigned int flags)
-{
-	file_start_write(f);
-	__nfsd_update_cmtime_attr(f, flags);
-	file_end_write(f);
 }
 
 static void

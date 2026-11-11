@@ -1749,26 +1749,12 @@ out_err:
 	return status;
 }
 
-static void nfsd4_file_mark_deleg_written(struct nfs4_file *fi)
-{
-	spin_lock(&fi->fi_lock);
-	if (!list_empty(&fi->fi_delegations)) {
-		struct nfs4_delegation *dp = list_first_entry(&fi->fi_delegations,
-							      struct nfs4_delegation, dl_perfile);
-
-		if (dp->dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG)
-			dp->dl_written = true;
-	}
-	spin_unlock(&fi->fi_lock);
-}
-
 static __be32
 nfsd4_write(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	    union nfsd4_op_u *u)
 {
 	struct nfsd4_write *write = &u->write;
 	stateid_t *stateid = &write->wr_stateid;
-	struct nfs4_stid *stid = NULL;
 	struct nfsd_file *nf = NULL;
 	__be32 status = nfs_ok;
 	unsigned long cnt;
@@ -1781,14 +1767,9 @@ nfsd4_write(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	trace_nfsd_write_start(rqstp, &cstate->current_fh,
 			       write->wr_offset, cnt);
 	status = nfs4_preprocess_stateid_op(rqstp, cstate, &cstate->current_fh,
-						stateid, WR_STATE, &nf, &stid);
+						stateid, WR_STATE, &nf, NULL);
 	if (status)
 		return status;
-
-	if (stid) {
-		nfsd4_file_mark_deleg_written(stid->sc_file);
-		nfs4_put_stid(stid);
-	}
 
 	write->wr_how_written = write->wr_stable_how;
 	status = nfsd_vfs_write(rqstp, &cstate->current_fh, nf,
@@ -1901,9 +1882,6 @@ nfsd4_clone(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		}
 	}
 	status = nfserrno(host_err);
-
-	if (!status && (READ_ONCE(dst->nf_file->f_mode) & FMODE_NOCMTIME) != 0)
-		nfsd_update_cmtime_attr(dst->nf_file, 0);
 
 	nfsd_file_put(dst);
 	nfsd_file_put(src);
@@ -2627,8 +2605,6 @@ do_callback:
 	set_bit(NFSD4_COPY_F_COMPLETED, &copy->cp_flags);
 	trace_nfsd_copy_async_done(async->cp_stid.sc_client, copy);
 	atomic_dec(&copy->cp_nn->pending_async_copies);
-	if (copy->cp_res.wr_bytes_written > 0 && copy->attr_update)
-		nfsd_update_cmtime_attr(copy->nf_dst->nf_file, 0);
 	nfsd4_send_cb_offload(async);
 	/* Drop the kthread's reference (taken in nfsd4_copy()); copy may be freed after this. */
 	nfs4_put_copy(async);
@@ -2708,9 +2684,6 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		 * the callback stateid zeroed.
 		 */
 		dup_copy_fields(copy, &async_copy->cp_copy);
-		if ((READ_ONCE(copy->nf_dst->nf_file->f_mode) &
-			       FMODE_NOCMTIME) != 0)
-			async_copy->cp_copy.attr_update = true;
 		memcpy(async_copy->cp_cb_offload.co_referring_sessionid.data,
 		       cstate->session->se_sessionid.data,
 		       NFS4_MAX_SESSIONID_LEN);
@@ -2741,10 +2714,6 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	} else {
 		status = nfsd4_do_copy(copy, copy->nf_src->nf_file,
 				       copy->nf_dst->nf_file, true);
-		if ((READ_ONCE(copy->nf_dst->nf_file->f_mode) &
-			       FMODE_NOCMTIME) != 0 &&
-				copy->cp_res.wr_bytes_written > 0)
-			nfsd_update_cmtime_attr(copy->nf_dst->nf_file, 0);
 	}
 out:
 	trace_nfsd_copy_done(copy, status);
@@ -3391,10 +3360,8 @@ nfsd4_layoutcommit(struct svc_rqst *rqstp,
 
 	nfserr = ops->proc_layoutcommit(inode, rqstp, lcp);
 
-	if (!lcp->lc_reclaim) {
-		nfsd4_file_mark_deleg_written(ls->ls_stid.sc_file);
+	if (!lcp->lc_reclaim)
 		nfs4_put_stid(&ls->ls_stid);
-	}
 out:
 	return nfserr;
 }

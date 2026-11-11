@@ -380,8 +380,6 @@ struct nfs4_delegation {
 	struct nfsd4_callback	dl_recall;
 	bool			dl_recalled;
 	bool			dl_recall_rejected;
-	bool			dl_written;
-	bool			dl_setattr;
 
 	/* Forward-channel slot that carried the granting request */
 	struct {
@@ -401,9 +399,6 @@ struct nfs4_delegation {
 
 	/* For delegated timestamps */
 	struct nfsd4_deleg_times *dl_times;
-	struct timespec64	dl_atime;
-	struct timespec64	dl_mtime;
-	struct timespec64	dl_ctime;
 
 	/* For dir delegations */
 	u32			dl_notify_mask;
@@ -426,9 +421,6 @@ static inline bool deleg_attrs_deleg(u32 dl_type)
 	return dl_type == OPEN_DELEGATE_READ_ATTRS_DELEG ||
 	       dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG;
 }
-
-bool nfsd4_vet_deleg_time(struct timespec64 *cb, const struct timespec64 *orig,
-			  const struct timespec64 *now);
 
 #define cb_to_delegation(cb) \
 	container_of(cb, struct nfs4_delegation, dl_recall)
@@ -1050,7 +1042,6 @@ void nfsd4_put_client(struct nfs4_client *clp);
 void nfsd4_put_leased_deleg(struct nfs4_delegation *dp);
 void nfsd4_async_copy_reaper(struct nfsd_net *nn);
 bool nfsd4_has_active_async_copies(struct nfs4_client *clp);
-void nfsd_update_cmtime_attr(struct file *f, unsigned int flags);
 extern struct nfs4_client_reclaim *nfs4_client_to_reclaim(struct xdr_netobj name,
 				struct xdr_netobj princhash, struct nfsd_net *nn);
 int nfsd_handle_dir_event(u32 mask, const struct inode *dir, const void *data,
