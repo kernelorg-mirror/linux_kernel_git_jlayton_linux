@@ -4923,6 +4923,7 @@ mpt3sas_base_update_missing_delay(struct MPT3SAS_ADAPTER *ioc,
 	Mpi2ConfigReply_t mpi_reply;
 	u8 num_phys = 0;
 	u16 ioc_status;
+	int rc;
 
 	mpt3sas_config_get_number_hba_phys(ioc, &num_phys);
 	if (!num_phys)
@@ -4969,22 +4970,37 @@ mpt3sas_base_update_missing_delay(struct MPT3SAS_ADAPTER *ioc,
 	io_missing_delay_original = sas_iounit_pg1->IODeviceMissingDelay;
 	sas_iounit_pg1->IODeviceMissingDelay = io_missing_delay;
 
-	if (!mpt3sas_config_set_sas_iounit_pg1(ioc, &mpi_reply, sas_iounit_pg1,
-	    sz)) {
-		if (dmd & MPI2_SASIOUNIT1_REPORT_MISSING_UNIT_16)
-			dmd_new = (dmd &
-			    MPI2_SASIOUNIT1_REPORT_MISSING_TIMEOUT_MASK) * 16;
-		else
-			dmd_new =
-		    dmd & MPI2_SASIOUNIT1_REPORT_MISSING_TIMEOUT_MASK;
-		ioc_info(ioc, "device_missing_delay: old(%d), new(%d)\n",
-			 dmd_orignal, dmd_new);
-		ioc_info(ioc, "ioc_missing_delay: old(%d), new(%d)\n",
-			 io_missing_delay_original,
-			 io_missing_delay);
-		ioc->device_missing_delay = dmd_new;
-		ioc->io_missing_delay = io_missing_delay;
+	/*
+	 * This returns the result of the NVRAM update, not of the update
+	 * to the current page, so read back the delays the IOC now uses.
+	 * If that fails, assume the requested delays are used if the NVRAM
+	 * update succeeded.
+	 */
+	rc = mpt3sas_config_set_sas_iounit_pg1(ioc, &mpi_reply,
+	    sas_iounit_pg1, sz);
+	if (!mpt3sas_config_get_sas_iounit_pg1(ioc, &mpi_reply,
+	    sas_iounit_pg1, sz) &&
+	    (le16_to_cpu(mpi_reply.IOCStatus) & MPI2_IOCSTATUS_MASK) ==
+	    MPI2_IOCSTATUS_SUCCESS) {
+		dmd = sas_iounit_pg1->ReportDeviceMissingDelay;
+		io_missing_delay = sas_iounit_pg1->IODeviceMissingDelay;
+	} else {
+		ioc_warn(ioc, "failed to read back the missing delays\n");
+		if (rc)
+			goto out;
 	}
+
+	if (dmd & MPI2_SASIOUNIT1_REPORT_MISSING_UNIT_16)
+		dmd_new = (dmd & MPI2_SASIOUNIT1_REPORT_MISSING_TIMEOUT_MASK) * 16;
+	else
+		dmd_new = dmd & MPI2_SASIOUNIT1_REPORT_MISSING_TIMEOUT_MASK;
+	ioc_info(ioc, "device_missing_delay: old(%d), new(%d)\n",
+		 dmd_orignal, dmd_new);
+	ioc_info(ioc, "ioc_missing_delay: old(%d), new(%d)\n",
+		 io_missing_delay_original,
+		 io_missing_delay);
+	ioc->device_missing_delay = dmd_new;
+	ioc->io_missing_delay = io_missing_delay;
 
 out:
 	kfree(sas_iounit_pg1);
