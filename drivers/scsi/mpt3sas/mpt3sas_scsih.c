@@ -4231,10 +4231,9 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 		    rc == DEVICE_STOP_UNIT || rc == DEVICE_RETRY_UA)
 			&& count++ <= command_retry_count);
 
-		sas_device_priv_data->block = 0;
 		if (rc != DEVICE_READY)
 			sas_device_priv_data->deleted = 1;
-		scsi_internal_device_unblock_nowait(sdev, SDEV_RUNNING);
+		_scsih_internal_device_unblock(sdev, sas_device_priv_data);
 
 		if (rc != DEVICE_READY) {
 			sdev_printk(KERN_WARNING, sdev,
