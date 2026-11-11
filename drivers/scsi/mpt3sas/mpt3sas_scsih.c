@@ -4050,6 +4050,99 @@ _scsih_internal_device_unblock(struct scsi_device *sdev,
 	}
 }
 
+/*
+ * Target fields the firmware event worker uses while it polls a device
+ * without holding block_lock.
+ */
+struct _scsih_target_ids {
+	u64 sas_address;
+	struct hba_port *port;
+	u16 handle;
+	u8 raid_component;
+};
+
+/*
+ * Copy the target fields of @sdev into @ids, if @sas_device_priv_data is
+ * still its hostdata.  The caller holds block_lock.
+ */
+static bool
+__scsih_get_target_ids(struct scsi_device *sdev,
+		       struct MPT3SAS_DEVICE *sas_device_priv_data,
+		       struct _scsih_target_ids *ids)
+{
+	struct MPT3SAS_TARGET *sas_target;
+
+	if (sdev->hostdata != sas_device_priv_data)
+		return false;
+	sas_target = sas_device_priv_data->sas_target;
+	ids->sas_address = sas_target->sas_address;
+	ids->port = sas_target->port;
+	ids->handle = sas_target->handle;
+	ids->raid_component =
+	    !!(sas_target->flags & MPT_TARGET_FLAGS_RAID_COMPONENT);
+	return true;
+}
+
+/**
+ * _scsih_get_target_ids - read the target fields of a polled device
+ * @ioc: per adapter object
+ * @sdev: scsi device struct
+ * @sas_device_priv_data: hostdata of @sdev when polling began
+ * @ids: filled in with the target fields
+ *
+ * A host reset can change the handle while the device is polled, so
+ * the handle is read again before each command.
+ *
+ * Return: false if @sdev lost its hostdata, true otherwise.
+ */
+static bool
+_scsih_get_target_ids(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev,
+		      struct MPT3SAS_DEVICE *sas_device_priv_data,
+		      struct _scsih_target_ids *ids)
+{
+	unsigned long flags;
+	bool live;
+
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	live = __scsih_get_target_ids(sdev, sas_device_priv_data, ids);
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
+	return live;
+}
+
+/**
+ * _scsih_end_poll - unblock a device after polling it
+ * @ioc: per adapter object
+ * @sdev: scsi device struct
+ * @sas_device_priv_data: hostdata of @sdev when polling began
+ * @ready: the device passed the readiness check
+ * @ids: filled in with the target fields, if true is returned
+ *
+ * Unblock @sdev, and mark it deleted if it is not @ready.  Nothing is
+ * done if @sdev lost its hostdata while it was polled.
+ *
+ * Return: true if the caller should act on @ready, false otherwise.
+ */
+static bool
+_scsih_end_poll(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev,
+		struct MPT3SAS_DEVICE *sas_device_priv_data,
+		bool ready, struct _scsih_target_ids *ids)
+{
+	unsigned long flags;
+	bool ret = false;
+
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	if (!__scsih_get_target_ids(sdev, sas_device_priv_data, ids))
+		goto out;
+	if (!ready)
+		sas_device_priv_data->deleted = 1;
+	if (sas_device_priv_data->block)
+		_scsih_internal_device_unblock(sdev, sas_device_priv_data);
+	ret = true;
+out:
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
+	return ret;
+}
+
 /**
  * _scsih_unresponding_scan_cancelled - should polling devices stop
  * @ioc: per adapter object
@@ -4082,10 +4175,11 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 	enum device_responsive_state rc;
 	struct _sas_device *sas_device = NULL;
 	struct _pcie_device *pcie_device = NULL;
+	struct _scsih_target_ids ids;
 	int count;
 	u8 tr_method = 0;
 	u8 tr_timeout = 30;
-
+	unsigned long flags;
 
 	shost_for_each_device(sdev, ioc->shost) {
 		sas_device_priv_data = sdev->hostdata;
@@ -4100,23 +4194,40 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 			continue;
 
 		if ((no_turs) || (!issue_scsi_cmd_to_bringup_drive)) {
-			sdev_printk(KERN_WARNING, sdev, "device_unblocked handle(0x%04x)\n",
-				sas_device_priv_data->sas_target->handle);
-			_scsih_internal_device_unblock(sdev, sas_device_priv_data);
+			spin_lock_irqsave(&ioc->block_lock, flags);
+			if (sdev->hostdata != sas_device_priv_data)
+				goto next;
+			if (sas_device_priv_data->block) {
+				sdev_printk(KERN_WARNING, sdev,
+				    "device_unblocked handle(0x%04x)\n",
+				    sas_target->handle);
+				_scsih_internal_device_unblock(sdev,
+				    sas_device_priv_data);
+			}
+next:
+			spin_unlock_irqrestore(&ioc->block_lock, flags);
 			continue;
 		}
 
+		/*
+		 * Polling can take minutes, and sdev_destroy() and
+		 * scsi_target_reap() can free the hostdata meanwhile.
+		 */
+		rc = DEVICE_ERROR;
 		count = 0;
 		do {
-			pcie_device = mpt3sas_get_pdev_by_handle(ioc, sas_target->handle);
+			if (!_scsih_get_target_ids(ioc, sdev,
+			    sas_device_priv_data, &ids))
+				break;
+			pcie_device = mpt3sas_get_pdev_by_handle(ioc, ids.handle);
 			if (pcie_device && (!ioc->tm_custom_handling) &&
 				(!(mpt3sas_scsih_is_pcie_scsi_device(pcie_device->device_info)))) {
 				tr_timeout = pcie_device->reset_timeout;
 				tr_method = MPI26_SCSITASKMGMT_MSGFLAGS_PROTOCOL_LVL_RST_PCIE;
 			}
 			rc = _scsih_wait_for_device_to_become_ready(ioc,
-			    sas_target->handle, 0, (sas_target->flags &
-			    MPT_TARGET_FLAGS_RAID_COMPONENT), sdev->lun, tr_timeout, tr_method);
+			    ids.handle, 0, ids.raid_component, sdev->lun,
+			    tr_timeout, tr_method);
 			if (rc == DEVICE_RETRY || rc == DEVICE_START_UNIT ||
 			    rc == DEVICE_STOP_UNIT || rc == DEVICE_RETRY_UA)
 				ssleep(1);
@@ -4131,26 +4242,23 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 			scsi_device_put(sdev);
 			return;
 		}
-		sas_device_priv_data->block = 0;
-		if (rc != DEVICE_READY)
-			sas_device_priv_data->deleted = 1;
-
-		_scsih_internal_device_unblock(sdev, sas_device_priv_data);
+		if (!_scsih_end_poll(ioc, sdev, sas_device_priv_data,
+		    rc == DEVICE_READY, &ids))
+			continue;
 
 		if (rc != DEVICE_READY) {
 			sdev_printk(KERN_WARNING, sdev, "%s: device_offlined,\n"
 			    "handle(0x%04x)\n",
-			    __func__, sas_device_priv_data->sas_target->handle);
+			    __func__, ids.handle);
 			scsi_device_set_state(sdev, SDEV_OFFLINE);
 			sas_device = mpt3sas_get_sdev_by_addr(ioc,
-					sas_device_priv_data->sas_target->sas_address,
-					sas_device_priv_data->sas_target->port);
+					ids.sas_address, ids.port);
 			if (sas_device) {
 				_scsih_display_enclosure_chassis_info(NULL, sas_device, sdev, NULL);
 				sas_device_put(sas_device);
 			} else {
 				pcie_device = mpt3sas_get_pdev_by_wwid(ioc,
-						    sas_device_priv_data->sas_target->sas_address);
+						    ids.sas_address);
 				if (pcie_device) {
 					if (pcie_device->enclosure_handle != 0)
 						sdev_printk(KERN_INFO, sdev, "enclosure logical id\n"
@@ -4168,7 +4276,7 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 		} else
 			sdev_printk(KERN_WARNING, sdev, "device_unblocked,\n"
 			    "handle(0x%04x)\n",
-			    sas_device_priv_data->sas_target->handle);
+			    ids.handle);
 	}
 }
 
@@ -4191,27 +4299,32 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 	int host_reset_completion_count;
 	struct _sas_device *sas_device;
 	struct _pcie_device *pcie_device;
+	struct _scsih_target_ids ids;
 	u8 tr_timeout = 30;
 	u8 tr_method = 0;
 	int count;
+	unsigned long flags;
 
 	/* moving devices from SDEV_OFFLINE to SDEV_BLOCK */
 	shost_for_each_device(sdev, ioc->shost) {
+		spin_lock_irqsave(&ioc->block_lock, flags);
 		sas_device_priv_data = sdev->hostdata;
 		if (!sas_device_priv_data)
-			continue;
+			goto next;
 		sas_target = sas_device_priv_data->sas_target;
 		if (!sas_target)
-			continue;
+			goto next;
 		if (sas_target->sas_address != sas_address ||
 		    sas_target->port != port)
-			continue;
+			goto next;
 		if (sdev->sdev_state == SDEV_OFFLINE) {
 			sas_device_priv_data->block = 1;
 			sas_device_priv_data->deleted = 0;
 			scsi_device_set_state(sdev, SDEV_RUNNING);
 			scsi_internal_device_block_nowait(sdev);
 		}
+next:
+		spin_unlock_irqrestore(&ioc->block_lock, flags);
 	}
 
 	/* moving devices from SDEV_BLOCK to SDEV_RUNNING state */
@@ -4228,10 +4341,18 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 		if (!sas_device_priv_data->block)
 			continue;
 
+		/*
+		 * Polling can take minutes, and sdev_destroy() and
+		 * scsi_target_reap() can free the hostdata meanwhile.
+		 */
+		rc = DEVICE_ERROR;
 		count = 0;
 		do {
 			host_reset_completion_count = 0;
-			pcie_device = mpt3sas_get_pdev_by_handle(ioc, sas_target->handle);
+			if (!_scsih_get_target_ids(ioc, sdev,
+			    sas_device_priv_data, &ids))
+				break;
+			pcie_device = mpt3sas_get_pdev_by_handle(ioc, ids.handle);
 			if (pcie_device && (!ioc->tm_custom_handling) &&
 				(!(mpt3sas_scsih_is_pcie_scsi_device(pcie_device->device_info)))) {
 				tr_timeout = pcie_device->reset_timeout;
@@ -4240,8 +4361,8 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 			if (pcie_device)
 				pcie_device_put(pcie_device);
 			rc = _scsih_wait_for_device_to_become_ready(ioc,
-			      sas_target->handle, 0, (sas_target->flags &
-			      MPT_TARGET_FLAGS_RAID_COMPONENT), sdev->lun, tr_timeout, tr_method);
+			      ids.handle, 0, ids.raid_component, sdev->lun,
+			      tr_timeout, tr_method);
 			if (rc == DEVICE_RETRY || rc == DEVICE_START_UNIT ||
 			    rc == DEVICE_STOP_UNIT || rc == DEVICE_RETRY_UA) {
 				do {
@@ -4250,10 +4371,13 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 				} while (rc == DEVICE_RETRY &&
 							ioc->shost_recovery);
 				if (host_reset_completion_count > 1) {
+					/* the reset may have changed the handle */
+					if (!_scsih_get_target_ids(ioc, sdev,
+					    sas_device_priv_data, &ids))
+						break;
 					rc = _scsih_wait_for_device_to_become_ready(ioc,
-						sas_target->handle, 0, (sas_target->flags &
-						MPT_TARGET_FLAGS_RAID_COMPONENT), sdev->lun,
-						tr_timeout, tr_method);
+						ids.handle, 0, ids.raid_component,
+						sdev->lun, tr_timeout, tr_method);
 					if (rc == DEVICE_RETRY || rc == DEVICE_START_UNIT ||
 					    rc == DEVICE_STOP_UNIT || rc == DEVICE_RETRY_UA)
 						msleep(500);
@@ -4264,23 +4388,23 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 		    rc == DEVICE_STOP_UNIT || rc == DEVICE_RETRY_UA)
 			&& count++ <= command_retry_count);
 
-		if (rc != DEVICE_READY)
-			sas_device_priv_data->deleted = 1;
-		_scsih_internal_device_unblock(sdev, sas_device_priv_data);
+		if (!_scsih_end_poll(ioc, sdev, sas_device_priv_data,
+		    rc == DEVICE_READY, &ids))
+			continue;
 
 		if (rc != DEVICE_READY) {
 			sdev_printk(KERN_WARNING, sdev,
 			    "%s: device_offlined, handle(0x%04x)\n",
-			    __func__, sas_device_priv_data->sas_target->handle);
+			    __func__, ids.handle);
 
 			sas_device = mpt3sas_get_sdev_by_handle(ioc,
-				sas_device_priv_data->sas_target->handle);
+				ids.handle);
 			if (sas_device) {
 				_scsih_display_enclosure_chassis_info(NULL, sas_device, sdev, NULL);
 				sas_device_put(sas_device);
 			} else {
 				pcie_device = mpt3sas_get_pdev_by_handle(ioc,
-							sas_device_priv_data->sas_target->handle);
+							ids.handle);
 				if (pcie_device) {
 					if (pcie_device->enclosure_handle != 0)
 						sdev_printk(KERN_INFO, sdev,
@@ -4301,7 +4425,7 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 		} else {
 			sdev_printk(KERN_WARNING, sdev,
 				"device_unblocked, handle(0x%04x)\n",
-				sas_device_priv_data->sas_target->handle);
+				ids.handle);
 		}
 	}
 }
@@ -4320,19 +4444,23 @@ _scsih_ublock_io_device(struct MPT3SAS_ADAPTER *ioc,
 {
 	struct MPT3SAS_DEVICE *sas_device_priv_data;
 	struct scsi_device *sdev;
+	unsigned long flags;
 
 	shost_for_each_device(sdev, ioc->shost) {
+		spin_lock_irqsave(&ioc->block_lock, flags);
 		sas_device_priv_data = sdev->hostdata;
 		if (!sas_device_priv_data || !sas_device_priv_data->sas_target)
-			continue;
+			goto next;
 		if (sas_device_priv_data->sas_target->sas_address
 		    != sas_address)
-			continue;
+			goto next;
 		if (sas_device_priv_data->sas_target->port != port)
-			continue;
+			goto next;
 		if (sas_device_priv_data->block)
 			_scsih_internal_device_unblock(sdev,
 				sas_device_priv_data);
+next:
+		spin_unlock_irqrestore(&ioc->block_lock, flags);
 	}
 }
 
@@ -4347,20 +4475,24 @@ _scsih_block_io_all_device(struct MPT3SAS_ADAPTER *ioc)
 {
 	struct MPT3SAS_DEVICE *sas_device_priv_data;
 	struct scsi_device *sdev;
+	unsigned long flags;
 
 	shost_for_each_device(sdev, ioc->shost) {
+		spin_lock_irqsave(&ioc->block_lock, flags);
 		sas_device_priv_data = sdev->hostdata;
 		if (!sas_device_priv_data)
-			continue;
+			goto next;
 		if (sas_device_priv_data->block)
-			continue;
+			goto next;
 		if (sas_device_priv_data->ignore_delay_remove) {
 			sdev_printk(KERN_INFO, sdev,
 			"%s skip device_block for SES handle(0x%04x)\n",
 			__func__, sas_device_priv_data->sas_target->handle);
-			continue;
+			goto next;
 		}
 		_scsih_internal_device_block(sdev, sas_device_priv_data);
+next:
+		spin_unlock_irqrestore(&ioc->block_lock, flags);
 	}
 }
 
