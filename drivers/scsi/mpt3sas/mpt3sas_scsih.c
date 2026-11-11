@@ -4073,7 +4073,7 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 	enum device_responsive_state rc;
 	struct _sas_device *sas_device = NULL;
 	struct _pcie_device *pcie_device = NULL;
-	int count = 0;
+	int count;
 	u8 tr_method = 0;
 	u8 tr_timeout = 30;
 
@@ -4097,6 +4097,7 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 			continue;
 		}
 
+		count = 0;
 		do {
 			pcie_device = mpt3sas_get_pdev_by_handle(ioc, sas_target->handle);
 			if (pcie_device && (!ioc->tm_custom_handling) &&
@@ -4183,7 +4184,7 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 	struct _pcie_device *pcie_device;
 	u8 tr_timeout = 30;
 	u8 tr_method = 0;
-	int count = 0;
+	int count;
 
 	/* moving devices from SDEV_OFFLINE to SDEV_BLOCK */
 	shost_for_each_device(sdev, ioc->shost) {
@@ -4218,6 +4219,7 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 		if (!sas_device_priv_data->block)
 			continue;
 
+		count = 0;
 		do {
 			host_reset_completion_count = 0;
 			pcie_device = mpt3sas_get_pdev_by_handle(ioc, sas_target->handle);
