@@ -3998,6 +3998,8 @@ _scsih_internal_device_block(struct scsi_device *sdev,
 	sdev_printk(KERN_INFO, sdev, "device_block, handle(0x%04x)\n",
 	    sas_device_priv_data->sas_target->handle);
 	sas_device_priv_data->block = 1;
+	sas_device_priv_data->block_deadline = 0;
+	sas_device_priv_data->block_seq++;
 
 	r = scsi_internal_device_block_nowait(sdev);
 	if (r == -EINVAL)
@@ -4023,6 +4025,7 @@ _scsih_internal_device_unblock(struct scsi_device *sdev,
 	sdev_printk(KERN_WARNING, sdev, "device_unblock and setting to running, "
 	    "handle(0x%04x)\n", sas_device_priv_data->sas_target->handle);
 	sas_device_priv_data->block = 0;
+	sas_device_priv_data->block_deadline = 0;
 	r = scsi_internal_device_unblock_nowait(sdev, SDEV_RUNNING);
 	if (r == -EINVAL) {
 		/* The device has been set to SDEV_RUNNING by SD layer during
@@ -4109,23 +4112,106 @@ _scsih_get_target_ids(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev,
 	return live;
 }
 
+/*
+ * Margin on top of the firmware's report device missing delay before
+ * _scsih_dnr_unblock_work() releases a delayed not-responding block.
+ */
+#define MPT3SAS_DNR_BLOCK_SLACK	30
+
+/*
+ * A repeat DNR on a blocked device extends its block, at most this many
+ * times, so a drive that keeps flapping can't hold it forever.
+ */
+#define MPT3SAS_DNR_BLOCK_MAX_EXTENDS	3
+
+static unsigned long
+_scsih_dnr_block_timeout(struct MPT3SAS_ADAPTER *ioc,
+			 struct MPT3SAS_TARGET *sas_target)
+{
+	u16 delay = (sas_target->flags & MPT_TARGET_FLAGS_PCIE_DEVICE) ?
+	    ioc->pcie_device_missing_delay : ioc->device_missing_delay;
+
+	return (delay + MPT3SAS_DNR_BLOCK_SLACK) * HZ;
+}
+
+/*
+ * Make dnr_unblock_work run no later than @deadline.  The caller holds
+ * block_lock.  Timeouts differ between SAS and PCIe devices, so a new
+ * block can expire before the one the work is pending for.
+ */
+static void
+__scsih_dnr_unblock_work_by(struct MPT3SAS_ADAPTER *ioc,
+			    unsigned long deadline)
+{
+	if (ioc->dnr_unblock_deadline &&
+	    !time_before(deadline, ioc->dnr_unblock_deadline))
+		return;
+	ioc->dnr_unblock_deadline = deadline;
+	mod_delayed_work(system_dfl_wq, &ioc->dnr_unblock_work,
+	    max_t(long, deadline - jiffies, 1));
+}
+
+/**
+ * _scsih_claim_block - keep dnr_unblock_work off a blocked sdev
+ * @ioc: per adapter object
+ * @sdev: scsi device struct
+ * @sas_device_priv_data: hostdata of @sdev, as read by the caller
+ * @block_seq: set to the block_seq of @sdev, for _scsih_end_poll()
+ *
+ * Called by the firmware event worker before it polls a device with TURs.
+ * The worker unblocks the device when polling ends, and must not have
+ * dnr_unblock_work send I/O to it in the meantime.
+ *
+ * A device whose block expired is already running, but still gets polled,
+ * and offlined if it is not ready.
+ *
+ * Return: true if @sdev needs polling: it is blocked, or its block expired
+ * since the last poll.  False otherwise.
+ */
+static bool
+_scsih_claim_block(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev,
+		   struct MPT3SAS_DEVICE *sas_device_priv_data,
+		   unsigned int *block_seq)
+{
+	unsigned long flags;
+	bool claimed = false;
+
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	if (sdev->hostdata == sas_device_priv_data &&
+	    (sas_device_priv_data->block || sas_device_priv_data->dnr_expired)) {
+		sas_device_priv_data->block_deadline = 0;
+		sas_device_priv_data->dnr_expired = 0;
+		*block_seq = sas_device_priv_data->block_seq;
+		claimed = true;
+	}
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
+	return claimed;
+}
+
 /**
  * _scsih_end_poll - unblock a device after polling it
  * @ioc: per adapter object
  * @sdev: scsi device struct
  * @sas_device_priv_data: hostdata of @sdev when polling began
+ * @block_seq: block_seq of @sdev when _scsih_claim_block() claimed it
  * @ready: the device passed the readiness check
  * @ids: filled in with the target fields, if true is returned
  *
  * Unblock @sdev, and mark it deleted if it is not @ready.  Nothing is
  * done if @sdev lost its hostdata while it was polled.
  *
+ * Nothing is done either if a new delayed not-responding block was made
+ * on @sdev.  Polling then began before the firmware last reported the
+ * device missing, and the expiry of that block or the firmware's next
+ * event decides instead.
+ *
  * Return: true if the caller should act on @ready, false otherwise.
  */
 static bool
 _scsih_end_poll(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev,
 		struct MPT3SAS_DEVICE *sas_device_priv_data,
-		bool ready, struct _scsih_target_ids *ids)
+		unsigned int block_seq, bool ready,
+		struct _scsih_target_ids *ids)
 {
 	unsigned long flags;
 	bool ret = false;
@@ -4133,8 +4219,15 @@ _scsih_end_poll(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev,
 	spin_lock_irqsave(&ioc->block_lock, flags);
 	if (!__scsih_get_target_ids(sdev, sas_device_priv_data, ids))
 		goto out;
+	if (sas_device_priv_data->block_seq != block_seq) {
+		sdev_printk(KERN_INFO, sdev,
+		    "blocked again while polled, handle(0x%04x)\n",
+		    ids->handle);
+		goto out;
+	}
 	if (!ready)
 		sas_device_priv_data->deleted = 1;
+	/* not blocked if dnr_unblock_work released it before polling */
 	if (sas_device_priv_data->block)
 		_scsih_internal_device_unblock(sdev, sas_device_priv_data);
 	ret = true;
@@ -4160,6 +4253,50 @@ _scsih_unresponding_scan_cancelled(struct MPT3SAS_ADAPTER *ioc)
 }
 
 /**
+ * _scsih_cancel_poll - hand devices back to dnr_unblock_work
+ * @ioc: per adapter object
+ * @sdev: device being polled when the scan was cancelled
+ * @sas_device_priv_data: hostdata of @sdev when it was claimed
+ * @block_seq: block_seq of @sdev when it was claimed
+ *
+ * _scsih_ublock_io_all_device() cleared the deadlines of the devices it
+ * was going to poll.  Give those still blocked a new one: a failed reset
+ * queues no new scan, and the scan removes missing devices before it
+ * polls the others.  If @sdev's block expired, it still needs a TUR check.
+ */
+static void
+_scsih_cancel_poll(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev,
+		   struct MPT3SAS_DEVICE *sas_device_priv_data,
+		   unsigned int block_seq)
+{
+	struct MPT3SAS_DEVICE *priv;
+	struct scsi_device *iter;
+	unsigned long flags, deadline;
+
+	/* dnr_unblock_work is disabled, and the devices are going away */
+	if (READ_ONCE(ioc->remove_host))
+		return;
+
+	shost_for_each_device(iter, ioc->shost) {
+		spin_lock_irqsave(&ioc->block_lock, flags);
+		priv = iter->hostdata;
+		if (!priv || !priv->sas_target || priv->sas_target->deleted)
+			goto next;
+		if (priv->block && !priv->block_deadline) {
+			deadline = (jiffies +
+			    _scsih_dnr_block_timeout(ioc, priv->sas_target)) ?: 1;
+			priv->block_deadline = deadline;
+			__scsih_dnr_unblock_work_by(ioc, deadline);
+		} else if (iter == sdev && priv == sas_device_priv_data &&
+			   priv->block_seq == block_seq && !priv->block) {
+			priv->dnr_expired = 1;
+		}
+next:
+		spin_unlock_irqrestore(&ioc->block_lock, flags);
+	}
+}
+
+/**
  * _scsih_ublock_io_all_device - unblock every device
  * @ioc: per adapter object
  * @no_turs: flag to disable TEST UNIT READY checks during device unblocking
@@ -4179,7 +4316,21 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 	int count;
 	u8 tr_method = 0;
 	u8 tr_timeout = 30;
+	unsigned int block_seq;
 	unsigned long flags;
+
+	/* polling one device can outlast another's deadline */
+	if (!no_turs && issue_scsi_cmd_to_bringup_drive) {
+		shost_for_each_device(sdev, ioc->shost) {
+			spin_lock_irqsave(&ioc->block_lock, flags);
+			sas_device_priv_data = sdev->hostdata;
+			if (sas_device_priv_data &&
+			    sas_device_priv_data->sas_target &&
+			    !sas_device_priv_data->sas_target->deleted)
+				sas_device_priv_data->block_deadline = 0;
+			spin_unlock_irqrestore(&ioc->block_lock, flags);
+		}
+	}
 
 	shost_for_each_device(sdev, ioc->shost) {
 		sas_device_priv_data = sdev->hostdata;
@@ -4190,13 +4341,14 @@ _scsih_ublock_io_all_device(struct MPT3SAS_ADAPTER *ioc, u8 no_turs)
 		if (!sas_target || sas_target->deleted)
 			continue;
 
-		if (!sas_device_priv_data->block)
-			continue;
-
 		if ((no_turs) || (!issue_scsi_cmd_to_bringup_drive)) {
 			spin_lock_irqsave(&ioc->block_lock, flags);
 			if (sdev->hostdata != sas_device_priv_data)
 				goto next;
+			/*
+			 * dnr_unblock_work may have released it.  Leave
+			 * dnr_expired for the next scan that sends TURs.
+			 */
 			if (sas_device_priv_data->block) {
 				sdev_printk(KERN_WARNING, sdev,
 				    "device_unblocked handle(0x%04x)\n",
@@ -4209,6 +4361,9 @@ next:
 			continue;
 		}
 
+		if (!_scsih_claim_block(ioc, sdev, sas_device_priv_data,
+		    &block_seq))
+			continue;
 		/*
 		 * Polling can take minutes, and sdev_destroy() and
 		 * scsi_target_reap() can free the hostdata meanwhile.
@@ -4239,11 +4394,13 @@ next:
 			!_scsih_unresponding_scan_cancelled(ioc));
 		if (_scsih_unresponding_scan_cancelled(ioc)) {
 			/* a reset queues a new scan, which polls the rest */
+			_scsih_cancel_poll(ioc, sdev, sas_device_priv_data,
+			    block_seq);
 			scsi_device_put(sdev);
 			return;
 		}
 		if (!_scsih_end_poll(ioc, sdev, sas_device_priv_data,
-		    rc == DEVICE_READY, &ids))
+		    block_seq, rc == DEVICE_READY, &ids))
 			continue;
 
 		if (rc != DEVICE_READY) {
@@ -4302,6 +4459,7 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 	struct _scsih_target_ids ids;
 	u8 tr_timeout = 30;
 	u8 tr_method = 0;
+	unsigned int block_seq;
 	int count;
 	unsigned long flags;
 
@@ -4317,6 +4475,8 @@ _scsih_ublock_io_device_wait(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 		if (sas_target->sas_address != sas_address ||
 		    sas_target->port != port)
 			goto next;
+		/* polling one device can outlast another's deadline */
+		sas_device_priv_data->block_deadline = 0;
 		if (sdev->sdev_state == SDEV_OFFLINE) {
 			sas_device_priv_data->block = 1;
 			sas_device_priv_data->deleted = 0;
@@ -4338,7 +4498,8 @@ next:
 		if (sas_target->sas_address != sas_address ||
 		    sas_target->port != port)
 			continue;
-		if (!sas_device_priv_data->block)
+		if (!_scsih_claim_block(ioc, sdev, sas_device_priv_data,
+		    &block_seq))
 			continue;
 
 		/*
@@ -4389,7 +4550,7 @@ next:
 			&& count++ <= command_retry_count);
 
 		if (!_scsih_end_poll(ioc, sdev, sas_device_priv_data,
-		    rc == DEVICE_READY, &ids))
+		    block_seq, rc == DEVICE_READY, &ids))
 			continue;
 
 		if (rc != DEVICE_READY) {
@@ -4456,6 +4617,8 @@ _scsih_ublock_io_device(struct MPT3SAS_ADAPTER *ioc,
 			goto next;
 		if (sas_device_priv_data->sas_target->port != port)
 			goto next;
+		/* the caller has decided this device won't be polled */
+		sas_device_priv_data->dnr_expired = 0;
 		if (sas_device_priv_data->block)
 			_scsih_internal_device_unblock(sdev,
 				sas_device_priv_data);
@@ -4469,19 +4632,26 @@ next:
  * @ioc: per adapter object
  *
  * During device pull we need to appropriately set the sdev state.
+ *
+ * The caller unblocks the devices when its broadcast primitive pass ends,
+ * and dnr_unblock_work leaves them alone until then.  The blocks still
+ * get a deadline: if a host reset skips that unblock, the next unblock is
+ * after the firmware event worker removes unresponding devices, which
+ * needs the locks a scan waiting on one of these devices holds.
  */
 static void
 _scsih_block_io_all_device(struct MPT3SAS_ADAPTER *ioc)
 {
 	struct MPT3SAS_DEVICE *sas_device_priv_data;
 	struct scsi_device *sdev;
-	unsigned long flags;
+	unsigned long flags, deadline;
 
 	shost_for_each_device(sdev, ioc->shost) {
 		spin_lock_irqsave(&ioc->block_lock, flags);
 		sas_device_priv_data = sdev->hostdata;
 		if (!sas_device_priv_data)
 			goto next;
+		/* it keeps its deadline, if it has one */
 		if (sas_device_priv_data->block)
 			goto next;
 		if (sas_device_priv_data->ignore_delay_remove) {
@@ -4490,8 +4660,120 @@ _scsih_block_io_all_device(struct MPT3SAS_ADAPTER *ioc)
 			__func__, sas_device_priv_data->sas_target->handle);
 			goto next;
 		}
+		/*
+		 * Leave offline devices alone: they take no I/O, and the
+		 * caller's unblock, or an expiry, would bring them back
+		 * running without a TUR check.  That includes devices that
+		 * failed their TUR check, which are marked deleted under
+		 * block_lock before they are set offline.
+		 */
+		if (sdev->sdev_state == SDEV_OFFLINE ||
+		    sas_device_priv_data->deleted)
+			goto next;
 		_scsih_internal_device_block(sdev, sas_device_priv_data);
+		deadline = (jiffies + _scsih_dnr_block_timeout(ioc,
+		    sas_device_priv_data->sas_target)) ?: 1;
+		sas_device_priv_data->block_deadline = deadline;
+		sas_device_priv_data->block_extends = 0;
+		__scsih_dnr_unblock_work_by(ioc, deadline);
 next:
+		spin_unlock_irqrestore(&ioc->block_lock, flags);
+	}
+}
+
+/**
+ * _scsih_dnr_unblock_sdev - release an expired delayed not-responding block
+ * @ioc: per adapter object
+ * @sdev: scsi device struct
+ *
+ * Return: the deadline of an unexpired block on @sdev, or 0 if none.
+ */
+static unsigned long
+_scsih_dnr_unblock_sdev(struct MPT3SAS_ADAPTER *ioc, struct scsi_device *sdev)
+{
+	struct MPT3SAS_DEVICE *sas_device_priv_data;
+	unsigned long flags, deadline = 0;
+
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	sas_device_priv_data = sdev->hostdata;
+	if (!sas_device_priv_data || !sas_device_priv_data->block ||
+	    !sas_device_priv_data->block_deadline)
+		goto out;
+	if (time_before(jiffies, sas_device_priv_data->block_deadline)) {
+		deadline = sas_device_priv_data->block_deadline;
+		goto out;
+	}
+	/*
+	 * Wait out a host reset, which can begin while
+	 * _scsih_dnr_unblock_work() walks the devices.  Don't wait for SCSI
+	 * EH, though: scsi_send_eh_cmnd() waits out SDEV_BLOCK only up to
+	 * the EH command timeout, so EH would fail its TURs to a device
+	 * that has come back and offline it, while the event worker's
+	 * unblock waits for EH to end.  Past the deadline, the device is
+	 * back, or the firmware has reported it missing and its handle is
+	 * no longer valid.
+	 *
+	 * A broadcast primitive pass keeps every device blocked while it
+	 * queries and aborts their commands, and unblocks them when it ends.
+	 */
+	if (ioc->shost_recovery || ioc->pci_error_recovery ||
+	    READ_ONCE(ioc->broadcast_tm_active)) {
+		deadline = (jiffies + HZ) ?: 1;
+		goto out;
+	}
+	sdev_printk(KERN_WARNING, sdev,
+	    "delayed not-responding block expired, handle(0x%04x)\n",
+	    sas_device_priv_data->sas_target->handle);
+	_scsih_internal_device_unblock(sdev, sas_device_priv_data);
+	/* if the device came back, the firmware event worker still polls it */
+	if (issue_scsi_cmd_to_bringup_drive)
+		sas_device_priv_data->dnr_expired = 1;
+out:
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
+	return deadline;
+}
+
+/**
+ * _scsih_dnr_unblock_work - release expired delayed not-responding blocks
+ * @work: the dnr_unblock_work of the adapter
+ *
+ * Within the device missing delay, the firmware either reports the device
+ * as not responding, and the event callback unblocks it, or the device
+ * comes back, and only the firmware event worker unblocks it.  The worker
+ * may first need shost->scan_mutex or the SAS transport's host lock, and
+ * a scan holding those can have a command queued on the blocked sdev.
+ * Past the delay the block has no further use, so release it here.
+ */
+static void
+_scsih_dnr_unblock_work(struct work_struct *work)
+{
+	struct MPT3SAS_ADAPTER *ioc = container_of(to_delayed_work(work),
+	    struct MPT3SAS_ADAPTER, dnr_unblock_work);
+	struct scsi_device *sdev;
+	unsigned long flags, deadline, next = 0;
+
+	/* from here on, a new block requeues the work */
+	spin_lock_irqsave(&ioc->block_lock, flags);
+	ioc->dnr_unblock_deadline = 0;
+	spin_unlock_irqrestore(&ioc->block_lock, flags);
+
+	if (ioc->remove_host)
+		return;
+
+	shost_for_each_device(sdev, ioc->shost) {
+		deadline = _scsih_dnr_unblock_sdev(ioc, sdev);
+		if (deadline && (!next || time_before(deadline, next)))
+			next = deadline;
+	}
+
+	/*
+	 * Requeue for the earliest deadline seen here; the next run
+	 * requeues for the rest.  A block made meanwhile may already
+	 * have requeued the work for an earlier deadline; keep that.
+	 */
+	if (next) {
+		spin_lock_irqsave(&ioc->block_lock, flags);
+		__scsih_dnr_unblock_work_by(ioc, next);
 		spin_unlock_irqrestore(&ioc->block_lock, flags);
 	}
 }
@@ -4509,7 +4791,7 @@ _scsih_block_io_device(struct MPT3SAS_ADAPTER *ioc, u16 handle)
 	struct MPT3SAS_DEVICE *sas_device_priv_data;
 	struct scsi_device *sdev;
 	struct _sas_device *sas_device;
-	unsigned long flags;
+	unsigned long flags, deadline;
 
 	sas_device = mpt3sas_get_sdev_by_handle(ioc, handle);
 
@@ -4520,9 +4802,29 @@ _scsih_block_io_device(struct MPT3SAS_ADAPTER *ioc, u16 handle)
 			goto next;
 		if (sas_device_priv_data->sas_target->handle != handle)
 			goto next;
-		if (sas_device_priv_data->block)
+		deadline = (jiffies + _scsih_dnr_block_timeout(ioc,
+		    sas_device_priv_data->sas_target)) ?: 1;
+		if (sas_device_priv_data->block) {
+			/* a repeat DNR restarts the firmware's missing delay */
+			if (sas_device_priv_data->block_deadline &&
+			    sas_device_priv_data->block_extends <
+			    MPT3SAS_DNR_BLOCK_MAX_EXTENDS) {
+				sas_device_priv_data->block_extends++;
+				sas_device_priv_data->block_deadline = deadline;
+				__scsih_dnr_unblock_work_by(ioc, deadline);
+			}
 			goto next;
+		}
 		if (sas_device && sas_device->pend_sas_rphy_add)
+			goto next;
+		/*
+		 * Expiry would bring it back running without a TUR check.
+		 * _scsih_ublock_io_device_wait() polls offline devices anyway.
+		 * A device that failed its TUR check is marked deleted under
+		 * block_lock, before it is set offline.
+		 */
+		if (sdev->sdev_state == SDEV_OFFLINE ||
+		    sas_device_priv_data->deleted)
 			goto next;
 		if (sas_device_priv_data->ignore_delay_remove) {
 			sdev_printk(KERN_INFO, sdev,
@@ -4531,6 +4833,9 @@ _scsih_block_io_device(struct MPT3SAS_ADAPTER *ioc, u16 handle)
 			goto next;
 		}
 		_scsih_internal_device_block(sdev, sas_device_priv_data);
+		sas_device_priv_data->block_deadline = deadline;
+		sas_device_priv_data->block_extends = 0;
+		__scsih_dnr_unblock_work_by(ioc, deadline);
 next:
 		spin_unlock_irqrestore(&ioc->block_lock, flags);
 	}
@@ -10199,6 +10504,7 @@ _scsih_sas_broadcast_primitive_event(struct MPT3SAS_ADAPTER *ioc,
 	ioc_info(ioc, "%s: enter: phy number(%d), width(%d)\n",
 		 __func__, event_data->PhyNum, event_data->PortWidth);
 
+	WRITE_ONCE(ioc->broadcast_tm_active, 1);
 	_scsih_block_io_all_device(ioc);
 
 	spin_lock_irqsave(&ioc->scsi_lookup_lock, flags);
@@ -10329,6 +10635,7 @@ _scsih_sas_broadcast_primitive_event(struct MPT3SAS_ADAPTER *ioc,
 	ioc->broadcast_aen_busy = 0;
 	if (!ioc->shost_recovery)
 		_scsih_ublock_io_all_device(ioc, 1);
+	WRITE_ONCE(ioc->broadcast_tm_active, 0);
 	mutex_unlock(&ioc->tm_cmds.mutex);
 }
 
@@ -12830,6 +13137,7 @@ static void scsih_remove(struct pci_dev *pdev)
 		return;
 
 	ioc->remove_host = 1;
+	disable_delayed_work_sync(&ioc->dnr_unblock_work);
 
 	if (!pci_device_is_present(pdev)) {
 		mpt3sas_base_pause_mq_polling(ioc);
@@ -12930,6 +13238,7 @@ scsih_shutdown(struct pci_dev *pdev)
 		return;
 
 	ioc->remove_host = 1;
+	disable_delayed_work_sync(&ioc->dnr_unblock_work);
 
 	if (!pci_device_is_present(pdev)) {
 		mpt3sas_base_pause_mq_polling(ioc);
@@ -13827,6 +14136,14 @@ _scsih_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	spin_lock_init(&ioc->pcie_device_lock);
 	spin_lock_init(&ioc->diag_trigger_lock);
 	spin_lock_init(&ioc->block_lock);
+	/*
+	 * Until PCIe IO Unit Page 1 is read, assume the longest delay the
+	 * firmware can be set to, so blocked PCIe devices aren't released
+	 * before the firmware has reported them missing.  A reset keeps
+	 * the delay read before if it can't read the page.
+	 */
+	ioc->pcie_device_missing_delay =
+	    MPI26_PCIEIOUNIT1_DMDRPT_DELAY_TIME_MASK * 16;
 
 	INIT_LIST_HEAD(&ioc->sas_device_list);
 	INIT_LIST_HEAD(&ioc->sas_device_init_list);
@@ -13843,6 +14160,7 @@ _scsih_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_LIST_HEAD(&ioc->delayed_tr_volume_list);
 	INIT_LIST_HEAD(&ioc->reply_queue_list);
 	INIT_LIST_HEAD(&ioc->port_table_list);
+	INIT_DELAYED_WORK(&ioc->dnr_unblock_work, _scsih_dnr_unblock_work);
 
 	sprintf(ioc->name, "%s_cm%d", ioc->driver_name, ioc->id);
 
@@ -13953,6 +14271,7 @@ _scsih_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	mpt3sas_setup_debugfs(ioc);
 	return 0;
 out_add_shost_fail:
+	disable_delayed_work_sync(&ioc->dnr_unblock_work);
 	mpt3sas_base_detach(ioc);
  out_attach_fail:
 	destroy_workqueue(ioc->firmware_event_thread);
