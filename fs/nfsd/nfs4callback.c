@@ -393,17 +393,18 @@ encode_cb_getattr4args(struct xdr_stream *xdr, struct nfs4_cb_compound_hdr *hdr,
 	struct knfsd_fh *fh = &dp->dl_stid.sc_file->fi_fhandle;
 	struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
 	u32 bmap_size = 1;
-	u32 bmap[3];
+	u32 bmap[3] = { };
 
 	bmap[0] = FATTR4_WORD0_SIZE;
 	if (!ncf->ncf_file_modified)
 		bmap[0] |= FATTR4_WORD0_CHANGE;
 
 	if (deleg_attrs_deleg(dp->dl_type)) {
-		bmap[1] = 0;
 		bmap[2] = FATTR4_WORD2_TIME_DELEG_ACCESS | FATTR4_WORD2_TIME_DELEG_MODIFY;
 		bmap_size = 3;
 	}
+	/* ncf_file_modified can change before the reply is checked */
+	memcpy(ncf->ncf_cb_requested, bmap, sizeof(ncf->ncf_cb_requested));
 	encode_nfs_cb_opnum4(xdr, OP_CB_GETATTR);
 	encode_nfs_fh4(xdr, fh);
 	encode_bitmap4(xdr, bmap, bmap_size);
@@ -737,7 +738,7 @@ static int nfs4_xdr_dec_cb_getattr(struct rpc_rqst *rqstp,
 		return status;
 	if (xdr_stream_decode_uint32_array(xdr, bitmap, 3) < 0)
 		return -EIO;
-	ncf->ncf_cb_bitmap0 = bitmap[0];
+	memcpy(ncf->ncf_cb_present, bitmap, sizeof(ncf->ncf_cb_present));
 	if (xdr_stream_decode_u32(xdr, &attrlen) < 0)
 		return -EIO;
 	maxlen = sizeof(ncf->ncf_cb_change) + sizeof(ncf->ncf_cb_fsize);
@@ -1443,6 +1444,9 @@ static void nfsd41_destroy_cb(struct nfsd4_callback *cb)
 
 	trace_nfsd_cb_destroy(clp, cb);
 	nfsd41_cb_release_slot(cb);
+	/* Before RUNNING is cleared, so the next run can't start yet */
+	if (cb->cb_ops && cb->cb_ops->finalize)
+		cb->cb_ops->finalize(cb);
 	if (test_bit(NFSD4_CALLBACK_WAKE, &cb->cb_flags))
 		clear_and_wake_up_bit(NFSD4_CALLBACK_RUNNING, &cb->cb_flags);
 	else
