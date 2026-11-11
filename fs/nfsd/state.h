@@ -121,6 +121,8 @@ struct nfsd4_callback {
 struct nfsd4_callback_ops {
 	bool (*prepare)(struct nfsd4_callback *cb);
 	int (*done)(struct nfsd4_callback *cb, struct rpc_task *task);
+	/* called before RUNNING is cleared; must not sleep */
+	void (*finalize)(struct nfsd4_callback *cb);
 	void (*release)(struct nfsd4_callback *cb);
 	uint32_t opcode;
 };
@@ -200,16 +202,38 @@ struct nfs4_cpntf_state {
  */
 #define NFSD_COPY_INITIAL_TTL 10
 
+/* A complete CB_GETATTR result, published under fi_lock */
+struct nfsd4_deleg_cb_sample {
+	u64			seq;		/* issue sequence of its callback */
+	u64			change;
+	u64			size;
+	struct timespec64	atime;
+	struct timespec64	mtime;
+	u32			requested[3];	/* bitmap the callback encoded */
+	u32			present[3];	/* bitmap the reply returned */
+	int			status;
+	bool			stale;		/* issued before cb_fence_seq */
+};
+
 struct nfs4_cb_fattr {
 	struct nfsd4_callback ncf_getattr;
-	u32 ncf_cb_status;
 
-	/* from CB_GETATTR reply */
-	u32 ncf_cb_bitmap0;		/* word 0 of the returned bitmap */
+	/*
+	 * Scratch space for the one running callback. Waiters read only
+	 * ncf_sample, never these.
+	 */
+	u64 ncf_cb_seq;
+	u32 ncf_cb_requested[3];
+	u32 ncf_cb_present[3];
 	u64 ncf_cb_change;
 	u64 ncf_cb_fsize;
 	struct timespec64 ncf_cb_mtime;
 	struct timespec64 ncf_cb_atime;
+
+	/* Under fi_lock */
+	u64 ncf_issue_seq;		/* last sequence assigned */
+	u64 ncf_done_seq;		/* sequence of ncf_sample */
+	struct nfsd4_deleg_cb_sample ncf_sample;
 
 	bool ncf_file_modified;
 	u64 ncf_initial_cinfo;
@@ -1061,8 +1085,14 @@ static inline bool try_to_expire_client(struct nfs4_client *clp)
 	return clp->cl_state == NFSD4_EXPIRABLE;
 }
 
+/* Result of nfsd4_deleg_getattr_conflict() */
+struct nfsd4_deleg_getattr {
+	struct nfs4_delegation		*dp;	/* synthesize from; caller puts */
+	struct nfsd4_deleg_cb_sample	cb;	/* sample dp's values came from */
+};
+
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
-		struct dentry *dentry, struct nfs4_delegation **pdp);
+		struct dentry *dentry, struct nfsd4_deleg_getattr *dga);
 
 struct nfsd4_get_dir_delegation;
 struct nfs4_delegation *nfsd_get_dir_deleg(struct nfsd4_compound_state *cstate,

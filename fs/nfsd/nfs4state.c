@@ -3867,6 +3867,42 @@ nfsd4_cb_recall_any_release(struct nfsd4_callback *cb)
 	nfsd4_put_client(clp);
 }
 
+/*
+ * Copy the running callback's result to ncf_sample, the only place
+ * waiters read it from. Only the first publication for a sequence counts,
+ * and an older sequence never replaces a newer one.
+ */
+static void nfsd4_cb_getattr_publish(struct nfs4_cb_fattr *ncf, int status)
+{
+	struct nfs4_delegation *dp =
+			container_of(ncf, struct nfs4_delegation, dl_cb_fattr);
+	struct nfsd4_deleg_times *rec = dp->dl_times;
+	struct nfs4_file *fp = dp->dl_stid.sc_file;
+	struct nfsd4_deleg_cb_sample *cb = &ncf->ncf_sample;
+	u64 seq;
+
+	spin_lock(&fp->fi_lock);
+	seq = ncf->ncf_cb_seq;
+	if (seq > ncf->ncf_done_seq) {
+		cb->seq = seq;
+		cb->status = status;
+		memcpy(cb->requested, ncf->ncf_cb_requested, sizeof(cb->requested));
+		if (status)
+			memset(cb->present, 0, sizeof(cb->present));
+		else
+			memcpy(cb->present, ncf->ncf_cb_present, sizeof(cb->present));
+		cb->change = ncf->ncf_cb_change;
+		cb->size = ncf->ncf_cb_fsize;
+		cb->atime = ncf->ncf_cb_atime;
+		cb->mtime = ncf->ncf_cb_mtime;
+		cb->stale = rec && seq <= rec->cb_fence_seq;
+		if (rec)
+			rec->snapshot_seq++;
+		ncf->ncf_done_seq = seq;
+	}
+	spin_unlock(&fp->fi_lock);
+}
+
 static int
 nfsd4_cb_getattr_done(struct nfsd4_callback *cb, struct rpc_task *task)
 {
@@ -3876,21 +3912,22 @@ nfsd4_cb_getattr_done(struct nfsd4_callback *cb, struct rpc_task *task)
 			container_of(ncf, struct nfs4_delegation, dl_cb_fattr);
 
 	trace_nfsd_cb_getattr_done(&dp->dl_stid.sc_stateid, task);
-	ncf->ncf_cb_status = task->tk_status;
-	/*
-	 * A reply without SIZE leaves ncf_cb_fsize at zero, which the
-	 * waiter would report as the file's size. Fail the callback, so
-	 * the waiter recalls the delegation instead.
-	 */
-	if (!task->tk_status && !(ncf->ncf_cb_bitmap0 & FATTR4_WORD0_SIZE))
-		ncf->ncf_cb_status = NFS4ERR_IO;
 	switch (task->tk_status) {
 	case -NFS4ERR_DELAY:
 		rpc_delay(task, 2 * HZ);
 		return 0;
 	default:
+		nfsd4_cb_getattr_publish(ncf, task->tk_status);
 		return 1;
 	}
+}
+
+/* The core can end a callback without calling ->done */
+static void
+nfsd4_cb_getattr_finalize(struct nfsd4_callback *cb)
+{
+	nfsd4_cb_getattr_publish(container_of(cb, struct nfs4_cb_fattr,
+					      ncf_getattr), -EIO);
 }
 
 static void
@@ -4110,6 +4147,7 @@ static const struct nfsd4_callback_ops nfsd4_cb_recall_any_ops = {
 
 static const struct nfsd4_callback_ops nfsd4_cb_getattr_ops = {
 	.done		= nfsd4_cb_getattr_done,
+	.finalize	= nfsd4_cb_getattr_finalize,
 	.release	= nfsd4_cb_getattr_release,
 	.opcode		= OP_CB_GETATTR,
 };
@@ -4121,23 +4159,73 @@ static const struct nfsd4_callback_ops nfsd4_cb_notify_ops = {
 	.opcode		= OP_CB_NOTIFY,
 };
 
-static void nfs4_cb_getattr(struct nfs4_cb_fattr *ncf)
+/*
+ * Start a CB_GETATTR, or join the one already running. Sets @seq to the
+ * sequence whose result the caller must wait for. The sequence is
+ * assigned under fi_lock in the same section that sets RUNNING, so a
+ * joiner can't see RUNNING before the sequence is set.
+ *
+ * Returns false if @dp is no longer hashed. __destroy_client() unhashes
+ * every delegation under deleg_lock before it drains the client's
+ * callbacks, so a callback issued under deleg_lock while @dp is hashed
+ * is counted in cl_cb_inflight before that drain can start.
+ */
+static bool nfs4_cb_getattr(struct nfs4_delegation *dp, u64 *seq)
 {
-	struct nfs4_delegation *dp =
-			container_of(ncf, struct nfs4_delegation, dl_cb_fattr);
+	struct nfsd_net *nn = net_generic(dp->dl_stid.sc_client->net,
+					  nfsd_net_id);
+	struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
+	struct nfs4_file *fp = dp->dl_stid.sc_file;
+	bool hashed;
 
-	if (test_and_set_bit(NFSD4_CALLBACK_RUNNING, &ncf->ncf_getattr.cb_flags))
-		return;
+	spin_lock(&nn->deleg_lock);
+	spin_lock(&fp->fi_lock);
+	hashed = delegation_hashed(dp);
+	if (hashed &&
+	    !test_and_set_bit(NFSD4_CALLBACK_RUNNING, &ncf->ncf_getattr.cb_flags)) {
+		ncf->ncf_cb_seq = ++ncf->ncf_issue_seq;
+		/* ensure that wake_bit is done when RUNNING is cleared */
+		set_bit(NFSD4_CALLBACK_WAKE, &ncf->ncf_getattr.cb_flags);
+		refcount_inc(&dp->dl_stid.sc_count);
+		nfsd4_run_cb(&ncf->ncf_getattr);
+	}
+	*seq = ncf->ncf_cb_seq;
+	spin_unlock(&fp->fi_lock);
+	spin_unlock(&nn->deleg_lock);
+	return hashed;
+}
 
-	/* set to proper status when nfsd4_cb_getattr_done runs */
-	ncf->ncf_cb_status = NFS4ERR_IO;
-	ncf->ncf_cb_bitmap0 = 0;
+static bool nfsd4_cb_sample_complete(const struct nfsd4_deleg_cb_sample *cb)
+{
+	int i;
 
-	/* ensure that wake_bit is done when RUNNING is cleared */
-	set_bit(NFSD4_CALLBACK_WAKE, &ncf->ncf_getattr.cb_flags);
+	for (i = 0; i < ARRAY_SIZE(cb->requested); i++)
+		if ((cb->present[i] & cb->requested[i]) != cb->requested[i])
+			return false;
+	return true;
+}
 
-	refcount_inc(&dp->dl_stid.sc_count);
-	nfsd4_run_cb(&ncf->ncf_getattr);
+/*
+ * Wait for the result of callback @seq, or a newer one. Returns false if
+ * the callback timed out, ended without a result, failed, or omitted an
+ * attribute it asked for.
+ */
+static bool
+nfsd4_cb_getattr_wait(struct nfs4_delegation *dp, u64 seq,
+		      struct nfsd4_deleg_cb_sample *cb)
+{
+	struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
+	struct nfs4_file *fp = dp->dl_stid.sc_file;
+	bool done;
+
+	wait_on_bit_timeout(&ncf->ncf_getattr.cb_flags, NFSD4_CALLBACK_RUNNING,
+			    TASK_UNINTERRUPTIBLE, NFSD_CB_GETATTR_TIMEOUT);
+	spin_lock(&fp->fi_lock);
+	done = ncf->ncf_done_seq >= seq;
+	if (done)
+		*cb = ncf->ncf_sample;
+	spin_unlock(&fp->fi_lock);
+	return done && !cb->status && nfsd4_cb_sample_complete(cb);
 }
 
 static struct nfs4_client *create_client(struct xdr_netobj name,
@@ -10940,10 +11028,10 @@ bool nfsd4_vet_deleg_time(struct timespec64 *req, const struct timespec64 *orig,
 	return true;
 }
 
-static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation *dp)
+static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation *dp,
+				   const struct nfsd4_deleg_cb_sample *cb)
 {
 	struct inode *inode = d_inode(dentry);
-	struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
 	struct nfs4_file *fp = dp->dl_stid.sc_file;
 	struct iattr attrs = { };
 	struct nfsd_file *nf;
@@ -10953,8 +11041,8 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 	if (deleg_attrs_deleg(dp->dl_type)) {
 		struct timespec64 now = current_time(inode);
 
-		attrs.ia_atime = ncf->ncf_cb_atime;
-		attrs.ia_mtime = ncf->ncf_cb_mtime;
+		attrs.ia_atime = cb->atime;
+		attrs.ia_mtime = cb->mtime;
 
 		if (nfsd4_vet_deleg_time(&attrs.ia_atime, &dp->dl_atime, &now))
 			attrs.ia_valid |= ATTR_ATIME | ATTR_ATIME_SET;
@@ -11013,7 +11101,7 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
  * nfsd4_deleg_getattr_conflict - Recall if GETATTR causes conflict
  * @rqstp: RPC transaction context
  * @dentry: dentry of inode to be checked for a conflict
- * @pdp: returned WRITE delegation, if one was found
+ * @dga: OUT: WRITE delegation and attributes to report
  *
  * This function is called when there is a conflict between a write
  * delegation and a change/size GETATTR from another client. The server
@@ -11023,20 +11111,22 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
  * 18.7.4.
  *
  * Returns 0 if there is no conflict; otherwise an nfs_stat
- * code is returned. If @pdp is set to a non-NULL value, then the
+ * code is returned. If @dga->dp is set to a non-NULL value, then the
  * caller must release it with nfsd4_put_leased_deleg().
  */
 __be32
 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
-			     struct nfs4_delegation **pdp)
+			     struct nfsd4_deleg_getattr *dga)
 {
 	struct nfsd_thread_local_info *ntli = rqstp->rq_private;
 	struct file_lock_context *ctx;
 	struct nfs4_delegation *dp = NULL;
+	struct nfsd4_deleg_cb_sample *cb = &dga->cb;
 	struct file_lease *fl;
 	struct nfs4_cb_fattr *ncf;
 	struct inode *inode = d_inode(dentry);
 	__be32 status;
+	u64 seq;
 
 	ctx = locks_inode_context(inode);
 	if (!ctx)
@@ -11073,13 +11163,15 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 		spin_unlock(&ctx->flc_lock);
 		return nfserr_jukebox;
 	}
-	ncf = &dp->dl_cb_fattr;
-	nfs4_cb_getattr(&dp->dl_cb_fattr);
 	spin_unlock(&ctx->flc_lock);
 
-	wait_on_bit_timeout(&ncf->ncf_getattr.cb_flags, NFSD4_CALLBACK_RUNNING,
-			    TASK_UNINTERRUPTIBLE, NFSD_CB_GETATTR_TIMEOUT);
-	if (ncf->ncf_cb_status) {
+	ncf = &dp->dl_cb_fattr;
+	/* Not yet hashed, or already ended: the retry finds the outcome */
+	if (!nfs4_cb_getattr(dp, &seq)) {
+		status = nfserr_jukebox;
+		goto out_status;
+	}
+	if (!nfsd4_cb_getattr_wait(dp, seq, cb)) {
 		/* Recall delegation only if client didn't respond */
 		status = nfserrno(nfsd_open_break_lease(inode, NFSD_MAY_READ));
 		if (status != nfserr_jukebox ||
@@ -11089,9 +11181,9 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 		goto out_status;
 	}
 	if (!ncf->ncf_file_modified) {
-		if (ncf->ncf_initial_cinfo != ncf->ncf_cb_change)
+		if (ncf->ncf_initial_cinfo != cb->change)
 			ncf->ncf_file_modified = true;
-		else if (i_size_read(inode) != ncf->ncf_cb_fsize)
+		else if (i_size_read(inode) != cb->size)
 			ncf->ncf_file_modified = true;
 	}
 	if (ncf->ncf_file_modified) {
@@ -11102,13 +11194,13 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 		 * not update the file's metadata with the client's
 		 * modified size
 		 */
-		err = cb_getattr_update_times(dentry, dp);
+		err = cb_getattr_update_times(dentry, dp, cb);
 		if (err) {
 			status = nfserrno(err);
 			goto out_status;
 		}
-		ncf->ncf_cur_fsize = ncf->ncf_cb_fsize;
-		*pdp = dp;
+		ncf->ncf_cur_fsize = cb->size;
+		dga->dp = dp;
 		return nfs_ok;
 	}
 	status = nfs_ok;

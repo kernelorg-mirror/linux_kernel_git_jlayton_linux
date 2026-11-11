@@ -4045,7 +4045,7 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		    int ignore_crossmnt,
 		    struct nfsd_case_attrs_cache *case_cache)
 {
-	struct nfs4_delegation *dp = NULL;
+	struct nfsd4_deleg_getattr dga = { };
 	struct nfsd4_fattr_args args;
 	struct svc_fh *tempfh = NULL;
 	int starting_len = xdr->buf->len;
@@ -4095,7 +4095,7 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 	    (attrmask[1] & (FATTR4_WORD1_TIME_ACCESS |
 			    FATTR4_WORD1_TIME_MODIFY |
 			    FATTR4_WORD1_TIME_METADATA))) {
-		status = nfsd4_deleg_getattr_conflict(rqstp, dentry, &dp);
+		status = nfsd4_deleg_getattr_conflict(rqstp, dentry, &dga);
 		if (status)
 			goto out;
 	}
@@ -4103,21 +4103,21 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 	err = vfs_getattr(&path, &args.stat,
 			  STATX_BASIC_STATS | STATX_BTIME | STATX_CHANGE_COOKIE,
 			  AT_STATX_SYNC_AS_STAT);
-	if (dp) {
-		struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
+	if (dga.dp) {
+		struct nfs4_cb_fattr *ncf = &dga.dp->dl_cb_fattr;
 
 		if (ncf->ncf_file_modified) {
 			++ncf->ncf_initial_cinfo;
 			args.stat.size = ncf->ncf_cur_fsize;
-			if (!timespec64_is_epoch(&ncf->ncf_cb_mtime))
-				args.stat.mtime = ncf->ncf_cb_mtime;
+			if (!timespec64_is_epoch(&dga.cb.mtime))
+				args.stat.mtime = dga.cb.mtime;
 		}
 		args.change_attr = ncf->ncf_initial_cinfo;
 
-		if (!timespec64_is_epoch(&ncf->ncf_cb_atime))
-			args.stat.atime = ncf->ncf_cb_atime;
+		if (!timespec64_is_epoch(&dga.cb.atime))
+			args.stat.atime = dga.cb.atime;
 
-		nfsd4_put_leased_deleg(dp);
+		nfsd4_put_leased_deleg(dga.dp);
 	} else {
 		args.change_attr = nfsd4_change_attribute(&args.stat);
 	}
