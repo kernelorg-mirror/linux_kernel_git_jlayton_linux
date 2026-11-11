@@ -217,6 +217,24 @@ struct nfs4_cb_fattr {
 };
 
 /*
+ * Delegated atime/mtime of an OPEN_DELEGATE_WRITE_ATTRS_DELEG delegation.
+ * The holder's times are kept here and reported over NFSv4 while the
+ * delegation is live; only the holder's SETATTR writes them to the inode.
+ * All fields are protected by the nfs4_file's fi_lock.
+ */
+struct nfsd4_deleg_times {
+	bool			unusable;	/* never overlay; recall */
+	struct timespec64	atime;		/* reported; starts at grant floor */
+	struct timespec64	mtime;		/* reported; starts at grant floor */
+	struct timespec64	raw_atime;	/* last accepted wire value */
+	struct timespec64	raw_mtime;
+	struct timespec64	clean_mtime;	/* raw CB mtime at last clean answer */
+	u64			clean_change;	/* inode change at that answer */
+	u64			snapshot_seq;	/* bumped by CB results and commits */
+	u64			cb_fence_seq;	/* CB results at or below are stale */
+};
+
+/*
  * FIXME: the current backchannel encoder can't handle a send buffer longer
  *        than a single page (see bc_malloc/bc_free).
  */
@@ -332,6 +350,7 @@ struct nfs4_delegation {
 	};
 
 	/* For delegated timestamps */
+	struct nfsd4_deleg_times *dl_times;
 	struct timespec64	dl_atime;
 	struct timespec64	dl_mtime;
 	struct timespec64	dl_ctime;

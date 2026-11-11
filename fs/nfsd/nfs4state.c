@@ -1190,6 +1190,7 @@ static void nfs4_free_deleg(struct nfs4_stid *stid)
 	WARN_ON_ONCE(!list_empty(&dp->dl_recall_lru));
 	/* The list outlives one recall, so ->release() cannot free it. */
 	nfsd41_cb_destroy_referring_call_list(&dp->dl_recall);
+	kfree(dp->dl_times);
 	kmem_cache_free(deleg_slab, stid);
 	atomic_long_dec(&num_delegations);
 	atomic_long_dec(&nn->nfsd_delegations);
@@ -7300,6 +7301,37 @@ nfs4_delegation_stat(struct nfs4_delegation *dp, struct svc_fh *currentfh,
 	return rc == 0;
 }
 
+static bool nfsd4_open_exclusive_create(const struct nfsd4_open *open)
+{
+	return open->op_create &&
+	       (open->op_createmode == NFS4_CREATE_EXCLUSIVE ||
+		open->op_createmode == NFS4_CREATE_EXCLUSIVE4_1);
+}
+
+static void
+nfsd4_init_deleg_times(struct nfs4_delegation *dp, const struct nfsd4_open *open,
+		       const struct kstat *stat)
+{
+	struct timespec64 atime = stat->atime, mtime = stat->mtime;
+	struct nfsd4_deleg_times *rec = dp->dl_times;
+
+	/*
+	 * An exclusive create stores its verifier in atime/mtime, whether
+	 * this OPEN created the file or matched the verifier. Don't let it
+	 * be treated as a real time.
+	 */
+	if (nfsd4_open_exclusive_create(open)) {
+		atime = timespec64_sub(stat->ctime, ns_to_timespec64(1));
+		mtime = atime;
+	}
+	rec->atime = atime;
+	rec->raw_atime = atime;
+	rec->mtime = mtime;
+	rec->raw_mtime = mtime;
+	rec->clean_mtime = mtime;
+	rec->clean_change = dp->dl_cb_fattr.ncf_initial_cinfo;
+}
+
 static struct nfs4_delegation *
 nfs4_set_delegation(struct nfsd4_open *open,
 		    const struct nfsd4_compound_state *cstate,
@@ -7416,6 +7448,12 @@ nfs4_set_delegation(struct nfsd4_open *open,
 	if (stp->st_stid.sc_export)
 		dp->dl_stid.sc_export = exp_get(stp->st_stid.sc_export);
 
+	if (dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG) {
+		dp->dl_times = kzalloc_obj(*dp->dl_times);
+		if (!dp->dl_times)
+			goto out_clnt_odstate;
+	}
+
 	fl = nfs4_alloc_init_lease(dp, 0);
 	if (!fl)
 		goto out_clnt_odstate;
@@ -7466,6 +7504,8 @@ nfs4_set_delegation(struct nfsd4_open *open,
 		dp->dl_atime = stat.atime;
 		dp->dl_ctime = stat.ctime;
 		dp->dl_mtime = stat.mtime;
+		if (dp->dl_times)
+			nfsd4_init_deleg_times(dp, open, &stat);
 	}
 
 	spin_lock(&nn->deleg_lock);
@@ -7668,6 +7708,25 @@ nfs4_open_delegation(struct svc_rqst *rqstp, struct nfsd4_open *open,
 			nfs4_put_stid(&dp->dl_stid);
 			status = -EAGAIN;
 			goto out_no_deleg;
+		}
+		/*
+		 * A read can move atime between the stats without moving
+		 * change. Only move the floor forward: a CB_GETATTR or a
+		 * notification may already have used the record, and a
+		 * strictatime read can move a future atime back. The raw
+		 * value can stay, as an input at or below the floor is
+		 * ignored anyway.
+		 */
+		if (dp->dl_times && !nfsd4_open_exclusive_create(open)) {
+			struct nfsd4_deleg_times *rec = dp->dl_times;
+			struct nfs4_file *fp = dp->dl_stid.sc_file;
+
+			spin_lock(&fp->fi_lock);
+			if (timespec64_compare(&stat.atime, &rec->atime) > 0) {
+				rec->atime = stat.atime;
+				rec->snapshot_seq++;
+			}
+			spin_unlock(&fp->fi_lock);
 		}
 		open->op_delegate_type = deleg_ts ? OPEN_DELEGATE_WRITE_ATTRS_DELEG :
 						    OPEN_DELEGATE_WRITE;
