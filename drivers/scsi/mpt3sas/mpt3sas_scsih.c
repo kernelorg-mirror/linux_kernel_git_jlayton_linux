@@ -312,6 +312,11 @@ static struct fw_event_work *alloc_fw_event_work(int len)
 		return NULL;
 
 	kref_init(&fw_event->refcount);
+	/*
+	 * Initialize the delayed_work up front: a cleanup may cancel it
+	 * while the event is being requeued.
+	 */
+	INIT_DELAYED_WORK(&fw_event->delayed_work, _firmware_event_work_delayed);
 	return fw_event;
 }
 
@@ -3680,6 +3685,9 @@ _scsih_fw_event_del_from_list(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work
  *
  * Context: This function will acquire ioc->fw_event_lock.
  *
+ * The reference held by the work that ran @fw_event passes to the delayed
+ * work.  If the event can't be requeued, that reference is dropped.
+ *
  * Return nothing.
  */
 static void
@@ -3688,20 +3696,31 @@ _scsih_fw_event_requeue(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work
 {
 	unsigned long flags;
 
-	if (ioc->firmware_event_thread == NULL)
-		return;
-
 	spin_lock_irqsave(&ioc->fw_event_lock, flags);
+	/*
+	 * Don't rearm the event while the queue is being flushed or the
+	 * host is going away.  _scsih_fw_event_cleanup_queue() may already
+	 * be past it, and the timer could then fire after the workqueue
+	 * has been destroyed.
+	 */
+	if (!ioc->firmware_event_thread || ioc->remove_host ||
+	    ioc->fw_events_cleanup)
+		goto drop;
+	fw_event->delayed_work_active = 1;
+	/*
+	 * Cleanups can overlap, and one can clear fw_events_cleanup while
+	 * another is cancelling, and so disabling, the delayed work.
+	 */
+	if (!queue_delayed_work(ioc->firmware_event_thread,
+	    &fw_event->delayed_work, msecs_to_jiffies(delay)))
+		goto drop;
 	fw_event_work_get(fw_event);
 	list_add_tail(&fw_event->list, &ioc->fw_event_list);
-	if (!fw_event->delayed_work_active) {
-		fw_event->delayed_work_active = 1;
-		INIT_DELAYED_WORK(&fw_event->delayed_work,
-		    _firmware_event_work_delayed);
-	}
-	queue_delayed_work(ioc->firmware_event_thread, &fw_event->delayed_work,
-	    msecs_to_jiffies(delay));
 	spin_unlock_irqrestore(&ioc->fw_event_lock, flags);
+	return;
+drop:
+	spin_unlock_irqrestore(&ioc->fw_event_lock, flags);
+	fw_event_work_put(fw_event);
 }
 
  /**
@@ -3853,9 +3872,17 @@ _scsih_fw_event_cleanup_queue(struct MPT3SAS_ADAPTER *ioc)
 		 *
 		 * If it did execute, we wait for it to finish, and the put will
 		 * happen from _firmware_event_work()
+		 *
+		 * An event requeued by _scsih_fw_event_requeue() is pending
+		 * on its delayed_work instead, and its timer must not fire
+		 * after the workqueue is destroyed.
 		 */
-		if (cancel_work_sync(&fw_event->work))
+		if (fw_event->delayed_work_active) {
+			if (cancel_delayed_work_sync(&fw_event->delayed_work))
+				fw_event_work_put(fw_event);
+		} else if (cancel_work_sync(&fw_event->work)) {
 			fw_event_work_put(fw_event);
+		}
 
 	}
 	ioc->fw_events_cleanup = 0;
