@@ -8493,7 +8493,9 @@ out_unlock:
  *
  * Creating end device object, stored in ioc->sas_device_list.
  *
- * Return: 0 for success, non-zero for failure.
+ * Return: 1 if adding the device should be retried: it is busy, or
+ * reading its SAS Device Page 0 failed in a way that can clear with time.
+ * 0 otherwise.
  */
 static int
 _scsih_add_device(struct MPT3SAS_ADAPTER *ioc, u16 handle, u8 retry_count,
@@ -8509,12 +8511,15 @@ _scsih_add_device(struct MPT3SAS_ADAPTER *ioc, u16 handle, u8 retry_count,
 	u32 device_info;
 	u8 connector_name[5];
 	u8 port_id;
+	int r;
 
-	if ((mpt3sas_config_get_sas_device_pg0(ioc, &mpi_reply, &sas_device_pg0,
-	    MPI2_SAS_DEVICE_PGAD_FORM_HANDLE, handle))) {
+	r = mpt3sas_config_get_sas_device_pg0(ioc, &mpi_reply, &sas_device_pg0,
+	    MPI2_SAS_DEVICE_PGAD_FORM_HANDLE, handle);
+	if (r) {
 		ioc_err(ioc, "failure at %s:%d/%s()!\n",
 			__FILE__, __LINE__, __func__);
-		return -1;
+		/* e.g. no free internal command, or a reset intervened */
+		return r == -EAGAIN && retry_count < command_retry_count;
 	}
 
 	ioc_status = le16_to_cpu(mpi_reply.IOCStatus) &
@@ -8522,13 +8527,15 @@ _scsih_add_device(struct MPT3SAS_ADAPTER *ioc, u16 handle, u8 retry_count,
 	if (ioc_status != MPI2_IOCSTATUS_SUCCESS) {
 		ioc_err(ioc, "failure at %s:%d/%s()!\n",
 			__FILE__, __LINE__, __func__);
-		return -1;
+		return (ioc_status == MPI2_IOCSTATUS_BUSY ||
+		    ioc_status == MPI2_IOCSTATUS_INSUFFICIENT_RESOURCES) &&
+		    retry_count < command_retry_count;
 	}
 
 	/* check if this is end device */
 	device_info = le32_to_cpu(sas_device_pg0.DeviceInfo);
 	if (!(_scsih_is_end_device(device_info)))
-		return -1;
+		return 0;
 	set_bit(handle, ioc->pend_os_device_add);
 	sas_address = le64_to_cpu(sas_device_pg0.SASAddress);
 
@@ -8537,13 +8544,13 @@ _scsih_add_device(struct MPT3SAS_ADAPTER *ioc, u16 handle, u8 retry_count,
 	    MPI2_SAS_DEVICE0_FLAGS_DEVICE_PRESENT)) {
 		ioc_err(ioc, "device is not present handle(0x04%x)!!!\n",
 			handle);
-		return -1;
+		return 0;
 	}
 
 	/* check if there were any issues with discovery */
 	if (_scsih_check_access_status(ioc, sas_address, handle,
 	    sas_device_pg0.AccessStatus))
-		return -1;
+		return 0;
 
 	port_id = sas_device_pg0.PhysicalPort;
 	sas_device = mpt3sas_get_sdev_by_addr(ioc,
@@ -8551,7 +8558,7 @@ _scsih_add_device(struct MPT3SAS_ADAPTER *ioc, u16 handle, u8 retry_count,
 	if (sas_device) {
 		clear_bit(handle, ioc->pend_os_device_add);
 		sas_device_put(sas_device);
-		return -1;
+		return 0;
 	}
 
 	if (sas_device_pg0.EnclosureHandle) {
