@@ -3656,25 +3656,37 @@ _scsih_fw_event_add(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work *fw_event)
 }
 
 /**
- * _scsih_fw_event_del_from_list - delete fw_event from the list
+ * _scsih_fw_event_start - start running an event
  * @ioc: per adapter object
  * @fw_event: object describing the event
  * Context: This function will acquire ioc->fw_event_lock.
  *
- * If the fw_event is on the fw_event_list, remove it and do a put.
+ * An event is on fw_event_list from when it is queued until it starts.
+ * Take @fw_event off the list, dropping the list's reference, and make it
+ * the current event, in one step under fw_event_lock.  If it is no longer
+ * on the list, _scsih_fw_event_cleanup_queue() took it off, and may be
+ * waiting for its work to end.
+ *
+ * Return: true if @fw_event should run, false if it should be dropped.
  */
-static void
-_scsih_fw_event_del_from_list(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work
-	*fw_event)
+static bool
+_scsih_fw_event_start(struct MPT3SAS_ADAPTER *ioc,
+		      struct fw_event_work *fw_event)
 {
 	unsigned long flags;
+	bool start = false;
 
 	spin_lock_irqsave(&ioc->fw_event_lock, flags);
 	if (!list_empty(&fw_event->list)) {
 		list_del_init(&fw_event->list);
+		/* the work still holds a reference */
 		fw_event_work_put(fw_event);
+		ioc->current_event = fw_event;
+		start = true;
 	}
 	spin_unlock_irqrestore(&ioc->fw_event_lock, flags);
+
+	return start;
 }
 
 /**
@@ -3688,6 +3700,12 @@ _scsih_fw_event_del_from_list(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work
  * The reference held by the work that ran @fw_event passes to the delayed
  * work.  If the event can't be requeued, that reference is dropped.
  *
+ * The worker is done with @fw_event, so this also clears
+ * ioc->current_event.  That happens under fw_event_lock together with
+ * requeueing or dropping the event, so that
+ * _scsih_fw_event_cleanup_queue() finds the event either as the current
+ * one or on fw_event_list.
+ *
  * Return nothing.
  */
 static void
@@ -3697,6 +3715,8 @@ _scsih_fw_event_requeue(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work
 	unsigned long flags;
 
 	spin_lock_irqsave(&ioc->fw_event_lock, flags);
+	if (ioc->current_event == fw_event)
+		ioc->current_event = NULL;
 	/*
 	 * Don't rearm the event while the queue is being flushed or the
 	 * host is going away.  _scsih_fw_event_cleanup_queue() may already
@@ -3784,6 +3804,10 @@ mpt3sas_port_enable_complete(struct MPT3SAS_ADAPTER *ioc)
 	fw_event_work_put(fw_event);
 }
 
+/*
+ * Remove the first event from fw_event_list and return it, with the
+ * reference the list held.  The caller puts it.
+ */
 static struct fw_event_work *dequeue_next_fw_event(struct MPT3SAS_ADAPTER *ioc)
 {
 	unsigned long flags;
@@ -3794,8 +3818,42 @@ static struct fw_event_work *dequeue_next_fw_event(struct MPT3SAS_ADAPTER *ioc)
 		fw_event = list_first_entry(&ioc->fw_event_list,
 				struct fw_event_work, list);
 		list_del_init(&fw_event->list);
-		fw_event_work_put(fw_event);
 	}
+	spin_unlock_irqrestore(&ioc->fw_event_lock, flags);
+
+	return fw_event;
+}
+
+/*
+ * ioc->current_event is set and cleared under fw_event_lock, and cleared
+ * before the worker drops its reference to the event.  While it is set
+ * under the lock, the event is live.
+ */
+static void
+_scsih_set_current_event(struct MPT3SAS_ADAPTER *ioc,
+			 struct fw_event_work *fw_event)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ioc->fw_event_lock, flags);
+	ioc->current_event = fw_event;
+	spin_unlock_irqrestore(&ioc->fw_event_lock, flags);
+}
+
+/*
+ * Return the event the worker is running, with a reference that the
+ * caller puts, or NULL if there is none.
+ */
+static struct fw_event_work *
+_scsih_get_current_event(struct MPT3SAS_ADAPTER *ioc)
+{
+	struct fw_event_work *fw_event;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ioc->fw_event_lock, flags);
+	fw_event = ioc->current_event;
+	if (fw_event)
+		fw_event_work_get(fw_event);
 	spin_unlock_irqrestore(&ioc->fw_event_lock, flags);
 
 	return fw_event;
@@ -3814,10 +3872,13 @@ static void
 _scsih_fw_event_cleanup_queue(struct MPT3SAS_ADAPTER *ioc)
 {
 	struct fw_event_work *fw_event;
+	unsigned long flags;
+	bool idle;
 
-	if ((list_empty(&ioc->fw_event_list) && !ioc->current_event) ||
-	    !ioc->firmware_event_thread)
+	if (!ioc->firmware_event_thread)
 		return;
+	spin_lock_irqsave(&ioc->fw_event_lock, flags);
+	idle = list_empty(&ioc->fw_event_list) && !ioc->current_event;
 	/*
 	 * Set current running event as ignore, so that
 	 * current running event will exit quickly.
@@ -3826,64 +3887,87 @@ _scsih_fw_event_cleanup_queue(struct MPT3SAS_ADAPTER *ioc)
 	 */
 	if (ioc->shost_recovery && ioc->current_event)
 		ioc->current_event->ignore = 1;
+	spin_unlock_irqrestore(&ioc->fw_event_lock, flags);
+	if (idle)
+		return;
 
+	/*
+	 * Hold a reference to each event while it is handled here: its work
+	 * can drop the last one as soon as it ends.
+	 *
+	 * Don't wait for the running event, other than
+	 * MPT3SAS_REMOVE_UNRESPONDING_DEVICES, which stops waiting for the
+	 * host reset when fw_events_cleanup is set.  Another event may be
+	 * issuing the hard reset this cleanup is part of, and cleanups can
+	 * overlap, so whether an event is running doesn't depend on another
+	 * cleanup.  An event taken off fw_event_list here doesn't run, see
+	 * _scsih_fw_event_start(), so cancelling it never waits for one.
+	 *
+	 * Orginal logic of cleaning the current_event is added
+	 * for handling the back to back host reset issued by the user.
+	 * i.e. during back to back host reset, driver use to process
+	 * the two instances of MPT3SAS_REMOVE_UNRESPONDING_DEVICES
+	 * event back to back and this made the drives to unregister
+	 * the devices from SML.
+	 */
 	ioc->fw_events_cleanup = 1;
-	while ((fw_event = dequeue_next_fw_event(ioc)) ||
-	     (fw_event = ioc->current_event)) {
+	for (;;) {
+		while ((fw_event = dequeue_next_fw_event(ioc))) {
+			/*
+			 * Driver has to clear ioc->start_scan flag when
+			 * it is cleaning up MPT3SAS_PORT_ENABLE_COMPLETE,
+			 * otherwise scsi_scan_host() API waits for the
+			 * 5 minute timer to expire. If we exit from
+			 * scsi_scan_host() early then we can issue the
+			 * new port enable request as part of current diag
+			 * reset.
+			 */
+			if (fw_event->event == MPT3SAS_PORT_ENABLE_COMPLETE) {
+				ioc->port_enable_cmds.status |= MPT3_CMD_RESET;
+				ioc->start_scan = 0;
+			}
 
-		/*
-		 * Don't call cancel_work_sync() for current_event
-		 * other than MPT3SAS_REMOVE_UNRESPONDING_DEVICES;
-		 * otherwise we may observe deadlock if current
-		 * hard reset issued as part of processing the current_event.
-		 *
-		 * Orginal logic of cleaning the current_event is added
-		 * for handling the back to back host reset issued by the user.
-		 * i.e. during back to back host reset, driver use to process
-		 * the two instances of MPT3SAS_REMOVE_UNRESPONDING_DEVICES
-		 * event back to back and this made the drives to unregister
-		 * the devices from SML.
-		 */
-
-		if (fw_event == ioc->current_event &&
-		    ioc->current_event->event !=
-		    MPT3SAS_REMOVE_UNRESPONDING_DEVICES) {
-			ioc->current_event = NULL;
-			continue;
-		}
-
-		/*
-		 * Driver has to clear ioc->start_scan flag when
-		 * it is cleaning up MPT3SAS_PORT_ENABLE_COMPLETE,
-		 * otherwise scsi_scan_host() API waits for the
-		 * 5 minute timer to expire. If we exit from
-		 * scsi_scan_host() early then we can issue the
-		 * new port enable request as part of current diag reset.
-		 */
-		if (fw_event->event == MPT3SAS_PORT_ENABLE_COMPLETE) {
-			ioc->port_enable_cmds.status |= MPT3_CMD_RESET;
-			ioc->start_scan = 0;
-		}
-
-		/*
-		 * Wait on the fw_event to complete. If this returns 1, then
-		 * the event was never executed, and we need a put for the
-		 * reference the work had on the fw_event.
-		 *
-		 * If it did execute, we wait for it to finish, and the put will
-		 * happen from _firmware_event_work()
-		 *
-		 * An event requeued by _scsih_fw_event_requeue() is pending
-		 * on its delayed_work instead, and its timer must not fire
-		 * after the workqueue is destroyed.
-		 */
-		if (fw_event->delayed_work_active) {
-			if (cancel_delayed_work_sync(&fw_event->delayed_work))
+			/*
+			 * If this returns 1, the event never ran, and the
+			 * reference its work held needs a put.  Otherwise
+			 * its work drops that reference.
+			 *
+			 * An event requeued by _scsih_fw_event_requeue() is
+			 * pending on its delayed_work instead, and its timer
+			 * must not fire after the workqueue is destroyed.
+			 */
+			if (fw_event->delayed_work_active) {
+				if (cancel_delayed_work_sync(&fw_event->delayed_work))
+					fw_event_work_put(fw_event);
+			} else if (cancel_work_sync(&fw_event->work)) {
 				fw_event_work_put(fw_event);
-		} else if (cancel_work_sync(&fw_event->work)) {
+			}
+
+			/*
+			 * The broadcast callback queues one broadcast
+			 * primitive event at a time, and only its handler,
+			 * which won't run now, clears broadcast_aen_busy.
+			 */
+			if (fw_event->event ==
+			    MPI2_EVENT_SAS_BROADCAST_PRIMITIVE) {
+				ioc->broadcast_aen_busy = 0;
+				ioc->broadcast_aen_pending = 0;
+			}
+
 			fw_event_work_put(fw_event);
 		}
 
+		fw_event = _scsih_get_current_event(ioc);
+		if (!fw_event)
+			break;
+		if (fw_event->event != MPT3SAS_REMOVE_UNRESPONDING_DEVICES) {
+			fw_event_work_put(fw_event);
+			break;
+		}
+		/* wait for it, then flush what was queued meanwhile */
+		if (cancel_work_sync(&fw_event->work))
+			fw_event_work_put(fw_event);
+		fw_event_work_put(fw_event);
 	}
 	ioc->fw_events_cleanup = 0;
 }
@@ -11969,13 +12053,16 @@ mpt3sas_scsih_reset_done_handler(struct MPT3SAS_ADAPTER *ioc)
 static void
 _mpt3sas_fw_work(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work *fw_event)
 {
-	ioc->current_event = fw_event;
-	_scsih_fw_event_del_from_list(ioc, fw_event);
+	if (!_scsih_fw_event_start(ioc, fw_event)) {
+		/* _scsih_fw_event_cleanup_queue() took it off the list */
+		fw_event_work_put(fw_event);
+		return;
+	}
 
 	/* the queue is being flushed so ignore this event */
 	if (ioc->remove_host || ioc->pci_error_recovery) {
+		_scsih_set_current_event(ioc, NULL);
 		fw_event_work_put(fw_event);
-		ioc->current_event = NULL;
 		return;
 	}
 
@@ -12030,7 +12117,6 @@ _mpt3sas_fw_work(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work *fw_event)
 	case MPI2_EVENT_SAS_TOPOLOGY_CHANGE_LIST:
 		if (_scsih_sas_topology_change_event(ioc, fw_event)) {
 			_scsih_fw_event_requeue(ioc, fw_event, 1000);
-			ioc->current_event = NULL;
 			return;
 		}
 		break;
@@ -12074,14 +12160,13 @@ _mpt3sas_fw_work(struct MPT3SAS_ADAPTER *ioc, struct fw_event_work *fw_event)
 	case MPI2_EVENT_PCIE_TOPOLOGY_CHANGE_LIST:
 		if (_scsih_pcie_topology_change_event(ioc, fw_event)) {
 			_scsih_fw_event_requeue(ioc, fw_event, 1000);
-			ioc->current_event = NULL;
 			return;
 		}
 		break;
 	}
 out:
+	_scsih_set_current_event(ioc, NULL);
 	fw_event_work_put(fw_event);
-	ioc->current_event = NULL;
 }
 
 /**
