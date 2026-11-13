@@ -896,7 +896,7 @@ void rpc_killall_tasks(struct rpc_clnt *clnt)
 	trace_rpc_clnt_killall(clnt);
 	spin_lock(&clnt->cl_lock);
 	list_for_each_entry(rovr, &clnt->cl_tasks, tk_task)
-		rpc_signal_task(rovr);
+		rpc_abort_task(rovr);
 	spin_unlock(&clnt->cl_lock);
 }
 EXPORT_SYMBOL_GPL(rpc_killall_tasks);

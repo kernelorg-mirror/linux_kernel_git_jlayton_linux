@@ -222,6 +222,7 @@ void		rpc_put_task_async(struct rpc_task *);
 bool		rpc_task_set_rpc_status(struct rpc_task *task, int rpc_status);
 void		rpc_task_try_cancel(struct rpc_task *task, int error);
 void		rpc_signal_task(struct rpc_task *);
+void		rpc_abort_task(struct rpc_task *);
 void		rpc_exit_task(struct rpc_task *);
 void		rpc_exit(struct rpc_task *, int);
 void		rpc_release_calldata(const struct rpc_call_ops *, void *);

@@ -854,19 +854,38 @@ void rpc_exit_task(struct rpc_task *task)
 	}
 }
 
-void rpc_signal_task(struct rpc_task *task)
+static void rpc_signal_task_status(struct rpc_task *task, int status)
 {
 	struct rpc_wait_queue *queue;
 
 	if (!RPC_IS_ACTIVATED(task))
 		return;
 
-	if (!rpc_task_set_rpc_status(task, -ERESTARTSYS))
+	if (!rpc_task_set_rpc_status(task, status))
 		return;
 	trace_rpc_task_signalled(task, task->tk_action);
 	queue = READ_ONCE(task->tk_waitqueue);
 	if (queue)
 		rpc_wake_up_queued_task(queue, task);
+}
+
+void rpc_signal_task(struct rpc_task *task)
+{
+	rpc_signal_task_status(task, -ERESTARTSYS);
+}
+
+/**
+ * rpc_abort_task - terminate a task on behalf of an administrative action
+ * @task: the task to terminate
+ *
+ * Unlike rpc_signal_task(), which reports -ERESTARTSYS for a task
+ * interrupted by a signal, this reports -EIO: there is no signal for
+ * the syscall layer to restart on, so -ERESTARTSYS would be returned
+ * to userspace as error 512.
+ */
+void rpc_abort_task(struct rpc_task *task)
+{
+	rpc_signal_task_status(task, -EIO);
 }
 
 void rpc_task_try_cancel(struct rpc_task *task, int error)
