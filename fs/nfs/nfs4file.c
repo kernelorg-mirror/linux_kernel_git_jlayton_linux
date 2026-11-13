@@ -122,10 +122,13 @@ nfs4_file_flush(struct file *file, fl_owner_t id)
 		return 0;
 
 	/*
-	 * If we're holding a write delegation, then check if we're required
-	 * to flush the i/o on close. If not, then just start the i/o now.
+	 * Under a write delegation, start the i/o without waiting for it.
+	 * The NFS client also sends DELEGRETURN without waiting for
+	 * writeback, so another client can open the file and read data
+	 * older than this close(). Losing close-to-open consistency is
+	 * preferred over holding the delegation until the WRITEs finish.
 	 */
-	if (!nfs4_delegation_flush_on_close(inode))
+	if (nfs_have_write_delegation(inode))
 		return filemap_fdatawrite(file->f_mapping);
 
 	/* Flush writes to the server and return any errors */
