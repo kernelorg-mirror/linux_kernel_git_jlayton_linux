@@ -1453,6 +1453,30 @@ static void put_deleg_file(struct nfs4_file *fp)
 	}
 }
 
+static void nfsd_cmtime_notice(struct inode *inode, int err)
+{
+	pr_notice_ratelimited("nfsd: Unable to update timestamps on inode %02x:%02x:%llu: %d\n",
+			      MAJOR(inode->i_sb->s_dev),
+			      MINOR(inode->i_sb->s_dev),
+			      inode->i_ino, err);
+}
+
+/* Caller holds freeze protection for @f's filesystem */
+static void __nfsd_update_cmtime_attr(struct file *f, unsigned int flags)
+{
+	struct inode *inode = file_inode(f);
+	struct iattr attr = {
+		.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_DELEG | flags,
+	};
+	int ret;
+
+	inode_lock(inode);
+	ret = notify_change(&nop_mnt_idmap, f->f_path.dentry, &attr, NULL);
+	inode_unlock(inode);
+	if (ret)
+		nfsd_cmtime_notice(inode, ret);
+}
+
 static void nfsd4_finalize_deleg_timestamps(struct nfs4_delegation *dp, struct file *f)
 {
 	/* don't do anything if FMODE_NOCMTIME isn't set */
@@ -1471,8 +1495,18 @@ static void nfsd4_finalize_deleg_timestamps(struct nfs4_delegation *dp, struct f
 	if (dp->dl_setattr)
 		return;
 
+	/*
+	 * This runs from the laundromat and from nfsd shutdown too, which
+	 * must not wait for a frozen filesystem to thaw. Leave the times
+	 * alone then.
+	 */
+	if (!file_start_write_trylock(f)) {
+		nfsd_cmtime_notice(file_inode(f), -EBUSY);
+		return;
+	}
 	/* Stamp everything to "now" */
-	nfsd_update_cmtime_attr(f, ATTR_ATIME);
+	__nfsd_update_cmtime_attr(f, ATTR_ATIME);
+	file_end_write(f);
 }
 
 static void nfs4_unlock_deleg_lease(struct nfs4_delegation *dp)
@@ -10780,10 +10814,18 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 	if (!attrs.ia_valid)
 		return 0;
 
+	/*
+	 * The delegation's file is open for write, so only freeze
+	 * protection is missing. Don't hold an nfsd thread until a frozen
+	 * filesystem thaws: NFS4ERR_DELAY has the client retry.
+	 */
+	if (!sb_start_write_trylock(inode->i_sb))
+		return -EAGAIN;
 	attrs.ia_valid |= ATTR_DELEG;
 	inode_lock(inode);
 	ret = notify_change(&nop_mnt_idmap, dentry, &attrs, NULL);
 	inode_unlock(inode);
+	sb_end_write(inode->i_sb);
 	return ret;
 }
 
@@ -11052,25 +11094,14 @@ out_delegees:
  * @flags: any additional flags that should be updated
  *
  * Given upon opening a file delegated attributes were issues, update
- * @f attributes to current times.
+ * @f attributes to current times. Waits for a frozen filesystem to thaw,
+ * like the data change that makes this necessary.
  */
 void nfsd_update_cmtime_attr(struct file *f, unsigned int flags)
 {
-	int ret;
-	struct inode *inode = file_inode(f);
-	struct iattr attr = {
-		.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_DELEG | flags,
-	};
-
-	inode_lock(inode);
-	ret = notify_change(&nop_mnt_idmap, f->f_path.dentry, &attr, NULL);
-	inode_unlock(inode);
-	if (ret)
-		pr_notice_ratelimited("nfsd: Unable to update timestamps on "
-				      "inode %02x:%02x:%llu: %d\n",
-				      MAJOR(inode->i_sb->s_dev),
-				      MINOR(inode->i_sb->s_dev),
-				      inode->i_ino, ret);
+	file_start_write(f);
+	__nfsd_update_cmtime_attr(f, flags);
+	file_end_write(f);
 }
 
 static void
