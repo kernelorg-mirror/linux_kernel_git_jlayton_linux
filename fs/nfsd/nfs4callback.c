@@ -1315,6 +1315,8 @@ static void nfsd4_cb_probe_done(struct rpc_task *task, void *calldata)
 {
 	struct nfs4_client *clp = container_of(calldata, struct nfs4_client, cl_cb_null);
 
+	/* See nfsd4_run_cb_work() */
+	clear_bit(NFSD4_CALLBACK_REQUEUE, &clp->cl_cb_null.cb_flags);
 	if (task->tk_status)
 		nfsd4_mark_cb_down(clp);
 	else
@@ -1325,7 +1327,10 @@ static void nfsd4_cb_probe_release(void *calldata)
 {
 	struct nfs4_client *clp = container_of(calldata, struct nfs4_client, cl_cb_null);
 
-	nfsd41_cb_inflight_end(clp);
+	if (test_bit(NFSD4_CALLBACK_REQUEUE, &clp->cl_cb_null.cb_flags))
+		nfsd4_queue_cb(&clp->cl_cb_null);
+	else
+		nfsd41_cb_inflight_end(clp);
 
 }
 
@@ -1686,6 +1691,8 @@ static void nfsd4_cb_done(struct rpc_task *task, void *calldata)
 	struct nfs4_client *clp = cb->cb_clp;
 
 	trace_nfsd_cb_rpc_done(clp);
+	/* See nfsd4_run_cb_work() */
+	clear_bit(NFSD4_CALLBACK_REQUEUE, &cb->cb_flags);
 
 	if (!clp->cl_minorversion) {
 		/*
@@ -1858,7 +1865,7 @@ nfsd4_run_cb_work(struct work_struct *work)
 		container_of(work, struct nfsd4_callback, cb_work);
 	struct nfs4_client *clp = cb->cb_clp;
 	struct rpc_clnt *clnt;
-	int flags, ret;
+	int flags;
 
 	trace_nfsd_cb_start(clp);
 
@@ -1894,12 +1901,16 @@ nfsd4_run_cb_work(struct work_struct *work)
 
 	cb->cb_msg.rpc_cred = clp->cl_cb_cred;
 	flags = clp->cl_minorversion ? RPC_TASK_NOCONNECT : RPC_TASK_SOFTCONN;
-	ret = rpc_call_async(clnt, &cb->cb_msg, RPC_TASK_SOFT | flags,
-			     cb->cb_ops ? &nfsd4_cb_ops : &nfsd4_cb_probe_ops, cb);
-	if (ret != 0) {
-		set_bit(NFSD4_CALLBACK_REQUEUE, &cb->cb_flags);
-		nfsd4_queue_cb(cb);
-	}
+	/*
+	 * If rpc_call_async() can't allocate a task, it calls the release
+	 * method before returning, and no other method runs. The release
+	 * method then owns the callback, so have it requeue the callback
+	 * rather than end it. A task that runs always gets ->rpc_call_done
+	 * first, which clears the flag.
+	 */
+	set_bit(NFSD4_CALLBACK_REQUEUE, &cb->cb_flags);
+	rpc_call_async(clnt, &cb->cb_msg, RPC_TASK_SOFT | flags,
+		       cb->cb_ops ? &nfsd4_cb_ops : &nfsd4_cb_probe_ops, cb);
 }
 
 void nfsd4_init_cb(struct nfsd4_callback *cb, struct nfs4_client *clp,
