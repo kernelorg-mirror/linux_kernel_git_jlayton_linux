@@ -550,7 +550,9 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	int		host_err = 0;
 	bool		get_write_count;
 	bool		size_change = (iap->ia_valid & ATTR_SIZE);
-	int		retries;
+	bool		pre_saved = fhp->fh_pre_saved;
+	bool		retried = false;
+	struct iattr	attrs;
 
 	trace_nfsd_vfs_setattr(rqstp, fhp, iap, guardtime);
 
@@ -612,6 +614,7 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		}
 	}
 
+retry:
 	inode_lock(inode);
 	if (size_change) {
 		err = nfsd_may_truncate(rqstp, fhp, iap);
@@ -631,20 +634,29 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		}
 	}
 
-	for (retries = 1;;) {
-		struct iattr attrs;
-
-		/*
-		 * notify_change() can alter its iattr argument, making
-		 * @iap unsuitable for submission multiple times. Make a
-		 * copy for every loop iteration.
-		 */
-		attrs = *iap;
-		host_err = __nfsd_setattr(dentry, &attrs);
-		if (host_err != -EAGAIN || !retries--)
-			break;
-		if (!nfsd_wait_for_delegreturn(rqstp, inode))
-			break;
+	/*
+	 * notify_change() can alter its iattr argument, making @iap
+	 * unsuitable for submission multiple times. Pass a copy.
+	 */
+	attrs = *iap;
+	host_err = __nfsd_setattr(dentry, &attrs);
+	/*
+	 * A delegation was broken. Give its holder a chance to return
+	 * it, without inode_lock: what it sends first, such as WRITEs
+	 * that flush its dirty data, can need the lock. The file can
+	 * change meanwhile, so start over, taking fresh pre-op
+	 * attributes and checking the guard again. That's only safe if
+	 * nothing was changed: a size change that is already done
+	 * (__nfsd_setattr() clears ATTR_SIZE) would be repeated over
+	 * whatever was written after it, so return the error then.
+	 */
+	if (host_err == -EAGAIN && !retried &&
+	    !(size_change && !(attrs.ia_valid & ATTR_SIZE))) {
+		inode_unlock(inode);
+		retried = true;
+		nfsd_wait_for_delegreturn(rqstp, inode);
+		fhp->fh_pre_saved = pre_saved;
+		goto retry;
 	}
 	if (attr->na_seclabel && attr->na_seclabel->len)
 		attr->na_labelerr = security_inode_setsecctx(dentry,
