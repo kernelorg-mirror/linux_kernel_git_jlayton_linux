@@ -1419,6 +1419,101 @@ nfsd4_deleg_set_times(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	return nfserrno(host_err);
 }
 
+/*
+ * A plain time set by the holder of a timestamp delegation must leave
+ * the record reporting the times the inode then holds. Otherwise GETATTR
+ * would keep overlaying the old record. nfsd_setattr() calls these hooks
+ * under inode_lock, around applying the iattr, so the change to the
+ * inode and the record is one transition.
+ */
+struct nfsd4_times_set {
+	struct nfsd4_compound_state	*cstate;
+	struct nfsd4_setattr		*setattr;
+	struct nfs4_delegation		*dp;		/* the stateid's, or NULL */
+	struct nfs4_delegation		*found;		/* from the lease walk */
+	struct nfs4_delegation		*active;	/* in a transition */
+	u64				pre_change;
+	bool				pre_valid;	/* pre_change was read */
+	__be32				status;
+};
+
+static int nfsd4_times_set_stat(struct svc_fh *fhp, struct kstat *stat)
+{
+	struct path path = {
+		.mnt	= fhp->fh_export->ex_path.mnt,
+		.dentry	= fhp->fh_dentry,
+	};
+
+	return vfs_getattr(&path, stat, STATX_ATIME | STATX_MTIME |
+			   STATX_CTIME | STATX_CHANGE_COOKIE,
+			   AT_STATX_SYNC_AS_STAT);
+}
+
+/*
+ * Begin a transition on the holder's live timestamp delegation, if any.
+ * A grant not yet hashed holds inode_lock shared from its grant stat
+ * until it hashes the delegation, so it takes that stat after this set.
+ */
+static void nfsd4_times_set_pre(struct nfsd_attrs *attrs, struct svc_fh *fhp)
+{
+	struct nfsd4_times_set *ts = attrs->na_private;
+	struct nfs4_delegation *dp = ts->dp;
+	struct kstat stat;
+
+	/* Called again when nfsd_setattr() retries after a lease break */
+	ts->active = NULL;
+	/*
+	 * Without a client, as for an NFSv4.0 SETATTR with no stateid to
+	 * look up, the caller can't be a holder: timestamp delegations
+	 * need NFSv4.2. A NULL client would match any holder. A retry
+	 * keeps what an earlier walk found.
+	 */
+	if (!dp && !ts->found && ts->cstate->clp)
+		ts->found = nfsd4_get_times_deleg(d_inode(fhp->fh_dentry),
+						  ts->cstate->clp);
+	if (!dp)
+		dp = ts->found;
+	if (!dp)
+		return;
+	if (!nfsd4_deleg_times_begin(dp))
+		return;
+	ts->active = dp;
+	/* To tell whether a failed set changed the inode anyway */
+	ts->pre_valid = !nfsd4_times_set_stat(fhp, &stat);
+	if (ts->pre_valid)
+		ts->pre_change = nfsd4_change_attribute(&stat);
+}
+
+static void nfsd4_times_set_post(struct nfsd_attrs *attrs, struct svc_fh *fhp,
+				 int host_err)
+{
+	struct nfsd4_times_set *ts = attrs->na_private;
+	struct nfs4_delegation *dp = ts->active;
+	struct kstat stat;
+	int err;
+
+	if (!dp)
+		return;
+	err = nfsd4_times_set_stat(fhp, &stat);
+	if (err) {
+		/* The inode may have changed, but there's no value to assign */
+		nfsd4_deleg_times_invalidate(dp);
+		ts->status = nfserrno(err);
+	} else if (!host_err) {
+		nfsd4_deleg_times_assign(dp, &stat,
+					 ts->setattr->sa_bmval[1] & FATTR4_WORD1_TIME_ACCESS_SET,
+					 ts->setattr->sa_bmval[1] & FATTR4_WORD1_TIME_MODIFY_SET);
+	} else if (!ts->pre_valid ||
+		   nfsd4_change_attribute(&stat) != ts->pre_change) {
+		/*
+		 * A failed set can change the inode first, e.g. the size
+		 * but not the times, and can't say which parts it applied.
+		 */
+		nfsd4_deleg_times_invalidate(dp);
+	}
+	nfsd4_deleg_times_end(dp);
+}
+
 static __be32
 nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	      union nfsd4_op_u *u)
@@ -1430,8 +1525,13 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		.na_pacl	= posix_acl_dup(setattr->sa_pacl),
 		.na_dpacl	= posix_acl_dup(setattr->sa_dpacl),
 	};
+	struct nfsd4_times_set ts = {
+		.cstate		= cstate,
+		.setattr	= setattr,
+	};
 	struct nfs4_delegation *dp = NULL;
 	u32 *bmval = setattr->sa_bmval;
+	__be32 assign_status = nfs_ok;
 	struct nfs4_stid *st = NULL;
 	u32 deleg_bits, other_bits;
 	__be32 status = nfs_ok;
@@ -1472,9 +1572,8 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 
 	if (deleg_bits) {
 		status = nfserr_bad_stateid;
-		/* Only an *_ATTRS_DELEG delegation may set delegated times */
 		if (st && (st->sc_type & SC_TYPE_DELEG) &&
-		    deleg_attrs_deleg(delegstateid(st)->dl_type)) {
+		    delegstateid(st)->dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG) {
 			dp = delegstateid(st);
 			status = nfs_ok;
 		}
@@ -1503,10 +1602,24 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 					   setattr->sa_acl, &attrs);
 		if (status)
 			goto out;
+		/*
+		 * The post hook runs before a label or ACL is set, so the
+		 * record follows the times even if that fails.
+		 */
+		if (bmval[1] & (FATTR4_WORD1_TIME_ACCESS_SET |
+				FATTR4_WORD1_TIME_MODIFY_SET)) {
+			ts.dp = dp;
+			attrs.na_pre_set = nfsd4_times_set_pre;
+			attrs.na_post_set = nfsd4_times_set_post;
+			attrs.na_private = &ts;
+		}
 		save_no_wcc = cstate->current_fh.fh_no_wcc;
 		cstate->current_fh.fh_no_wcc = true;
 		status = nfsd_setattr(rqstp, &cstate->current_fh, &attrs, NULL);
 		cstate->current_fh.fh_no_wcc = save_no_wcc;
+		if (ts.found)
+			nfsd4_put_leased_deleg(ts.found);
+		assign_status = ts.status;
 		if (!status)
 			status = nfserrno(attrs.na_labelerr);
 		if (!status)
@@ -1523,6 +1636,10 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		setattr->sa_attrsset[0] = bmval[0];
 		setattr->sa_attrsset[1] = bmval[1];
 		setattr->sa_attrsset[2] = bmval[2] & ~NFSD4_DELEG_TIME_BITS;
+
+		status = assign_status;
+		if (status)
+			goto out;
 	}
 
 	if (deleg_bits) {

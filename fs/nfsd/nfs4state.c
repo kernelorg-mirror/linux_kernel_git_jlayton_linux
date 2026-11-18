@@ -3877,6 +3877,37 @@ static bool nfsd4_cb_sample_complete(const struct nfsd4_deleg_cb_sample *cb)
 	return true;
 }
 
+static void nfsd4_deleg_times_lock(struct nfs4_delegation *dp)
+{
+	struct nfsd_net *nn = net_generic(dp->dl_stid.sc_client->net,
+					  nfsd_net_id);
+
+	spin_lock(&nn->deleg_lock);
+	spin_lock(&dp->dl_stid.sc_file->fi_lock);
+}
+
+static void nfsd4_deleg_times_unlock(struct nfs4_delegation *dp)
+{
+	struct nfsd_net *nn = net_generic(dp->dl_stid.sc_client->net,
+					  nfsd_net_id);
+
+	spin_unlock(&dp->dl_stid.sc_file->fi_lock);
+	spin_unlock(&nn->deleg_lock);
+}
+
+/*
+ * A reference keeps the record valid, but not its authority: only a
+ * hashed, open timestamp delegation may be overlaid or updated.
+ * Caller holds deleg_lock.
+ */
+static bool nfsd4_deleg_times_live_locked(struct nfs4_delegation *dp)
+{
+	return dp->dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG &&
+	       delegation_hashed(dp) &&
+	       !(dp->dl_stid.sc_status & (SC_STATUS_CLOSED | SC_STATUS_REVOKED |
+					  SC_STATUS_ADMIN_REVOKED));
+}
+
 /**
  * nfsd4_deleg_times_now - latest time a holder time merges as
  * @inode: the delegation's inode
@@ -3956,6 +3987,141 @@ nfsd4_commit_deleg_times(struct inode *inode, struct nfsd4_deleg_times *rec,
 		changed = true;
 	}
 	return changed;
+}
+
+/**
+ * nfsd4_deleg_times_begin - start a holder change to the inode's times
+ * @dp: referenced timestamp delegation
+ *
+ * Call under inode_lock, before the inode changes, and finish with
+ * nfsd4_deleg_times_end() once the record follows the inode. A reader
+ * whose stat may fall in between can't pair it with the record: the
+ * generation moves now, and @updating stays set until the end.
+ *
+ * Return: false if @dp is not live; then there's nothing to end.
+ */
+bool nfsd4_deleg_times_begin(struct nfs4_delegation *dp)
+{
+	struct nfsd4_deleg_times *rec = dp->dl_times;
+	bool live;
+
+	lockdep_assert_held_write(&dp->dl_stid.sc_file->fi_inode->i_rwsem);
+
+	nfsd4_deleg_times_lock(dp);
+	live = nfsd4_deleg_times_live_locked(dp);
+	if (live) {
+		/* inode_lock serializes transitions */
+		WARN_ON_ONCE(rec->updating);
+		rec->updating = true;
+		rec->snapshot_seq++;
+	}
+	nfsd4_deleg_times_unlock(dp);
+	return live;
+}
+
+/**
+ * nfsd4_deleg_times_end - finish a transition
+ * @dp: delegation passed to a successful nfsd4_deleg_times_begin()
+ *
+ * Call under the same inode_lock as the begin.
+ */
+void nfsd4_deleg_times_end(struct nfs4_delegation *dp)
+{
+	struct nfsd4_deleg_times *rec = dp->dl_times;
+	struct nfs4_file *fp = dp->dl_stid.sc_file;
+
+	spin_lock(&fp->fi_lock);
+	WARN_ON_ONCE(!rec->updating);
+	rec->updating = false;
+	rec->snapshot_seq++;
+	spin_unlock(&fp->fi_lock);
+}
+
+/**
+ * nfsd4_deleg_times_assign - record times set by a holder's plain SETATTR
+ * @dp: referenced timestamp delegation
+ * @stat: inode attributes after the SETATTR
+ * @atime: the SETATTR set atime
+ * @mtime: the SETATTR set mtime
+ *
+ * Unlike a merge, an explicit set can move a time backward. A CB_GETATTR
+ * issued before now publishes as stale, so it can't merge an older client
+ * view back over the set. The clean baseline stays: if the set moved the
+ * change attribute, nothing was reported under the new one, and the
+ * baseline can't match it; if the set didn't move it, what was reported
+ * under it still stands. Call within the set's transition.
+ */
+void nfsd4_deleg_times_assign(struct nfs4_delegation *dp,
+			      const struct kstat *stat, bool atime, bool mtime)
+{
+	struct nfsd4_deleg_times *rec = dp->dl_times;
+	struct nfs4_file *fp = dp->dl_stid.sc_file;
+
+	spin_lock(&fp->fi_lock);
+	if (atime) {
+		rec->atime = stat->atime;
+		rec->raw_atime = stat->atime;
+	}
+	if (mtime) {
+		rec->mtime = stat->mtime;
+		rec->raw_mtime = stat->mtime;
+	}
+	rec->cb_fence_seq = dp->dl_cb_fattr.ncf_issue_seq;
+	rec->snapshot_seq++;
+	spin_unlock(&fp->fi_lock);
+}
+
+/**
+ * nfsd4_deleg_times_invalidate - stop overlaying a record and recall
+ * @dp: referenced timestamp delegation
+ *
+ * For a plain-time SETATTR that changed the inode when no trustworthy
+ * value can be assigned to the record. Call within the set's transition.
+ */
+void nfsd4_deleg_times_invalidate(struct nfs4_delegation *dp)
+{
+	struct nfs4_file *fp = dp->dl_stid.sc_file;
+
+	spin_lock(&fp->fi_lock);
+	dp->dl_times->unusable = true;
+	dp->dl_times->snapshot_seq++;
+	spin_unlock(&fp->fi_lock);
+	nfsd4_force_recall(dp);
+}
+
+/**
+ * nfsd4_get_times_deleg - find the timestamp delegation on an inode
+ * @inode: inode to search
+ * @clp: holder to match, or NULL for any
+ *
+ * Return: a delegation to release with nfsd4_put_leased_deleg(), or NULL.
+ * Its liveness is not checked.
+ */
+struct nfs4_delegation *
+nfsd4_get_times_deleg(struct inode *inode, struct nfs4_client *clp)
+{
+	struct file_lock_context *ctx = locks_inode_context(inode);
+	struct nfs4_delegation *dp, *found = NULL;
+	struct file_lease *fl;
+
+	if (!ctx)
+		return NULL;
+	spin_lock(&ctx->flc_lock);
+	for_each_file_lock(fl, &ctx->flc_lease) {
+		if (fl->c.flc_flags == FL_LAYOUT)
+			continue;
+		if (fl->c.flc_type == F_WRLCK &&
+		    fl->fl_lmops == &nfsd_lease_mng_ops) {
+			dp = fl->c.flc_owner;
+			if (dp->dl_times &&
+			    (!clp || dp->dl_stid.sc_client == clp) &&
+			    nfsd4_get_leased_deleg(dp))
+				found = dp;
+		}
+		break;
+	}
+	spin_unlock(&ctx->flc_lock);
+	return found;
 }
 
 /*
@@ -6970,6 +7136,34 @@ static const struct lease_manager_operations nfsd_lease_mng_ops = {
 	.lm_open_conflict = nfsd4_deleg_lm_open_conflict,
 };
 
+/**
+ * nfsd4_force_recall - recall a delegation without a lease break
+ * @dp: referenced delegation
+ *
+ * Unlike a lease break, this recalls even when the current request comes
+ * from the holder. It leaves @dp as a lease break would, and does nothing
+ * once @dp's lease is gone: F_UNLCK has then already settled the
+ * cl_delegs_in_recall count under the same flc_lock.
+ */
+void nfsd4_force_recall(struct nfs4_delegation *dp)
+{
+	struct file_lock_context *ctx;
+	struct file_lease *fl;
+
+	ctx = locks_inode_context(dp->dl_stid.sc_file->fi_inode);
+	if (!ctx)
+		return;
+	spin_lock(&ctx->flc_lock);
+	for_each_file_lock(fl, &ctx->flc_lease) {
+		if (fl->fl_lmops == &nfsd_lease_mng_ops &&
+		    fl->c.flc_owner == dp) {
+			nfsd_recall_deleg_locked(dp);
+			break;
+		}
+	}
+	spin_unlock(&ctx->flc_lock);
+}
+
 static __be32 nfsd4_check_seqid(struct nfsd4_compound_state *cstate, struct nfs4_stateowner *so, u32 seqid)
 {
 	if (nfsd4_has_session(cstate))
@@ -7682,13 +7876,26 @@ nfs4_set_delegation(struct nfsd4_open *open,
 	 * hashed may read ncf_initial_cinfo and dl_[amc]time, so set them
 	 * before hashing. nfs4_open_delegation() stats again after hashing
 	 * to catch a write that lands between the two stats.
+	 *
+	 * That can miss a plain time set by the holder: the set changes
+	 * the record only in a transition, which needs the delegation
+	 * hashed, and it can land after both stats, or leave the change
+	 * attribute where it was. Hold inode_lock shared, which the set
+	 * holds exclusive, from the stat until the delegation is hashed:
+	 * the set then either lands before the stat, which sees it, or
+	 * finds the delegation hashed and begins a transition.
 	 */
 	if (deleg_is_write(dl_type)) {
 		struct kstat stat;
 
+		if (dp->dl_times)
+			inode_lock_shared(fp->fi_inode);
 		status = -EIO;
-		if (!nfs4_delegation_stat(dp, currentfh, &stat))
+		if (!nfs4_delegation_stat(dp, currentfh, &stat)) {
+			if (dp->dl_times)
+				inode_unlock_shared(fp->fi_inode);
 			goto out_unlock;
+		}
 		*grant_change = nfsd4_change_attribute(&stat);
 		dp->dl_cb_fattr.ncf_initial_cinfo = *grant_change;
 		dp->dl_atime = stat.atime;
@@ -7719,6 +7926,8 @@ nfs4_set_delegation(struct nfsd4_open *open,
 	spin_unlock(&fp->fi_lock);
 	spin_unlock(&clp->cl_lock);
 	spin_unlock(&nn->deleg_lock);
+	if (dp->dl_times)
+		inode_unlock_shared(fp->fi_inode);
 
 	if (status)
 		goto out_unlock;
