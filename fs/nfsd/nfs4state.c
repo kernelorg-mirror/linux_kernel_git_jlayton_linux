@@ -7427,7 +7427,17 @@ nfs4_set_delegation(struct nfsd4_open *open,
 	spin_lock(&nn->deleg_lock);
 	spin_lock(&clp->cl_lock);
 	spin_lock(&fp->fi_lock);
-	status = hash_delegation_locked(dp, fp);
+	/*
+	 * Check again under deleg_lock. A break after the check above has
+	 * queued a recall whose prepare takes deleg_lock, and that prepare
+	 * doesn't queue an unhashed delegation for revocation. Granting
+	 * the delegation then would leave a recalled delegation that the
+	 * laundromat never revokes.
+	 */
+	if (fp->fi_had_conflict)
+		status = -EAGAIN;
+	else
+		status = hash_delegation_locked(dp, fp);
 	if (status == -EEXIST) {
 		held = nfs4_delegation_exists(clp, fp);
 		*held_type = held->dl_type;
