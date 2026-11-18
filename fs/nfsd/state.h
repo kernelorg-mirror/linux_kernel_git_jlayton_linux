@@ -1085,6 +1085,9 @@ static inline bool try_to_expire_client(struct nfs4_client *clp)
 	return clp->cl_state == NFSD4_EXPIRABLE;
 }
 
+#define NFSD4_FATTR_STATX_MASK	(STATX_BASIC_STATS | STATX_BTIME | \
+				 STATX_CHANGE_COOKIE)
+
 /* Result of nfsd4_deleg_getattr_conflict() */
 struct nfsd4_deleg_getattr {
 	struct nfs4_delegation		*dp;	/* synthesize from; caller puts */
@@ -1092,7 +1095,7 @@ struct nfsd4_deleg_getattr {
 };
 
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
-		struct dentry *dentry, struct nfsd4_deleg_getattr *dga);
+		const struct path *path, struct nfsd4_deleg_getattr *dga);
 
 struct nfsd4_get_dir_delegation;
 struct nfs4_delegation *nfsd_get_dir_deleg(struct nfsd4_compound_state *cstate,

@@ -11105,7 +11105,7 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 /**
  * nfsd4_deleg_getattr_conflict - Recall if GETATTR causes conflict
  * @rqstp: RPC transaction context
- * @dentry: dentry of inode to be checked for a conflict
+ * @path: path of inode to be checked for a conflict
  * @dga: OUT: WRITE delegation and attributes to report
  *
  * This function is called when there is a conflict between a write
@@ -11120,10 +11120,11 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
  * caller must release it with nfsd4_put_leased_deleg().
  */
 __be32
-nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
+nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, const struct path *path,
 			     struct nfsd4_deleg_getattr *dga)
 {
 	struct nfsd_thread_local_info *ntli = rqstp->rq_private;
+	struct dentry *dentry = path->dentry;
 	struct file_lock_context *ctx;
 	struct nfs4_delegation *dp = NULL;
 	struct nfsd4_deleg_cb_sample *cb = &dga->cb;

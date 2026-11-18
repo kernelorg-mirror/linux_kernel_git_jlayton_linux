@@ -4095,13 +4095,12 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 	    (attrmask[1] & (FATTR4_WORD1_TIME_ACCESS |
 			    FATTR4_WORD1_TIME_MODIFY |
 			    FATTR4_WORD1_TIME_METADATA))) {
-		status = nfsd4_deleg_getattr_conflict(rqstp, dentry, &dga);
+		status = nfsd4_deleg_getattr_conflict(rqstp, &path, &dga);
 		if (status)
 			goto out;
 	}
 
-	err = vfs_getattr(&path, &args.stat,
-			  STATX_BASIC_STATS | STATX_BTIME | STATX_CHANGE_COOKIE,
+	err = vfs_getattr(&path, &args.stat, NFSD4_FATTR_STATX_MASK,
 			  AT_STATX_SYNC_AS_STAT);
 	if (dga.dp) {
 		struct nfs4_cb_fattr *ncf = &dga.dp->dl_cb_fattr;
