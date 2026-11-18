@@ -245,9 +245,15 @@ struct nfs4_cb_fattr {
  * The holder's times are kept here and reported over NFSv4 while the
  * delegation is live; only the holder's SETATTR writes them to the inode.
  * All fields are protected by the nfs4_file's fi_lock.
+ *
+ * A holder SETATTR that changes the inode's times is a transition from
+ * nfsd4_deleg_times_begin() to nfsd4_deleg_times_end(), all under
+ * inode_lock. While @updating is set, a reader that doesn't hold
+ * inode_lock can't pair its inode stat with the record.
  */
 struct nfsd4_deleg_times {
 	bool			unusable;	/* never overlay; recall */
+	bool			updating;	/* in a transition */
 	struct timespec64	atime;		/* reported; starts at grant floor */
 	struct timespec64	mtime;		/* reported; starts at grant floor */
 	struct timespec64	raw_atime;	/* last accepted wire value */
@@ -1096,7 +1102,15 @@ struct nfsd4_deleg_getattr {
 
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
 		const struct path *path, struct nfsd4_deleg_getattr *dga);
+struct nfs4_delegation *nfsd4_get_times_deleg(struct inode *inode,
+					      struct nfs4_client *clp);
 struct timespec64 nfsd4_deleg_times_now(struct inode *inode);
+bool nfsd4_deleg_times_begin(struct nfs4_delegation *dp);
+void nfsd4_deleg_times_end(struct nfs4_delegation *dp);
+void nfsd4_deleg_times_assign(struct nfs4_delegation *dp,
+			      const struct kstat *stat, bool atime, bool mtime);
+void nfsd4_deleg_times_invalidate(struct nfs4_delegation *dp);
+void nfsd4_force_recall(struct nfs4_delegation *dp);
 
 struct nfsd4_get_dir_delegation;
 struct nfs4_delegation *nfsd_get_dir_deleg(struct nfsd4_compound_state *cstate,
