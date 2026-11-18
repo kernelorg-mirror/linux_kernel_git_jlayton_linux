@@ -6763,11 +6763,9 @@ static const struct nfsd4_callback_ops nfsd4_cb_recall_ops = {
 	.opcode		= OP_CB_RECALL,
 };
 
-/* Called from break_lease() with flc_lock held. */
-static bool
-nfsd_break_deleg_cb(struct file_lease *fl)
+/* Caller holds flc_lock, and @dp's lease is on the inode. */
+static void nfsd_recall_deleg_locked(struct nfs4_delegation *dp)
 {
-	struct nfs4_delegation *dp = (struct nfs4_delegation *) fl->c.flc_owner;
 	struct nfs4_file *fp = dp->dl_stid.sc_file;
 	struct nfs4_client *clp = dp->dl_stid.sc_client;
 	struct nfsd_net *nn;
@@ -6790,6 +6788,13 @@ nfsd_break_deleg_cb(struct file_lease *fl)
 		fp->fi_had_conflict = true;
 	}
 
+	nfsd_break_one_deleg(dp);
+}
+
+/* Called from break_lease() with flc_lock held. */
+static bool
+nfsd_break_deleg_cb(struct file_lease *fl)
+{
 	/*
 	 * We don't want the locks code to timeout the lease for us;
 	 * we'll remove it ourself if a delegation isn't returned
@@ -6797,7 +6802,7 @@ nfsd_break_deleg_cb(struct file_lease *fl)
 	 */
 	fl->fl_break_time = 0;
 
-	nfsd_break_one_deleg(dp);
+	nfsd_recall_deleg_locked(fl->c.flc_owner);
 	return false;
 }
 
