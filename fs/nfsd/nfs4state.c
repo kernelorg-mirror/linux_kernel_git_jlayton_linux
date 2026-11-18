@@ -3867,6 +3867,97 @@ nfsd4_cb_recall_any_release(struct nfsd4_callback *cb)
 	nfsd4_put_client(clp);
 }
 
+static bool nfsd4_cb_sample_complete(const struct nfsd4_deleg_cb_sample *cb)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(cb->requested); i++)
+		if ((cb->present[i] & cb->requested[i]) != cb->requested[i])
+			return false;
+	return true;
+}
+
+/**
+ * nfsd4_deleg_times_now - latest time a holder time merges as
+ * @inode: the delegation's inode
+ *
+ * current_time() can return a fine-grained time that doesn't move the
+ * multigrain floor, and inode_set_ctime_deleg() clamps a ctime later
+ * than the floor back to it. Writing back an mtime merged as such a time
+ * would leave ctime below what was reported for it, and on a filesystem
+ * that derives the change attribute from ctime, leave the change
+ * attribute unmoved. The floor is never behind the coarse clock.
+ *
+ * Return: the coarse clock, at the granularity of @inode.
+ */
+struct timespec64 nfsd4_deleg_times_now(struct inode *inode)
+{
+	struct timespec64 now;
+
+	ktime_get_coarse_real_ts64(&now);
+	return timestamp_truncate(now, inode);
+}
+
+/*
+ * Merge a holder time @in into reported value @val, whose last accepted
+ * wire value is @raw. Merges only move forward, and future times are
+ * clamped to @now, from nfsd4_deleg_times_now(). The merged value has the
+ * inode's granularity, so writing it back can't lose a reported part.
+ * Returns true and sets @merged if @val would change; otherwise @merged
+ * is @val.
+ *
+ * The caller saves an accepted @in as @raw even when it was clamped, so
+ * a replay can't move a reported time later under an unchanged change
+ * attribute; a new holder value still merges. An @in that changes
+ * nothing isn't saved, and can be taken once @now passes it.
+ */
+static bool
+nfsd4_merge_deleg_time(struct inode *inode, const struct timespec64 *val,
+		       const struct timespec64 *raw,
+		       const struct timespec64 *in, const struct timespec64 *now,
+		       struct timespec64 *merged)
+{
+	struct timespec64 ts;
+
+	*merged = *val;
+	/* An exact replay was already merged */
+	if (timespec64_equal(in, raw))
+		return false;
+	if (timespec64_compare(in, now) > 0)
+		ts = *now;
+	else
+		ts = timestamp_truncate(*in, inode);
+	if (timespec64_compare(&ts, val) <= 0)
+		return false;
+	*merged = ts;
+	return true;
+}
+
+/* Caller holds fi_lock. Returns true if a reported time changed. */
+static bool
+nfsd4_commit_deleg_times(struct inode *inode, struct nfsd4_deleg_times *rec,
+			 const struct timespec64 *atime,
+			 const struct timespec64 *mtime,
+			 const struct timespec64 *now)
+{
+	struct timespec64 v;
+	bool changed = false;
+
+	if (atime && nfsd4_merge_deleg_time(inode, &rec->atime,
+					    &rec->raw_atime, atime, now, &v)) {
+		rec->atime = v;
+		rec->raw_atime = *atime;
+		changed = true;
+	}
+	if (mtime && nfsd4_merge_deleg_time(inode, &rec->mtime,
+					    &rec->raw_mtime, mtime, now, &v)) {
+		rec->mtime = v;
+		rec->raw_mtime = *mtime;
+		changed = true;
+	}
+	return changed;
+}
+
 /*
  * Copy the running callback's result to ncf_sample, the only place
  * waiters read it from. Only the first publication for a sequence counts,
@@ -3896,6 +3987,22 @@ static void nfsd4_cb_getattr_publish(struct nfs4_cb_fattr *ncf, int status)
 		cb->atime = ncf->ncf_cb_atime;
 		cb->mtime = ncf->ncf_cb_mtime;
 		cb->stale = rec && seq <= rec->cb_fence_seq;
+		/*
+		 * fi_inode isn't referenced: only the lease's file, which
+		 * put_deleg_file() clears under fi_lock before putting,
+		 * keeps it here. Once the lease is gone, the record is
+		 * retired and there is nothing to merge into.
+		 */
+		if (rec && !status && !cb->stale &&
+		    rcu_access_pointer(fp->fi_deleg_file) &&
+		    nfsd4_cb_sample_complete(cb)) {
+			struct timespec64 now = nfsd4_deleg_times_now(fp->fi_inode);
+
+			nfsd4_commit_deleg_times(fp->fi_inode, rec,
+						 &cb->atime, &cb->mtime,
+						 &now);
+		}
+		/* Even if unchanged: GETATTR pairs the sample with its stat */
 		if (rec)
 			rec->snapshot_seq++;
 		ncf->ncf_done_seq = seq;
@@ -4193,16 +4300,6 @@ static bool nfs4_cb_getattr(struct nfs4_delegation *dp, u64 *seq)
 	spin_unlock(&fp->fi_lock);
 	spin_unlock(&nn->deleg_lock);
 	return hashed;
-}
-
-static bool nfsd4_cb_sample_complete(const struct nfsd4_deleg_cb_sample *cb)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(cb->requested); i++)
-		if ((cb->present[i] & cb->requested[i]) != cb->requested[i])
-			return false;
-	return true;
 }
 
 /*
