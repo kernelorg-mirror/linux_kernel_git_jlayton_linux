@@ -103,6 +103,20 @@ struct nfsd_attrs {
 	struct posix_acl	*na_pacl;	/* input */
 	struct posix_acl	*na_dpacl;	/* input */
 
+	/*
+	 * Optional input, for a caller whose own state must follow the
+	 * inode: nfsd_setattr() calls these under one hold of inode_lock,
+	 * just before and just after an attempt to apply @na_iattr, with
+	 * its result. Neither is called if nfsd_setattr() fails before
+	 * that point. If the attempt breaks a delegation, nfsd_setattr()
+	 * drops the lock to wait and tries once more, calling both again.
+	 */
+	void			(*na_pre_set)(struct nfsd_attrs *attrs,
+					      struct svc_fh *fhp);
+	void			(*na_post_set)(struct nfsd_attrs *attrs,
+					       struct svc_fh *fhp, int host_err);
+	void			*na_private;
+
 	int			na_labelerr;	/* output */
 	int			na_dpaclerr;	/* output */
 	int			na_paclerr;	/* output */

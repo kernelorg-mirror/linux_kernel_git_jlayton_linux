@@ -626,12 +626,16 @@ retry:
 		}
 	}
 
+	if (attr->na_pre_set)
+		attr->na_pre_set(attr, fhp);
 	/*
 	 * notify_change() can alter its iattr argument, making @iap
 	 * unsuitable for submission multiple times. Pass a copy.
 	 */
 	attrs = *iap;
 	host_err = __nfsd_setattr(dentry, &attrs);
+	if (attr->na_post_set)
+		attr->na_post_set(attr, fhp, host_err);
 	/*
 	 * A delegation was broken. Give its holder a chance to return
 	 * it, without inode_lock: what it sends first, such as WRITEs
