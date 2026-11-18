@@ -1096,6 +1096,7 @@ struct nfsd4_deleg_getattr {
 
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
 		const struct path *path, struct nfsd4_deleg_getattr *dga);
+struct timespec64 nfsd4_deleg_times_now(struct inode *inode);
 
 struct nfsd4_get_dir_delegation;
 struct nfs4_delegation *nfsd_get_dir_deleg(struct nfsd4_compound_state *cstate,
