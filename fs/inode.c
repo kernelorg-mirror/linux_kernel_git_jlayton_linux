@@ -239,7 +239,13 @@ int inode_init_always_gfp(struct super_block *sb, struct inode *inode, gfp_t gfp
 	inode->i_opflags = 0;
 	if (sb->s_xattr)
 		inode->i_opflags |= IOP_XATTR;
-	if (sb->s_type->fs_flags & FS_MGTIME)
+	/*
+	 * A fine-grained timestamp truncated to a coarser granularity can
+	 * equal the coarse one, so multigrain timestamps can't promise a
+	 * visible change then. The filesystem must set s_time_gran before
+	 * it allocates its first inode.
+	 */
+	if ((sb->s_type->fs_flags & FS_MGTIME) && sb->s_time_gran == 1)
 		inode->i_opflags |= IOP_MGTIME;
 	i_uid_write(inode, 0);
 	i_gid_write(inode, 0);
