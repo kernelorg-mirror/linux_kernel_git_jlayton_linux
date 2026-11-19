@@ -279,6 +279,26 @@ struct nfsd4_open {
 	struct svc_rqst *op_rqstp;
 };
 
+/*
+ * The atime and mtime that an exclusive create stores its verifier in.
+ * Solaris 7 gets confused (bugid 4218508) if these have the high bit set,
+ * as do xfs filesystems without the "bigtime" feature, so it's cleared.
+ * If this is ever changed to use different attrs for storing the
+ * verifier, then nfsd4_create_verf_matches() will also need to be fixed
+ * accordingly.
+ */
+static inline void nfsd4_open_verifier_times(const struct nfsd4_open *open,
+					     struct timespec64 *atime,
+					     struct timespec64 *mtime)
+{
+	const u32 *verifier = (const u32 *)open->op_verf.data;
+
+	mtime->tv_sec = verifier[0] & 0x7fffffff;
+	mtime->tv_nsec = 0;
+	atime->tv_sec = verifier[1] & 0x7fffffff;
+	atime->tv_nsec = 0;
+}
+
 struct nfsd4_open_confirm {
 	stateid_t	oc_req_stateid		/* request */;
 	u32		oc_seqid    		/* request */;
@@ -381,6 +401,31 @@ struct nfsd4_setattr {
 	struct timespec64 sa_deleg_mtime;   /* request */
 	u32		sa_attrsset[3];     /* response */
 };
+
+/*
+ * Keeps the record of a timestamp delegation held by the requester in
+ * step with a SETATTR or OPEN that sets atime, mtime or the size. See
+ * nfsd4_times_set_hooks().
+ */
+struct nfsd4_times_set {
+	struct nfsd4_compound_state	*cstate;
+	struct nfs4_delegation		*dp;		/* the stateid's, or NULL */
+	bool				atime;		/* sets atime */
+	bool				mtime;		/* sets mtime */
+	bool				size;		/* sets the size */
+	/* Private to the hooks */
+	struct nfs4_delegation		*found;		/* from the lease walk */
+	struct nfs4_delegation		*active;	/* in a transition */
+	struct nfs4_delegation		*ended;		/* begin refused */
+	struct nfs4_delegation		*assigned;	/* times assigned to */
+	u64				pre_change;
+	bool				pre_valid;	/* pre_change was read */
+	__be32				status;
+};
+
+void nfsd4_times_set_hooks(struct nfsd4_times_set *ts,
+			   struct nfsd_attrs *attrs);
+__be32 nfsd4_times_set_done(struct nfsd4_times_set *ts, __be32 status);
 
 struct nfsd4_setclientid {
 	nfs4_verifier	se_verf;            /* request */
