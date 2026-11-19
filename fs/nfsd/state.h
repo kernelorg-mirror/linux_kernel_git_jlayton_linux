@@ -232,6 +232,11 @@ struct nfs4_cb_fattr {
 
 	/* Under fi_lock */
 	u64 ncf_issue_seq;		/* last sequence assigned */
+	/* The slot of the holder's last SETATTR that assigned times */
+	u64 ncf_fence_rand;		/* random half of its session ID */
+	u32 ncf_fence_slotid;
+	u32 ncf_fence_seqid;
+	bool ncf_fence_valid;
 	u64 ncf_done_seq;		/* sequence of ncf_sample */
 	struct nfsd4_deleg_cb_sample ncf_sample;
 
@@ -243,8 +248,10 @@ struct nfs4_cb_fattr {
 /*
  * Delegated atime/mtime of an OPEN_DELEGATE_WRITE_ATTRS_DELEG delegation.
  * The holder's times are kept here and reported over NFSv4 while the
- * delegation is live; only the holder's SETATTR writes them to the inode.
- * All fields are protected by the nfs4_file's fi_lock.
+ * delegation is live. The holder's SETATTR writes them to the inode, and
+ * so does retiring a record whose times were reported, for each time the
+ * holder set (@atime_writeback, @mtime_writeback). Times have the inode's
+ * granularity. All fields are protected by the nfs4_file's fi_lock.
  *
  * A holder SETATTR that changes the inode's times is a transition from
  * nfsd4_deleg_times_begin() to nfsd4_deleg_times_end(), all under
@@ -254,13 +261,26 @@ struct nfs4_cb_fattr {
 struct nfsd4_deleg_times {
 	bool			unusable;	/* never overlay; recall */
 	bool			updating;	/* in a transition */
+	bool			reported;	/* the overlay was reported */
+	bool			atime_writeback; /* retiring writes atime back */
+	bool			mtime_writeback; /* retiring writes mtime back */
+	bool			atime_verifier; /* floor replaces an excl. verifier */
+	bool			mtime_verifier;
+	bool			grant_seen;	/* the holder used the stateid */
+	bool			apply_failed;	/* a time write may be unrecorded */
+	bool			modified;	/* a holder's unflushed size was reported */
 	struct timespec64	atime;		/* reported; starts at grant floor */
 	struct timespec64	mtime;		/* reported; starts at grant floor */
 	struct timespec64	raw_atime;	/* last accepted wire value */
 	struct timespec64	raw_mtime;
-	struct timespec64	clean_mtime;	/* raw CB mtime at last clean answer */
+	struct timespec64	verf_atime;	/* the verifier, as the inode holds it */
+	struct timespec64	verf_mtime;
+	struct timespec64	clean_mtime;	/* mtime reported at last clean answer */
 	u64			clean_change;	/* inode change at that answer */
-	u64			snapshot_seq;	/* bumped by CB results and commits */
+	u64			modified_change; /* change last reported with it */
+	bool			inode_size_noted; /* @inode_size_change is set */
+	u64			inode_size_change; /* CB_NOTIFY sent inode size with it */
+	u64			snapshot_seq;	/* bumped when a stat may be stale */
 	u64			cb_fence_seq;	/* CB results at or below are stale */
 };
 
@@ -1098,19 +1118,54 @@ static inline bool try_to_expire_client(struct nfs4_client *clp)
 struct nfsd4_deleg_getattr {
 	struct nfs4_delegation		*dp;	/* synthesize from; caller puts */
 	struct nfsd4_deleg_cb_sample	cb;	/* sample dp's values came from */
+
+	/* Timestamp delegation */
+	struct kstat			*stat;		/* IN: stat buffer */
+	bool				stat_done;	/* stat/stat_err are set */
+	int				stat_err;
+	bool				overlay;	/* report these times */
+	struct timespec64		atime;
+	struct timespec64		mtime;
 };
 
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
 		const struct path *path, struct nfsd4_deleg_getattr *dga);
+bool nfsd4_deleg_times_live(struct nfs4_delegation *dp);
 struct nfs4_delegation *nfsd4_get_times_deleg(struct inode *inode,
 					      struct nfs4_client *clp);
 struct timespec64 nfsd4_deleg_times_now(struct inode *inode);
 bool nfsd4_deleg_times_begin(struct nfs4_delegation *dp);
 void nfsd4_deleg_times_end(struct nfs4_delegation *dp);
+unsigned int nfsd4_deleg_times_preview(struct nfs4_delegation *dp,
+				       const struct timespec64 *atime,
+				       const struct timespec64 *mtime,
+				       const struct timespec64 *now,
+				       struct timespec64 *patime,
+				       struct timespec64 *pmtime,
+				       bool *forward);
+bool nfsd4_deleg_times_reported_mtime(struct nfs4_delegation *dp,
+				      const struct timespec64 *mtime);
+void nfsd4_deleg_times_commit(struct nfs4_delegation *dp,
+			      const struct timespec64 *atime,
+			      const struct timespec64 *mtime,
+			      const struct timespec64 *now, bool wrote,
+			      int err);
+void nfsd4_deleg_times_unrecorded(struct nfs4_delegation *dp);
 void nfsd4_deleg_times_assign(struct nfs4_delegation *dp,
-			      const struct kstat *stat, bool atime, bool mtime);
+			      const struct nfsd4_compound_state *cstate,
+			      const struct kstat *stat, bool atime, bool mtime,
+			      bool mtime_set);
 void nfsd4_deleg_times_invalidate(struct nfs4_delegation *dp);
+void nfsd4_deleg_times_disown(struct nfs4_delegation *dp);
 void nfsd4_force_recall(struct nfs4_delegation *dp);
+void nfsd4_overlay_deleg_times(struct kstat *stat,
+			       const struct timespec64 *atime,
+			       const struct timespec64 *mtime);
+struct nfs4_delegation *nfsd4_deleg_times_notify_begin(struct inode *inode,
+						       u64 *snap);
+bool nfsd4_deleg_times_notify(struct nfs4_delegation *dp, u64 snap,
+			      struct kstat *stat, u64 change, bool times,
+			      bool mtime, bool *size);
 
 struct nfsd4_get_dir_delegation;
 struct nfs4_delegation *nfsd_get_dir_deleg(struct nfsd4_compound_state *cstate,

@@ -4045,8 +4045,8 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		    int ignore_crossmnt,
 		    struct nfsd_case_attrs_cache *case_cache)
 {
-	struct nfsd4_deleg_getattr dga = { };
 	struct nfsd4_fattr_args args;
+	struct nfsd4_deleg_getattr dga = { .stat = &args.stat };
 	struct svc_fh *tempfh = NULL;
 	int starting_len = xdr->buf->len;
 	unsigned int attrlen_offset;
@@ -4100,8 +4100,11 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 			goto out;
 	}
 
-	err = vfs_getattr(&path, &args.stat, NFSD4_FATTR_STATX_MASK,
-			  AT_STATX_SYNC_AS_STAT);
+	if (dga.stat_done)
+		err = dga.stat_err;
+	else
+		err = vfs_getattr(&path, &args.stat, NFSD4_FATTR_STATX_MASK,
+				  AT_STATX_SYNC_AS_STAT);
 	if (dga.dp) {
 		struct nfs4_cb_fattr *ncf = &dga.dp->dl_cb_fattr;
 
@@ -4119,6 +4122,10 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		nfsd4_put_leased_deleg(dga.dp);
 	} else {
 		args.change_attr = nfsd4_change_attribute(&args.stat);
+		/* Change and size stay real */
+		if (dga.overlay)
+			nfsd4_overlay_deleg_times(&args.stat, &dga.atime,
+						  &dga.mtime);
 	}
 
 	if (err)
@@ -4383,6 +4390,10 @@ out:
 				      STATX_BTIME	  | \
 				      STATX_CHANGE_COOKIE)
 
+#define CB_NOTIFY_TIME_ATTRS	(FATTR4_WORD1_TIME_ACCESS |	\
+				 FATTR4_WORD1_TIME_MODIFY |	\
+				 FATTR4_WORD1_TIME_METADATA)
+
 static bool
 nfsd4_setup_notify_entry4(struct notify_entry4 *ne, struct xdr_stream *xdr,
 			  struct dentry *dentry, struct nfs4_delegation *dp,
@@ -4391,9 +4402,11 @@ nfsd4_setup_notify_entry4(struct notify_entry4 *ne, struct xdr_stream *xdr,
 {
 	struct path path = nf->nf_file->f_path;
 	struct nfsd4_fattr_args args = { };
+	struct nfs4_delegation *tdp = NULL;
+	bool parent, ok = true;
 	const u32 *reqmask;
 	__be32 status;
-	bool parent;
+	u64 tsnap = 0;
 	int ret;
 
 	ne->ne_file.data = name;
@@ -4424,14 +4437,21 @@ nfsd4_setup_notify_entry4(struct notify_entry4 *ne, struct xdr_stream *xdr,
 		return true;
 	}
 
+	/* Delegated times and size must pair with a stat after this lookup */
+	if (!parent && ((reqmask[1] & CB_NOTIFY_TIME_ATTRS) ||
+			(reqmask[0] & FATTR4_WORD0_SIZE)))
+		tdp = nfsd4_deleg_times_notify_begin(d_inode(dentry), &tsnap);
+
 	/*
 	 * It is possible that the client was granted a delegation when a file
 	 * was created. Note that we don't issue a CB_GETATTR here since stale
 	 * attributes are presumably ok.
 	 */
 	ret = vfs_getattr(&path, &args.stat, CB_NOTIFY_STATX_REQUEST_MASK, AT_STATX_SYNC_AS_STAT);
-	if (ret)
-		return false;
+	if (ret) {
+		ok = false;
+		goto out;
+	}
 
 	args.change_attr = nfsd4_change_attribute(&args.stat);
 
@@ -4447,6 +4467,45 @@ nfsd4_setup_notify_entry4(struct notify_entry4 *ne, struct xdr_stream *xdr,
 
 		if (!(args.stat.result_mask & STATX_BTIME))
 			attrmask[1] &= ~FATTR4_WORD1_TIME_CREATE;
+
+		/*
+		 * Omitting attributes from a notify entry is always allowed.
+		 * The holder of the child's timestamp delegation gets no
+		 * times: its GETATTR reports inode times newer than the
+		 * record's, and it ignores server times while it holds the
+		 * delegation.
+		 */
+		if (tdp) {
+			bool size = attrmask[0] & FATTR4_WORD0_SIZE;
+			bool times = (attrmask[1] & CB_NOTIFY_TIME_ATTRS) &&
+				     tdp->dl_stid.sc_client != dp->dl_stid.sc_client;
+
+			if (!nfsd4_deleg_times_notify(tdp, tsnap, &args.stat,
+						      args.change_attr, times,
+						      attrmask[1] & (FATTR4_WORD1_TIME_MODIFY |
+								     FATTR4_WORD1_TIME_METADATA),
+						      &size))
+				attrmask[1] &= ~CB_NOTIFY_TIME_ATTRS;
+			if (!size)
+				attrmask[0] &= ~FATTR4_WORD0_SIZE;
+		}
+		/*
+		 * A timestamp delegation granted after the lookup can
+		 * already overlay times that differ from the stat's, as
+		 * after an exclusive create, or have had a holder's size
+		 * reported under the stat's change attribute.
+		 */
+		if (!tdp && ((attrmask[1] & CB_NOTIFY_TIME_ATTRS) ||
+			     (attrmask[0] & FATTR4_WORD0_SIZE))) {
+			struct nfs4_delegation *late;
+
+			late = nfsd4_get_times_deleg(d_inode(dentry), NULL);
+			if (late) {
+				attrmask[1] &= ~CB_NOTIFY_TIME_ATTRS;
+				attrmask[0] &= ~FATTR4_WORD0_SIZE;
+				nfsd4_put_leased_deleg(late);
+			}
+		}
 	}
 	attrmask[2] = 0;
 
@@ -4454,11 +4513,16 @@ nfsd4_setup_notify_entry4(struct notify_entry4 *ne, struct xdr_stream *xdr,
 	ne->ne_attrs.attr_vals.data = (u8 *)xdr->p;
 
 	status = nfsd4_encode_attr_vals(xdr, attrmask, &args);
-	if (status != nfs_ok)
-		return false;
+	if (status != nfs_ok) {
+		ok = false;
+		goto out;
+	}
 
 	ne->ne_attrs.attr_vals.len = (u8 *)xdr->p - ne->ne_attrs.attr_vals.data;
-	return true;
+out:
+	if (tdp)
+		nfsd4_put_leased_deleg(tdp);
+	return ok;
 }
 
 /**
