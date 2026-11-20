@@ -121,6 +121,8 @@ struct nfsd4_callback {
 struct nfsd4_callback_ops {
 	bool (*prepare)(struct nfsd4_callback *cb);
 	int (*done)(struct nfsd4_callback *cb, struct rpc_task *task);
+	/* called before RUNNING is cleared; must not sleep */
+	void (*finalize)(struct nfsd4_callback *cb);
 	void (*release)(struct nfsd4_callback *cb);
 	uint32_t opcode;
 };
@@ -200,20 +202,86 @@ struct nfs4_cpntf_state {
  */
 #define NFSD_COPY_INITIAL_TTL 10
 
+/* A complete CB_GETATTR result, published under fi_lock */
+struct nfsd4_deleg_cb_sample {
+	u64			seq;		/* issue sequence of its callback */
+	u64			change;
+	u64			size;
+	struct timespec64	atime;
+	struct timespec64	mtime;
+	u32			requested[3];	/* bitmap the callback encoded */
+	u32			present[3];	/* bitmap the reply returned */
+	int			status;
+	bool			stale;		/* issued before cb_fence_seq */
+};
+
 struct nfs4_cb_fattr {
 	struct nfsd4_callback ncf_getattr;
-	u32 ncf_cb_status;
 
-	/* from CB_GETATTR reply */
-	u32 ncf_cb_bitmap0;		/* word 0 of the returned bitmap */
+	/*
+	 * Scratch space for the one running callback. Waiters read only
+	 * ncf_sample, never these.
+	 */
+	u64 ncf_cb_seq;
+	u32 ncf_cb_requested[3];
+	u32 ncf_cb_present[3];
 	u64 ncf_cb_change;
 	u64 ncf_cb_fsize;
 	struct timespec64 ncf_cb_mtime;
 	struct timespec64 ncf_cb_atime;
 
+	/* Under fi_lock */
+	u64 ncf_issue_seq;		/* last sequence assigned */
+	/* The slot of the holder's last SETATTR that assigned times */
+	u64 ncf_fence_rand;		/* random half of its session ID */
+	u32 ncf_fence_slotid;
+	u32 ncf_fence_seqid;
+	bool ncf_fence_valid;
+	u64 ncf_done_seq;		/* sequence of ncf_sample */
+	struct nfsd4_deleg_cb_sample ncf_sample;
+
 	bool ncf_file_modified;
 	u64 ncf_initial_cinfo;
 	u64 ncf_cur_fsize;
+};
+
+/*
+ * Delegated atime/mtime of an OPEN_DELEGATE_WRITE_ATTRS_DELEG delegation.
+ * The holder's times are kept here and reported over NFSv4 while the
+ * delegation is live. The holder's SETATTR writes them to the inode, and
+ * so does retiring a record whose times were reported, for each time the
+ * holder set (@atime_writeback, @mtime_writeback). Times have the inode's
+ * granularity. All fields are protected by the nfs4_file's fi_lock.
+ *
+ * A holder SETATTR that changes the inode's times is a transition from
+ * nfsd4_deleg_times_begin() to nfsd4_deleg_times_end(), all under
+ * inode_lock. While @updating is set, a reader that doesn't hold
+ * inode_lock can't pair its inode stat with the record.
+ */
+struct nfsd4_deleg_times {
+	bool			unusable;	/* never overlay; recall */
+	bool			updating;	/* in a transition */
+	bool			reported;	/* the overlay was reported */
+	bool			atime_writeback; /* retiring writes atime back */
+	bool			mtime_writeback; /* retiring writes mtime back */
+	bool			atime_verifier; /* floor replaces an excl. verifier */
+	bool			mtime_verifier;
+	bool			grant_seen;	/* the holder used the stateid */
+	bool			apply_failed;	/* a time write may be unrecorded */
+	bool			modified;	/* a holder's unflushed size was reported */
+	struct timespec64	atime;		/* reported; starts at grant floor */
+	struct timespec64	mtime;		/* reported; starts at grant floor */
+	struct timespec64	raw_atime;	/* last accepted wire value */
+	struct timespec64	raw_mtime;
+	struct timespec64	verf_atime;	/* the verifier, as the inode holds it */
+	struct timespec64	verf_mtime;
+	struct timespec64	clean_mtime;	/* mtime reported at last clean answer */
+	u64			clean_change;	/* inode change at that answer */
+	u64			modified_change; /* change last reported with it */
+	bool			inode_size_noted; /* @inode_size_change is set */
+	u64			inode_size_change; /* CB_NOTIFY sent inode size with it */
+	u64			snapshot_seq;	/* bumped when a stat may be stale */
+	u64			cb_fence_seq;	/* CB results at or below are stale */
 };
 
 /*
@@ -312,8 +380,6 @@ struct nfs4_delegation {
 	struct nfsd4_callback	dl_recall;
 	bool			dl_recalled;
 	bool			dl_recall_rejected;
-	bool			dl_written;
-	bool			dl_setattr;
 
 	/* Forward-channel slot that carried the granting request */
 	struct {
@@ -332,9 +398,7 @@ struct nfs4_delegation {
 	};
 
 	/* For delegated timestamps */
-	struct timespec64	dl_atime;
-	struct timespec64	dl_mtime;
-	struct timespec64	dl_ctime;
+	struct nfsd4_deleg_times *dl_times;
 
 	/* For dir delegations */
 	u32			dl_notify_mask;
@@ -357,9 +421,6 @@ static inline bool deleg_attrs_deleg(u32 dl_type)
 	return dl_type == OPEN_DELEGATE_READ_ATTRS_DELEG ||
 	       dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG;
 }
-
-bool nfsd4_vet_deleg_time(struct timespec64 *cb, const struct timespec64 *orig,
-			  const struct timespec64 *now);
 
 #define cb_to_delegation(cb) \
 	container_of(cb, struct nfs4_delegation, dl_recall)
@@ -981,7 +1042,6 @@ void nfsd4_put_client(struct nfs4_client *clp);
 void nfsd4_put_leased_deleg(struct nfs4_delegation *dp);
 void nfsd4_async_copy_reaper(struct nfsd_net *nn);
 bool nfsd4_has_active_async_copies(struct nfs4_client *clp);
-void nfsd_update_cmtime_attr(struct file *f, unsigned int flags);
 extern struct nfs4_client_reclaim *nfs4_client_to_reclaim(struct xdr_netobj name,
 				struct xdr_netobj princhash, struct nfsd_net *nn);
 int nfsd_handle_dir_event(u32 mask, const struct inode *dir, const void *data,
@@ -1042,8 +1102,61 @@ static inline bool try_to_expire_client(struct nfs4_client *clp)
 	return clp->cl_state == NFSD4_EXPIRABLE;
 }
 
+#define NFSD4_FATTR_STATX_MASK	(STATX_BASIC_STATS | STATX_BTIME | \
+				 STATX_CHANGE_COOKIE)
+
+/* Result of nfsd4_deleg_getattr_conflict() */
+struct nfsd4_deleg_getattr {
+	struct nfs4_delegation		*dp;	/* synthesize from; caller puts */
+	struct nfsd4_deleg_cb_sample	cb;	/* sample dp's values came from */
+
+	/* Timestamp delegation */
+	struct kstat			*stat;		/* IN: stat buffer */
+	bool				stat_done;	/* stat/stat_err are set */
+	int				stat_err;
+	bool				overlay;	/* report these times */
+	struct timespec64		atime;
+	struct timespec64		mtime;
+};
+
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
-		struct dentry *dentry, struct nfs4_delegation **pdp);
+		const struct path *path, struct nfsd4_deleg_getattr *dga);
+bool nfsd4_deleg_times_live(struct nfs4_delegation *dp);
+struct nfs4_delegation *nfsd4_get_times_deleg(struct inode *inode,
+					      struct nfs4_client *clp);
+struct timespec64 nfsd4_deleg_times_now(struct inode *inode);
+bool nfsd4_deleg_times_begin(struct nfs4_delegation *dp);
+void nfsd4_deleg_times_end(struct nfs4_delegation *dp);
+unsigned int nfsd4_deleg_times_preview(struct nfs4_delegation *dp,
+				       const struct timespec64 *atime,
+				       const struct timespec64 *mtime,
+				       const struct timespec64 *now,
+				       struct timespec64 *patime,
+				       struct timespec64 *pmtime,
+				       bool *forward);
+bool nfsd4_deleg_times_reported_mtime(struct nfs4_delegation *dp,
+				      const struct timespec64 *mtime);
+void nfsd4_deleg_times_commit(struct nfs4_delegation *dp,
+			      const struct timespec64 *atime,
+			      const struct timespec64 *mtime,
+			      const struct timespec64 *now, bool wrote,
+			      int err);
+void nfsd4_deleg_times_unrecorded(struct nfs4_delegation *dp);
+void nfsd4_deleg_times_assign(struct nfs4_delegation *dp,
+			      const struct nfsd4_compound_state *cstate,
+			      const struct kstat *stat, bool atime, bool mtime,
+			      bool mtime_set);
+void nfsd4_deleg_times_invalidate(struct nfs4_delegation *dp);
+void nfsd4_deleg_times_disown(struct nfs4_delegation *dp);
+void nfsd4_force_recall(struct nfs4_delegation *dp);
+void nfsd4_overlay_deleg_times(struct kstat *stat,
+			       const struct timespec64 *atime,
+			       const struct timespec64 *mtime);
+struct nfs4_delegation *nfsd4_deleg_times_notify_begin(struct inode *inode,
+						       u64 *snap);
+bool nfsd4_deleg_times_notify(struct nfs4_delegation *dp, u64 snap,
+			      struct kstat *stat, u64 change, bool times,
+			      bool mtime, bool *size);
 
 struct nfsd4_get_dir_delegation;
 struct nfs4_delegation *nfsd_get_dir_deleg(struct nfsd4_compound_state *cstate,
