@@ -83,6 +83,7 @@ void nfs_put_delegation(struct nfs_delegation *delegation);
 void nfs_mark_delegation_referenced(struct nfs_delegation *delegation);
 int nfs4_have_delegation(struct inode *inode, fmode_t type, int flags);
 int nfs4_check_delegation(struct inode *inode, fmode_t type);
+bool nfs4_delegation_flush_on_close(const struct inode *inode);
 void nfs_inode_find_delegation_state_and_recover(struct inode *inode,
 		const nfs4_stateid *stateid);
 void nfs4_inode_make_writeable(struct inode *inode);
