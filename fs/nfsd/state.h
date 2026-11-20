@@ -205,6 +205,7 @@ struct nfs4_cb_fattr {
 	u32 ncf_cb_status;
 
 	/* from CB_GETATTR reply */
+	u32 ncf_cb_bitmap0;		/* word 0 of the returned bitmap */
 	u64 ncf_cb_change;
 	u64 ncf_cb_fsize;
 	struct timespec64 ncf_cb_mtime;
@@ -977,6 +978,7 @@ extern void nfsd4_shutdown_callback(struct nfs4_client *);
 extern void nfsd4_shutdown_copy(struct nfs4_client *clp);
 void nfsd4_get_client(struct nfs4_client *clp);
 void nfsd4_put_client(struct nfs4_client *clp);
+void nfsd4_put_leased_deleg(struct nfs4_delegation *dp);
 void nfsd4_async_copy_reaper(struct nfsd_net *nn);
 bool nfsd4_has_active_async_copies(struct nfs4_client *clp);
 void nfsd_update_cmtime_attr(struct file *f, unsigned int flags);

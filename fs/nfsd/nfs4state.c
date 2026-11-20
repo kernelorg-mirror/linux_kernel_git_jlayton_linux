@@ -1453,6 +1453,30 @@ static void put_deleg_file(struct nfs4_file *fp)
 	}
 }
 
+static void nfsd_cmtime_notice(struct inode *inode, int err)
+{
+	pr_notice_ratelimited("nfsd: Unable to update timestamps on inode %02x:%02x:%llu: %d\n",
+			      MAJOR(inode->i_sb->s_dev),
+			      MINOR(inode->i_sb->s_dev),
+			      inode->i_ino, err);
+}
+
+/* Caller holds freeze protection for @f's filesystem */
+static void __nfsd_update_cmtime_attr(struct file *f, unsigned int flags)
+{
+	struct inode *inode = file_inode(f);
+	struct iattr attr = {
+		.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_DELEG | flags,
+	};
+	int ret;
+
+	inode_lock(inode);
+	ret = notify_change(&nop_mnt_idmap, f->f_path.dentry, &attr, NULL);
+	inode_unlock(inode);
+	if (ret)
+		nfsd_cmtime_notice(inode, ret);
+}
+
 static void nfsd4_finalize_deleg_timestamps(struct nfs4_delegation *dp, struct file *f)
 {
 	/* don't do anything if FMODE_NOCMTIME isn't set */
@@ -1471,8 +1495,18 @@ static void nfsd4_finalize_deleg_timestamps(struct nfs4_delegation *dp, struct f
 	if (dp->dl_setattr)
 		return;
 
+	/*
+	 * This function also runs from the laundromat and from NFSD
+	 * shutdown. Neither path may wait for a frozen filesystem to
+	 * thaw, so leave the times alone while the filesystem is frozen.
+	 */
+	if (!file_start_write_trylock(f)) {
+		nfsd_cmtime_notice(file_inode(f), -EBUSY);
+		return;
+	}
 	/* Stamp everything to "now" */
-	nfsd_update_cmtime_attr(f, ATTR_ATIME);
+	__nfsd_update_cmtime_attr(f, ATTR_ATIME);
+	file_end_write(f);
 }
 
 static void nfs4_unlock_deleg_lease(struct nfs4_delegation *dp)
@@ -2878,6 +2912,38 @@ void nfsd4_put_client(struct nfs4_client *clp)
 	kref_put(&clp->cl_nfsdfs.cl_ref, __free_client);
 }
 
+/*
+ * Reference a delegation found through its lease, for use after flc_lock
+ * is dropped. A delegation reference alone doesn't keep the client.
+ * __destroy_client() doesn't wait for stateid references, yet
+ * nfs4_put_stid() uses the client, so pin the client as well. Caller
+ * holds flc_lock with @dp's lease on the inode. Client teardown removes
+ * the lease before free_client() drops the client's initial reference,
+ * so the initial reference is still held here.
+ */
+static bool nfsd4_get_leased_deleg(struct nfs4_delegation *dp)
+{
+	if (!refcount_inc_not_zero(&dp->dl_stid.sc_count))
+		return false;
+	nfsd4_get_client(dp->dl_stid.sc_client);
+	return true;
+}
+
+/**
+ * nfsd4_put_leased_deleg - release a delegation found through its lease
+ * @dp: delegation to release
+ *
+ * Drops the delegation and client references that the lease walk took.
+ * May free the client, so the caller must be able to sleep.
+ */
+void nfsd4_put_leased_deleg(struct nfs4_delegation *dp)
+{
+	struct nfs4_client *clp = dp->dl_stid.sc_client;
+
+	nfs4_put_stid(&dp->dl_stid);
+	nfsd4_put_client(clp);
+}
+
 static void
 free_client(struct nfs4_client *clp)
 {
@@ -3810,6 +3876,13 @@ nfsd4_cb_getattr_done(struct nfsd4_callback *cb, struct rpc_task *task)
 
 	trace_nfsd_cb_getattr_done(&dp->dl_stid.sc_stateid, task);
 	ncf->ncf_cb_status = task->tk_status;
+	/*
+	 * A reply without SIZE leaves ncf_cb_fsize at zero, which the
+	 * waiter would report as the file's size. Fail the callback, so
+	 * the waiter recalls the delegation instead.
+	 */
+	if (!task->tk_status && !(ncf->ncf_cb_bitmap0 & FATTR4_WORD0_SIZE))
+		ncf->ncf_cb_status = NFS4ERR_IO;
 	switch (task->tk_status) {
 	case -NFS4ERR_DELAY:
 		rpc_delay(task, 2 * HZ);
@@ -4057,6 +4130,7 @@ static void nfs4_cb_getattr(struct nfs4_cb_fattr *ncf)
 
 	/* set to proper status when nfsd4_cb_getattr_done runs */
 	ncf->ncf_cb_status = NFS4ERR_IO;
+	ncf->ncf_cb_bitmap0 = 0;
 
 	/* ensure that wake_bit is done when RUNNING is cleared */
 	set_bit(NFSD4_CALLBACK_WAKE, &ncf->ncf_getattr.cb_flags);
@@ -6611,11 +6685,20 @@ nfsd_break_deleg_cb(struct file_lease *fl)
 
 	trace_nfsd_cb_recall(&dp->dl_stid);
 
-	dp->dl_recalled = true;
-	atomic_inc(&clp->cl_delegs_in_recall);
-	if (try_to_expire_client(clp)) {
-		nn = net_generic(clp->net, nfsd_net_id);
-		mod_delayed_work(laundry_wq, &nn->laundromat_work, 0);
+	/*
+	 * lm_break runs again for a write breaker after a read breaker, and
+	 * the dir notification paths call nfsd_break_deleg_cb() directly.
+	 * Only the first call may count the recall, since
+	 * nfsd_change_deleg_cb() decrements cl_delegs_in_recall only once.
+	 */
+	if (!dp->dl_recalled) {
+		dp->dl_recalled = true;
+		atomic_inc(&clp->cl_delegs_in_recall);
+		if (try_to_expire_client(clp)) {
+			nn = net_generic(clp->net, nfsd_net_id);
+			mod_delayed_work(laundry_wq, &nn->laundromat_work, 0);
+		}
+		fp->fi_had_conflict = true;
 	}
 
 	/*
@@ -6625,7 +6708,6 @@ nfsd_break_deleg_cb(struct file_lease *fl)
 	 */
 	fl->fl_break_time = 0;
 
-	fp->fi_had_conflict = true;
 	nfsd_break_one_deleg(dp);
 	return false;
 }
@@ -7195,11 +7277,35 @@ nfs4_delegation_record_grant_slot(struct nfs4_delegation *dp,
 	dp->dl_recall_grant.valid = true;
 }
 
+static bool
+nfs4_delegation_stat(struct nfs4_delegation *dp, struct svc_fh *currentfh,
+		     struct kstat *stat)
+{
+	struct nfsd_file *nf = find_writeable_file(dp->dl_stid.sc_file);
+	struct path path;
+	int rc;
+
+	if (!nf)
+		return false;
+
+	path.mnt = currentfh->fh_export->ex_path.mnt;
+	path.dentry = file_dentry(nf->nf_file);
+
+	rc = vfs_getattr(&path, stat,
+			 STATX_MODE | STATX_SIZE | STATX_ATIME |
+			 STATX_MTIME | STATX_CTIME | STATX_CHANGE_COOKIE,
+			 AT_STATX_SYNC_AS_STAT);
+
+	nfsd_file_put(nf);
+	return rc == 0;
+}
+
 static struct nfs4_delegation *
 nfs4_set_delegation(struct nfsd4_open *open,
 		    const struct nfsd4_compound_state *cstate,
 		    struct nfs4_ol_stateid *stp, struct svc_fh *parent,
-		    u32 *held_type)
+		    struct svc_fh *currentfh, u32 *held_type,
+		    u64 *grant_change)
 {
 	bool deleg_ts = nfsd4_want_deleg_timestamps(open);
 	struct nfs4_client *clp = stp->st_stid.sc_client;
@@ -7247,10 +7353,14 @@ nfs4_set_delegation(struct nfsd4_open *open,
 	 * A read delegation can go to a client that holds a write open
 	 * of the file: nfsd_breaker_owns_lease() keeps the holder's own
 	 * opens from breaking it.
+	 *
+	 * Never OPEN_DELEGATE_READ_ATTRS_DELEG: delegating atime correctly
+	 * would need exclusive authority over it, or merging the times of
+	 * several read holders. The want flag is only a request.
 	 */
 	if (!nf && (open->op_share_access & NFS4_SHARE_ACCESS_READ)) {
 		nf = find_readable_file(fp);
-		dl_type = deleg_ts ? OPEN_DELEGATE_READ_ATTRS_DELEG : OPEN_DELEGATE_READ;
+		dl_type = OPEN_DELEGATE_READ;
 	}
 
 	if (!nf)
@@ -7339,10 +7449,39 @@ nfs4_set_delegation(struct nfsd4_open *open,
 	if (fp->fi_had_conflict)
 		goto out_unlock;
 
+	/*
+	 * Anything that can reach the delegation once the delegation is
+	 * hashed may read ncf_initial_cinfo and dl_[amc]time, so set them
+	 * before hashing. nfs4_open_delegation() stats again after hashing
+	 * to catch a write that lands between the two stats.
+	 */
+	if (deleg_is_write(dl_type)) {
+		struct kstat stat;
+
+		status = -EIO;
+		if (!nfs4_delegation_stat(dp, currentfh, &stat))
+			goto out_unlock;
+		*grant_change = nfsd4_change_attribute(&stat);
+		dp->dl_cb_fattr.ncf_initial_cinfo = *grant_change;
+		dp->dl_atime = stat.atime;
+		dp->dl_ctime = stat.ctime;
+		dp->dl_mtime = stat.mtime;
+	}
+
 	spin_lock(&nn->deleg_lock);
 	spin_lock(&clp->cl_lock);
 	spin_lock(&fp->fi_lock);
-	status = hash_delegation_locked(dp, fp);
+	/*
+	 * Check again under deleg_lock. A break after the unlocked check
+	 * has queued a recall whose prepare takes deleg_lock. The prepare
+	 * doesn't queue an unhashed delegation for revocation, so the
+	 * laundromat would never revoke a delegation granted after the
+	 * break.
+	 */
+	if (fp->fi_had_conflict)
+		status = -EAGAIN;
+	else
+		status = hash_delegation_locked(dp, fp);
 	if (status == -EEXIST) {
 		held = nfs4_delegation_exists(clp, fp);
 		*held_type = held->dl_type;
@@ -7390,29 +7529,6 @@ static void nfsd4_open_deleg_none_ext(struct nfsd4_open *open, int status,
 			WARN_ON_ONCE(1);
 		}
 	}
-}
-
-static bool
-nfs4_delegation_stat(struct nfs4_delegation *dp, struct svc_fh *currentfh,
-		     struct kstat *stat)
-{
-	struct nfsd_file *nf = find_writeable_file(dp->dl_stid.sc_file);
-	struct path path;
-	int rc;
-
-	if (!nf)
-		return false;
-
-	path.mnt = currentfh->fh_export->ex_path.mnt;
-	path.dentry = file_dentry(nf->nf_file);
-
-	rc = vfs_getattr(&path, stat,
-			 STATX_MODE | STATX_SIZE | STATX_ATIME |
-			 STATX_MTIME | STATX_CTIME | STATX_CHANGE_COOKIE,
-			 AT_STATX_SYNC_AS_STAT);
-
-	nfsd_file_put(nf);
-	return rc == 0;
 }
 
 /*
@@ -7483,6 +7599,7 @@ nfs4_open_delegation(struct svc_rqst *rqstp, struct nfsd4_open *open,
 	struct svc_fh *parent = NULL;
 	struct nfs4_delegation *dp;
 	u32 held_type = OPEN_DELEGATE_NONE;
+	u64 grant_change = 0;
 	struct kstat stat;
 	int status = 0;
 	int cb_up;
@@ -7491,6 +7608,9 @@ nfs4_open_delegation(struct svc_rqst *rqstp, struct nfsd4_open *open,
 	open->op_recall = false;
 	switch (open->op_claim_type) {
 		case NFS4_OPEN_CLAIM_PREVIOUS:
+			if (open->op_share_access & NFS4_SHARE_ACCESS_WRITE &&
+					!clp->cl_minorversion)
+				goto out_no_deleg;
 			if (!cb_up)
 				open->op_recall = true;
 			break;
@@ -7514,8 +7634,8 @@ nfs4_open_delegation(struct svc_rqst *rqstp, struct nfsd4_open *open,
 		default:
 			goto out_no_deleg;
 	}
-	dp = nfs4_set_delegation(open, &resp->cstate, stp, parent,
-				 &held_type);
+	dp = nfs4_set_delegation(open, &resp->cstate, stp, parent, currentfh,
+				 &held_type, &grant_change);
 	if (IS_ERR(dp)) {
 		status = PTR_ERR(dp);
 		goto out_no_deleg;
@@ -7533,21 +7653,31 @@ nfs4_open_delegation(struct svc_rqst *rqstp, struct nfsd4_open *open,
 			nfs4_put_stid(&dp->dl_stid);
 			goto out_no_deleg;
 		}
+		/*
+		 * The holder's own WRITE through an earlier open doesn't
+		 * break the lease and can land after the grant stat, as can
+		 * a foreign write whose break raced past the fi_had_conflict
+		 * check. A plain write delegation synthesizes change from
+		 * ncf_initial_cinfo, so ncf_initial_cinfo must not be stale.
+		 * Compare with the grant stat's change attribute, not with
+		 * ncf_initial_cinfo. A GETATTR can already have advanced
+		 * ncf_initial_cinfo past the grant stat's value.
+		 */
+		if (nfsd4_change_attribute(&stat) != grant_change) {
+			destroy_delegation(dp);
+			nfs4_put_stid(&dp->dl_stid);
+			status = -EAGAIN;
+			goto out_no_deleg;
+		}
 		open->op_delegate_type = deleg_ts ? OPEN_DELEGATE_WRITE_ATTRS_DELEG :
 						    OPEN_DELEGATE_WRITE;
-		dp->dl_cb_fattr.ncf_initial_cinfo = nfsd4_change_attribute(&stat);
-		dp->dl_atime = stat.atime;
-		dp->dl_ctime = stat.ctime;
-		dp->dl_mtime = stat.mtime;
 		spin_lock(&f->f_lock);
 		if (deleg_ts)
 			f->f_mode |= FMODE_NOCMTIME;
 		spin_unlock(&f->f_lock);
 		trace_nfsd_deleg_write(&dp->dl_stid.sc_stateid);
 	} else {
-		open->op_delegate_type = deleg_ts && nfs4_delegation_stat(dp, currentfh, &stat) ?
-					 OPEN_DELEGATE_READ_ATTRS_DELEG : OPEN_DELEGATE_READ;
-		dp->dl_atime = stat.atime;
+		open->op_delegate_type = OPEN_DELEGATE_READ;
 		trace_nfsd_deleg_read(&dp->dl_stid.sc_stateid);
 	}
 	nfs4_put_stid(&dp->dl_stid);
@@ -10755,8 +10885,11 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 {
 	struct inode *inode = d_inode(dentry);
 	struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
+	struct nfs4_file *fp = dp->dl_stid.sc_file;
 	struct iattr attrs = { };
-	int ret;
+	struct nfsd_file *nf;
+	bool hashed;
+	int ret = 0;
 
 	if (deleg_attrs_deleg(dp->dl_type)) {
 		struct timespec64 now = current_time(inode);
@@ -10780,10 +10913,40 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
 	if (!attrs.ia_valid)
 		return 0;
 
+	/*
+	 * The reference on @dp doesn't keep the delegation's file open.
+	 * A racing DELEGRETURN or revocation can put fi_deleg_file, so
+	 * pin fi_deleg_file to keep the mount's write access.
+	 */
+	rcu_read_lock();
+	nf = nfsd_file_get(rcu_dereference(fp->fi_deleg_file));
+	rcu_read_unlock();
+	if (!nf)
+		return 0;
+
+	/*
+	 * Don't hold an nfsd thread until a frozen filesystem thaws.
+	 * NFS4ERR_DELAY makes the client retry.
+	 */
+	if (!file_start_write_trylock(nf->nf_file)) {
+		nfsd_file_put(nf);
+		return -EAGAIN;
+	}
 	attrs.ia_valid |= ATTR_DELEG;
 	inode_lock(inode);
-	ret = notify_change(&nop_mnt_idmap, dentry, &attrs, NULL);
+	/*
+	 * Once @dp is unhashed, its return or revocation may already have
+	 * finalized the times under inode_lock. The CB_GETATTR times are
+	 * older and would roll the finalized times back.
+	 */
+	spin_lock(&fp->fi_lock);
+	hashed = delegation_hashed(dp);
+	spin_unlock(&fp->fi_lock);
+	if (hashed)
+		ret = notify_change(&nop_mnt_idmap, dentry, &attrs, NULL);
 	inode_unlock(inode);
+	file_end_write(nf->nf_file);
+	nfsd_file_put(nf);
 	return ret;
 }
 
@@ -10802,7 +10965,7 @@ static int cb_getattr_update_times(struct dentry *dentry, struct nfs4_delegation
  *
  * Returns 0 if there is no conflict; otherwise an nfs_stat
  * code is returned. If @pdp is set to a non-NULL value, then the
- * caller must put the reference.
+ * caller must release it with nfsd4_put_leased_deleg().
  */
 __be32
 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
@@ -10847,7 +11010,10 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 		return 0;
 	}
 
-	refcount_inc(&dp->dl_stid.sc_count);
+	if (!nfsd4_get_leased_deleg(dp)) {
+		spin_unlock(&ctx->flc_lock);
+		return nfserr_jukebox;
+	}
 	ncf = &dp->dl_cb_fattr;
 	nfs4_cb_getattr(&dp->dl_cb_fattr);
 	spin_unlock(&ctx->flc_lock);
@@ -10888,7 +11054,7 @@ nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp, struct dentry *dentry,
 	}
 	status = nfs_ok;
 out_status:
-	nfs4_put_stid(&dp->dl_stid);
+	nfsd4_put_leased_deleg(dp);
 	return status;
 }
 
@@ -11052,25 +11218,14 @@ out_delegees:
  * @flags: any additional flags that should be updated
  *
  * Given upon opening a file delegated attributes were issues, update
- * @f attributes to current times.
+ * @f attributes to current times. Waits for a frozen filesystem to thaw,
+ * like the data change that makes this necessary.
  */
 void nfsd_update_cmtime_attr(struct file *f, unsigned int flags)
 {
-	int ret;
-	struct inode *inode = file_inode(f);
-	struct iattr attr = {
-		.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_DELEG | flags,
-	};
-
-	inode_lock(inode);
-	ret = notify_change(&nop_mnt_idmap, f->f_path.dentry, &attr, NULL);
-	inode_unlock(inode);
-	if (ret)
-		pr_notice_ratelimited("nfsd: Unable to update timestamps on "
-				      "inode %02x:%02x:%llu: %d\n",
-				      MAJOR(inode->i_sb->s_dev),
-				      MINOR(inode->i_sb->s_dev),
-				      inode->i_ino, ret);
+	file_start_write(f);
+	__nfsd_update_cmtime_attr(f, flags);
+	file_end_write(f);
 }
 
 static void
